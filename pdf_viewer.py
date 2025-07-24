@@ -471,6 +471,7 @@ class PDFViewer(QScrollArea):
             widget = self.page_widgets[current_page]
             widget.hide()
 
+        self.page_changed.emit(self.get_current_page())
         # Force re-render of visible pages
         self.force_render_visible_pages()
 
@@ -523,6 +524,7 @@ class PDFViewer(QScrollArea):
         self.pages_layout.insertWidget(current_layout_pos, prev_widget)
 
         self.is_modified = True
+        self.page_changed.emit(self.get_current_page())
         self.force_render_visible_pages()
         return True
 
@@ -572,6 +574,7 @@ class PDFViewer(QScrollArea):
 
         self.is_modified = True
         self.force_render_visible_pages()
+        self.page_changed.emit(self.get_current_page())
         return True
 
     def save_changes(self, file_path: str = None) -> bool:
@@ -1116,11 +1119,32 @@ class PDFEditor(QMainWindow):
         self.update_status_bar(page_num)
 
     def update_status_bar(self, current_page=0):
-        """Update status bar information"""
+        """Update status bar with current visual page order"""
         if self.pdf_viewer.document:
-            total_pages = len(self.pdf_viewer.document) - len(self.pdf_viewer.deleted_pages)
+            # Get visible pages in current order
+            visible_pages = []
+            for i in range(self.pdf_viewer.pages_layout.count()):
+                item = self.pdf_viewer.pages_layout.itemAt(i)
+                if item and item.widget() and not item.widget().isHidden():
+                    visible_pages.append(item.widget())
+
+            # Find which visible page is currently centered
+            current_visible_index = 0
+            if visible_pages:
+                viewport_rect = self.pdf_viewer.viewport().rect()
+                scroll_y = self.pdf_viewer.verticalScrollBar().value()
+                viewport_center_y = scroll_y + viewport_rect.height() // 2
+
+                min_distance = float('inf')
+                for i, widget in enumerate(visible_pages):
+                    widget_center_y = widget.y() + widget.height() // 2
+                    distance = abs(widget_center_y - viewport_center_y)
+                    if distance < min_distance:
+                        min_distance = distance
+                        current_visible_index = i
+
             self.page_info_label.setText(
-                f"Page {current_page + 1} of {total_pages}"
+                f"Page {current_visible_index + 1} of {len(visible_pages)}"
             )
         else:
             self.page_info_label.setText("No document")
