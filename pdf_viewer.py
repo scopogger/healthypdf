@@ -416,7 +416,7 @@ class PDFViewer(QScrollArea):
         gc.collect()
 
     def get_current_page(self) -> int:
-        """Get the currently centered page number"""
+        """Get the currently centered page number with proper handling of deleted/moved pages"""
         if not self.document or not self.page_widgets:
             return 0
 
@@ -424,20 +424,23 @@ class PDFViewer(QScrollArea):
         scroll_y = self.verticalScrollBar().value()
         viewport_center_y = scroll_y + viewport_rect.height() // 2
 
-        # Find page closest to viewport center
+        # Find visible page closest to viewport center
         current_page = 0
         min_distance = float('inf')
 
-        for i, widget in enumerate(self.page_widgets):
-            if widget.page_num in self.deleted_pages:
-                continue  # Skip deleted pages
+        for i in range(self.pages_layout.count()):
+            item = self.pages_layout.itemAt(i)
+            if item and item.widget() and hasattr(item.widget(), 'page_num'):
+                widget = item.widget()
+                if widget.isHidden():  # Skip deleted pages
+                    continue
 
-            widget_center_y = widget.y() + widget.height() // 2
-            distance = abs(widget_center_y - viewport_center_y)
+                widget_center_y = widget.y() + widget.height() // 2
+                distance = abs(widget_center_y - viewport_center_y)
 
-            if distance < min_distance:
-                min_distance = distance
-                current_page = widget.page_num
+                if distance < min_distance:
+                    min_distance = distance
+                    current_page = widget.page_num
 
         return current_page
 
@@ -468,34 +471,49 @@ class PDFViewer(QScrollArea):
         return True
 
     def move_page_up(self):
-        """Move current page up by one position"""
+        """Move current page up by one position (like move_page_down but inverted)"""
         if not self.document:
             return False
 
         current_page = self.get_current_page()
 
-        # Find current position in display order
-        current_pos = None
-        for i, widget in enumerate(self.page_widgets):
-            if widget.page_num == current_page and not widget.isHidden():
-                current_pos = i
-                break
+        # Find current widget
+        current_widget = None
+        current_layout_pos = -1
 
-        if current_pos is None or current_pos == 0:
+        for i in range(self.pages_layout.count()):
+            item = self.pages_layout.itemAt(i)
+            if item and item.widget() and hasattr(item.widget(), 'page_num'):
+                widget = item.widget()
+                if widget.page_num == current_page and not widget.isHidden():
+                    current_widget = widget
+                    current_layout_pos = i
+                    break
+
+        if current_widget is None or current_layout_pos <= 0:
             return False  # Can't move up from first position
 
-        # Find the widget above (previous visible page)
-        prev_pos = None
-        for i in range(current_pos - 1, -1, -1):
-            if not self.page_widgets[i].isHidden():
-                prev_pos = i
+        # Find the previous visible widget
+        prev_widget = None
+        prev_layout_pos = -1
+
+        for i in range(current_layout_pos - 1, -1, -1):
+            item = self.pages_layout.itemAt(i)
+            if item and item.widget() and not item.widget().isHidden():
+                prev_widget = item.widget()
+                prev_layout_pos = i
                 break
 
-        if prev_pos is None:
-            return False
+        if prev_widget is None:
+            return False  # No previous visible page
 
-        # Swap in layout
-        self._swap_widgets_in_layout(current_pos, prev_pos)
+        # Swap the widgets
+        self.pages_layout.removeWidget(current_widget)
+        self.pages_layout.removeWidget(prev_widget)
+
+        self.pages_layout.insertWidget(prev_layout_pos, current_widget)
+        self.pages_layout.insertWidget(current_layout_pos, prev_widget)
+
         self.is_modified = True
         return True
 
@@ -506,49 +524,45 @@ class PDFViewer(QScrollArea):
 
         current_page = self.get_current_page()
 
-        # Find current position in display order
-        current_pos = None
-        for i, widget in enumerate(self.page_widgets):
-            if widget.page_num == current_page and not widget.isHidden():
-                current_pos = i
-                break
+        # Find current widget
+        current_widget = None
+        current_layout_pos = -1
 
-        if current_pos is None:
+        for i in range(self.pages_layout.count()):
+            item = self.pages_layout.itemAt(i)
+            if item and item.widget() and hasattr(item.widget(), 'page_num'):
+                widget = item.widget()
+                if widget.page_num == current_page and not widget.isHidden():
+                    current_widget = widget
+                    current_layout_pos = i
+                    break
+
+        if current_widget is None:
             return False
 
-        # Find the widget below (next visible page)
-        next_pos = None
-        for i in range(current_pos + 1, len(self.page_widgets)):
-            if not self.page_widgets[i].isHidden():
-                next_pos = i
+        # Find the next visible widget
+        next_widget = None
+        next_layout_pos = -1
+
+        for i in range(current_layout_pos + 1, self.pages_layout.count()):
+            item = self.pages_layout.itemAt(i)
+            if item and item.widget() and not item.widget().isHidden():
+                next_widget = item.widget()
+                next_layout_pos = i
                 break
 
-        if next_pos is None:
-            return False  # Can't move down from last position
+        if next_widget is None:
+            return False  # No next visible page
 
-        # Swap in layout
-        self._swap_widgets_in_layout(current_pos, next_pos)
+        # Swap the widgets
+        self.pages_layout.removeWidget(current_widget)
+        self.pages_layout.removeWidget(next_widget)
+
+        self.pages_layout.insertWidget(current_layout_pos, next_widget)
+        self.pages_layout.insertWidget(next_layout_pos, current_widget)
+
         self.is_modified = True
         return True
-
-    def _swap_widgets_in_layout(self, pos1: int, pos2: int):
-        """Swap two widgets in the layout by their positions"""
-        if pos1 >= len(self.page_widgets) or pos2 >= len(self.page_widgets):
-            return
-
-        widget1 = self.page_widgets[pos1]
-        widget2 = self.page_widgets[pos2]
-
-        # Remove both widgets from layout
-        self.pages_layout.removeWidget(widget1)
-        self.pages_layout.removeWidget(widget2)
-
-        # Swap positions in our list
-        self.page_widgets[pos1], self.page_widgets[pos2] = self.page_widgets[pos2], self.page_widgets[pos1]
-
-        # Re-insert widgets at their new positions
-        self.pages_layout.insertWidget(pos1, self.page_widgets[pos1])
-        self.pages_layout.insertWidget(pos2, self.page_widgets[pos2])
 
     def save_changes(self, file_path: str = None) -> bool:
         """Save changes to file"""
@@ -559,19 +573,10 @@ class PDFViewer(QScrollArea):
             # Use current file path if none provided
             save_path = file_path if file_path else self.doc_path
 
-            # Create temporary file if saving to same location
-            import tempfile
-            if save_path == self.doc_path:
-                temp_fd, temp_path = tempfile.mkstemp(suffix='.pdf')
-                os.close(temp_fd)
-                actual_save_path = temp_path
-            else:
-                actual_save_path = save_path
-
             # Create new document with modifications
             new_doc = fitz.open()
 
-            # Get current page order from layout
+            # Get current page order from layout (only visible pages)
             page_order = []
             for i in range(self.pages_layout.count()):
                 item = self.pages_layout.itemAt(i)
@@ -586,16 +591,29 @@ class PDFViewer(QScrollArea):
                     new_doc.insert_pdf(self.document, from_page=page_num, to_page=page_num)
 
             # Save the new document
-            new_doc.save(actual_save_path)
-            new_doc.close()
-
-            # If we used a temporary file, replace the original
             if save_path == self.doc_path:
+                # Saving to same file - use temporary file approach
+                import tempfile
                 import shutil
-                self.document.close()  # Close original before replacing
-                shutil.move(actual_save_path, self.doc_path)
+
+                temp_fd, temp_path = tempfile.mkstemp(suffix='.pdf')
+                os.close(temp_fd)
+
+                new_doc.save(temp_path)
+                new_doc.close()
+
+                # Close original document before replacing
+                self.document.close()
+
+                # Replace original with temporary file
+                shutil.move(temp_path, self.doc_path)
+
                 # Reopen the document
                 self.document = fitz.open(self.doc_path)
+            else:
+                # Saving to new file
+                new_doc.save(save_path)
+                new_doc.close()
 
             # Reset modification state
             self.is_modified = False
@@ -958,173 +976,167 @@ class PDFEditor(QMainWindow):
         # Enable page manipulation actions
         self.update_toolbar_state()
 
+    def close_file(self):
+        """Close current document"""
+        # Check for unsaved changes
+        if self.pdf_viewer.has_unsaved_changes():
+            reply = QMessageBox.question(
+                self,
+                "Unsaved Changes",
+                "The current document has unsaved changes. Do you want to save them?",
+                QMessageBox.Save | QMessageBox.Discard | QMessageBox.Cancel
+            )
 
-def close_file(self):
-    """Close current document"""
-    # Check for unsaved changes
-    if self.pdf_viewer.has_unsaved_changes():
-        reply = QMessageBox.question(
-            self,
-            "Unsaved Changes",
-            "The current document has unsaved changes. Do you want to save them?",
-            QMessageBox.Save | QMessageBox.Discard | QMessageBox.Cancel
-        )
+            if reply == QMessageBox.Save:
+                if not self.pdf_viewer.save_changes():
+                    return  # Save failed, don't close
+            elif reply == QMessageBox.Cancel:
+                return  # User cancelled
 
-        if reply == QMessageBox.Save:
-            if not self.pdf_viewer.save_changes():
-                return  # Save failed, don't close
-        elif reply == QMessageBox.Cancel:
-            return  # User cancelled
+        # Reset zoom slider to 100%
+        self.zoom_slider.setValue(100)
+        self.zoom_label.setText("100%")
 
-    # Reset zoom slider to 100%
-    self.zoom_slider.setValue(100)
-    self.zoom_label.setText("100%")
-
-    self.pdf_viewer.close_document()
-    self.current_document_path = ""
-    self.setWindowTitle("PDF Editor")
-    self.page_info_label.setText("No document")
-
-    # Disable page manipulation actions
-    self.update_toolbar_state()
-
-
-def zoom_in(self):
-    """Zoom in"""
-    current_value = self.zoom_slider.value()
-    self.zoom_slider.setValue(min(500, current_value + 25))
-
-
-def zoom_out(self):
-    """Zoom out"""
-    current_value = self.zoom_slider.value()
-    self.zoom_slider.setValue(max(10, current_value - 25))
-
-
-def on_zoom_changed(self, value):
-    """Handle zoom slider change"""
-    zoom_percent = value
-    zoom_factor = zoom_percent / 100.0
-
-    self.zoom_label.setText(f"{zoom_percent}%")
-    self.pdf_viewer.set_zoom(zoom_factor)
-
-
-def on_page_changed(self, page_num):
-    """Handle page change in viewer"""
-    self.update_status_bar(page_num)
-
-
-def delete_current_page(self):
-    """Delete the current page"""
-    if self.pdf_viewer.delete_current_page():
-        self.update_status_bar()
-        # Update window title to show unsaved changes
-        if self.current_document_path and "*" not in self.windowTitle():
-            filename = os.path.basename(self.current_document_path)
-            self.setWindowTitle(f"PDF Editor - {filename}*")
-
-
-def move_page_up(self):
-    """Move current page up"""
-    if self.pdf_viewer.move_page_up():
-        self.update_status_bar()
-        # Update window title to show unsaved changes
-        if self.current_document_path and "*" not in self.windowTitle():
-            filename = os.path.basename(self.current_document_path)
-            self.setWindowTitle(f"PDF Editor - {filename}*")
-
-
-def move_page_down(self):
-    """Move current page down"""
-    if self.pdf_viewer.move_page_down():
-        self.update_status_bar()
-        # Update window title to show unsaved changes
-        if self.current_document_path and "*" not in self.windowTitle():
-            filename = os.path.basename(self.current_document_path)
-            self.setWindowTitle(f"PDF Editor - {filename}*")
-
-
-def save_file(self):
-    """Save changes to current file"""
-    if not self.current_document_path:
-        self.save_file_as()
-        return
-
-    if self.pdf_viewer.save_changes():
-        # Remove asterisk from title
-        if "*" in self.windowTitle():
-            filename = os.path.basename(self.current_document_path)
-            self.setWindowTitle(f"PDF Editor - {filename}")
-
-
-def save_file_as(self):
-    """Save changes to a new file"""
-    file_path, _ = QFileDialog.getSaveFileName(
-        self,
-        "Save PDF As",
-        "",
-        "PDF Files (*.pdf)"
-    )
-
-    if file_path:
-        if self.pdf_viewer.save_changes(file_path):
-            self.current_document_path = file_path
-            filename = os.path.basename(file_path)
-            self.setWindowTitle(f"PDF Editor - {filename}")
-
-
-def zoom_in(self):
-    """Zoom in"""
-    current_value = self.zoom_slider.value()
-    self.zoom_slider.setValue(min(500, current_value + 25))
-
-
-def zoom_out(self):
-    """Zoom out"""
-    current_value = self.zoom_slider.value()
-    self.zoom_slider.setValue(max(10, current_value - 25))
-
-
-def on_page_changed(self, page_num):
-    """Handle page change in viewer"""
-    self.update_status_bar(page_num)
-
-
-def update_status_bar(self, current_page=0):
-    """Update status bar information"""
-    if self.pdf_viewer.document:
-        total_pages = len(self.pdf_viewer.document) - len(self.pdf_viewer.deleted_pages)
-        self.page_info_label.setText(
-            f"Page {current_page + 1} of {total_pages}"
-        )
-    else:
+        self.pdf_viewer.close_document()
+        self.current_document_path = ""
+        self.setWindowTitle("PDF Editor")
         self.page_info_label.setText("No document")
 
+        # Disable page manipulation actions
+        self.update_toolbar_state()
 
-def dragEnterEvent(self, event: QDragEnterEvent):
-    """Handle drag enter events"""
-    if event.mimeData().hasUrls():
-        urls = event.mimeData().urls()
-        if urls and urls[0].toLocalFile().lower().endswith('.pdf'):
-            event.accept()
-        else:
-            event.ignore()
-    else:
-        event.ignore()
+    def zoom_in(self):
+        """Zoom in"""
+        current_value = self.zoom_slider.value()
+        self.zoom_slider.setValue(min(500, current_value + 25))
 
+    def zoom_out(self):
+        """Zoom out"""
+        current_value = self.zoom_slider.value()
+        self.zoom_slider.setValue(max(10, current_value - 25))
 
-def dropEvent(self, event: QDropEvent):
-    """Handle drop events"""
-    urls = event.mimeData().urls()
-    if urls:
-        file_path = urls[0].toLocalFile()
-        if file_path.lower().endswith('.pdf'):
-            if self.pdf_viewer.open_document(file_path):
+    def on_zoom_changed(self, value):
+        """Handle zoom slider change"""
+        zoom_percent = value
+        zoom_factor = zoom_percent / 100.0
+
+        self.zoom_label.setText(f"{zoom_percent}%")
+        self.pdf_viewer.set_zoom(zoom_factor)
+
+    def zoom_in(self):
+        """Zoom in"""
+        current_value = self.zoom_slider.value()
+        self.zoom_slider.setValue(min(500, current_value + 25))
+
+    def zoom_out(self):
+        """Zoom out"""
+        current_value = self.zoom_slider.value()
+        self.zoom_slider.setValue(max(10, current_value - 25))
+
+    def on_page_changed(self, page_num):
+        """Handle page change in viewer"""
+        self.update_status_bar(page_num)
+
+    def delete_current_page(self):
+        """Delete the current page"""
+        if self.pdf_viewer.delete_current_page():
+            self.update_status_bar()
+            # Update window title to show unsaved changes
+            if self.current_document_path and "*" not in self.windowTitle():
+                filename = os.path.basename(self.current_document_path)
+                self.setWindowTitle(f"PDF Editor - {filename}*")
+
+    def move_page_up(self):
+        """Move current page up"""
+        if self.pdf_viewer.move_page_up():
+            self.update_status_bar()
+            # Update window title to show unsaved changes
+            if self.current_document_path and "*" not in self.windowTitle():
+                filename = os.path.basename(self.current_document_path)
+                self.setWindowTitle(f"PDF Editor - {filename}*")
+
+    def move_page_down(self):
+        """Move current page down"""
+        if self.pdf_viewer.move_page_down():
+            self.update_status_bar()
+            # Update window title to show unsaved changes
+            if self.current_document_path and "*" not in self.windowTitle():
+                filename = os.path.basename(self.current_document_path)
+                self.setWindowTitle(f"PDF Editor - {filename}*")
+
+    def save_file(self):
+        """Save changes to current file"""
+        if not self.current_document_path:
+            self.save_file_as()
+            return
+
+        if self.pdf_viewer.save_changes():
+            # Remove asterisk from title
+            if "*" in self.windowTitle():
+                filename = os.path.basename(self.current_document_path)
+                self.setWindowTitle(f"PDF Editor - {filename}")
+
+    def save_file_as(self):
+        """Save changes to a new file"""
+        file_path, _ = QFileDialog.getSaveFileName(
+            self,
+            "Save PDF As",
+            "",
+            "PDF Files (*.pdf)"
+        )
+
+        if file_path:
+            if self.pdf_viewer.save_changes(file_path):
                 self.current_document_path = file_path
                 filename = os.path.basename(file_path)
                 self.setWindowTitle(f"PDF Editor - {filename}")
-                self.update_status_bar()
+
+    def zoom_in(self):
+        """Zoom in"""
+        current_value = self.zoom_slider.value()
+        self.zoom_slider.setValue(min(500, current_value + 25))
+
+    def zoom_out(self):
+        """Zoom out"""
+        current_value = self.zoom_slider.value()
+        self.zoom_slider.setValue(max(10, current_value - 25))
+
+    def on_page_changed(self, page_num):
+        """Handle page change in viewer"""
+        self.update_status_bar(page_num)
+
+    def update_status_bar(self, current_page=0):
+        """Update status bar information"""
+        if self.pdf_viewer.document:
+            total_pages = len(self.pdf_viewer.document) - len(self.pdf_viewer.deleted_pages)
+            self.page_info_label.setText(
+                f"Page {current_page + 1} of {total_pages}"
+            )
+        else:
+            self.page_info_label.setText("No document")
+
+    def dragEnterEvent(self, event: QDragEnterEvent):
+        """Handle drag enter events"""
+        if event.mimeData().hasUrls():
+            urls = event.mimeData().urls()
+            if urls and urls[0].toLocalFile().lower().endswith('.pdf'):
+                event.accept()
+            else:
+                event.ignore()
+        else:
+            event.ignore()
+
+    def dropEvent(self, event: QDropEvent):
+        """Handle drop events"""
+        urls = event.mimeData().urls()
+        if urls:
+            file_path = urls[0].toLocalFile()
+            if file_path.lower().endswith('.pdf'):
+                if self.pdf_viewer.open_document(file_path):
+                    self.current_document_path = file_path
+                    filename = os.path.basename(file_path)
+                    self.setWindowTitle(f"PDF Editor - {filename}")
+                    self.update_status_bar()
 
 
 def main():
