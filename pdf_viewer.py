@@ -1,10 +1,11 @@
 import sys
 import os
-from typing import Optional, Dict, Tuple
+from typing import Optional, Dict, Tuple, Set
 from dataclasses import dataclass
 from collections import OrderedDict
 import weakref
 import gc
+import threading
 
 from PySide6.QtWidgets import (
     QApplication, QMainWindow, QVBoxLayout, QHBoxLayout, QWidget,
@@ -34,9 +35,9 @@ class PageInfo:
 
 
 class PageCache:
-    """LRU Cache for rendered pages"""
+    """Aggressive LRU Cache for rendered pages - keeps only essential pages"""
 
-    def __init__(self, max_size: int = 20):
+    def __init__(self, max_size: int = 6):  # Reduced from 20 to 6
         self.max_size = max_size
         self.cache: OrderedDict[int, QPixmap] = OrderedDict()
 
@@ -62,38 +63,86 @@ class PageCache:
         self.cache.clear()
         gc.collect()
 
+    def keep_only_pages(self, page_numbers: Set[int]):
+        """Keep only specified pages in cache, remove all others"""
+        pages_to_remove = [p for p in self.cache.keys() if p not in page_numbers]
+        for page_num in pages_to_remove:
+            del self.cache[page_num]
+        if pages_to_remove:
+            gc.collect()
+
 
 class PageRenderWorker(QRunnable):
-    """Worker for rendering pages in background"""
+    """Worker for rendering pages in background with cancellation support"""
 
-    def __init__(self, doc_path: str, page_num: int, zoom: float, callback):
+    def __init__(self, doc_path: str, page_num: int, zoom: float, callback, render_id: str):
         super().__init__()
         self.doc_path = doc_path
         self.page_num = page_num
         self.zoom = zoom
         self.callback = callback
+        self.render_id = render_id
+        self.cancelled = False
+
+    def cancel(self):
+        """Cancel this rendering task"""
+        self.cancelled = True
 
     def run(self):
+        if self.cancelled:
+            return
+
         try:
             doc = fitz.open(self.doc_path)
+            if self.cancelled:
+                doc.close()
+                return
+
             page = doc[self.page_num]
+            if self.cancelled:
+                doc.close()
+                return
 
-            # Calculate matrix for zoom
+            # Calculate matrix for zoom with lower quality for memory efficiency
             matrix = fitz.Matrix(self.zoom, self.zoom)
-            pix = page.get_pixmap(matrix=matrix)
 
-            # Convert to QPixmap
+            # Use lower quality settings to reduce memory usage
+            pix = page.get_pixmap(
+                matrix=matrix,
+                alpha=False,  # No alpha channel
+                colorspace=fitz.csRGB,  # Use RGB instead of CMYK
+                clip=None
+            )
+
+            if self.cancelled:
+                doc.close()
+                return
+
+            # Convert to QPixmap with compression
             img_data = pix.tobytes("ppm")
             pixmap = QPixmap()
             pixmap.loadFromData(img_data)
 
+            # Apply mild compression to reduce memory footprint
+            if not self.cancelled:
+                # Scale down slightly if very large to save memory
+                if pixmap.width() > 2000 or pixmap.height() > 2000:
+                    pixmap = pixmap.scaled(
+                        min(2000, pixmap.width()),
+                        min(2000, pixmap.height()),
+                        Qt.KeepAspectRatio,
+                        Qt.SmoothTransformation
+                    )
+
             doc.close()
 
-            # Call callback with result
-            self.callback(self.page_num, pixmap)
+            if not self.cancelled:
+                # Call callback with result
+                self.callback(self.page_num, pixmap, self.render_id)
 
         except Exception as e:
-            print(f"Error rendering page {self.page_num}: {e}")
+            if not self.cancelled:
+                print(f"Error rendering page {self.page_num}: {e}")
 
 
 class PageWidget(QLabel):
@@ -126,7 +175,7 @@ class PageWidget(QLabel):
 
 
 class PDFViewer(QScrollArea):
-    """Main PDF viewing widget with lazy loading"""
+    """Main PDF viewing widget with aggressive lazy loading and cancellation"""
 
     page_changed = Signal(int)  # Emitted when visible page changes
 
@@ -139,21 +188,29 @@ class PDFViewer(QScrollArea):
         self.page_widgets = []
         self.zoom_level = 1.0
 
-        # Cache and thread pool
-        self.page_cache = PageCache(max_size=20)
+        # Cache and thread pool with aggressive memory management
+        self.page_cache = PageCache(max_size=6)  # Only 6 pages max
         self.thread_pool = QThreadPool()
-        self.thread_pool.setMaxThreadCount(4)
+        self.thread_pool.setMaxThreadCount(2)  # Reduced threads
+
+        # Track active render tasks for cancellation
+        self.active_workers: Dict[str, PageRenderWorker] = {}
+        self.current_render_id = 0
+        self.render_lock = threading.Lock()
 
         # Setup UI
         self.setup_ui()
 
-        # Timer for lazy loading
+        # Timer for lazy loading with faster response
         self.scroll_timer = QTimer()
         self.scroll_timer.setSingleShot(True)
         self.scroll_timer.timeout.connect(self.update_visible_pages)
 
         # Connect scroll events
         self.verticalScrollBar().valueChanged.connect(self.on_scroll)
+
+        # Last visible pages for cleanup
+        self.last_visible_pages = set()
 
     def setup_ui(self):
         """Setup the scrollable area"""
@@ -194,7 +251,7 @@ class PDFViewer(QScrollArea):
             self.create_page_widgets()
 
             # Start loading visible pages
-            QTimer.singleShot(100, self.update_visible_pages)
+            QTimer.singleShot(50, self.update_visible_pages)  # Faster initial load
 
             return True
 
@@ -204,6 +261,9 @@ class PDFViewer(QScrollArea):
 
     def close_document(self):
         """Close current document and clear resources"""
+        # Cancel all active rendering tasks
+        self.cancel_all_renders()
+
         if self.document:
             self.document.close()
             self.document = None
@@ -211,6 +271,7 @@ class PDFViewer(QScrollArea):
         self.doc_path = ""
         self.pages_info.clear()
         self.page_cache.clear()
+        self.last_visible_pages.clear()
 
         # Clear page widgets
         for widget in self.page_widgets:
@@ -222,6 +283,16 @@ class PDFViewer(QScrollArea):
             item = self.pages_layout.takeAt(0)
             if item.widget():
                 item.widget().deleteLater()
+
+        # Force cleanup
+        gc.collect()
+
+    def cancel_all_renders(self):
+        """Cancel all active rendering tasks"""
+        with self.render_lock:
+            for worker in self.active_workers.values():
+                worker.cancel()
+            self.active_workers.clear()
 
     def create_page_widgets(self):
         """Create placeholder widgets for all pages"""
@@ -239,11 +310,15 @@ class PDFViewer(QScrollArea):
             self.pages_layout.addWidget(page_widget)
 
     def on_scroll(self):
-        """Handle scroll events with debouncing"""
-        self.scroll_timer.start(150)  # Debounce scroll events
+        """Handle scroll events with immediate cancellation of irrelevant renders"""
+        # Cancel existing renders immediately
+        self.cancel_all_renders()
+
+        # Start timer for new renders
+        self.scroll_timer.start(100)  # Faster debounce
 
     def update_visible_pages(self):
-        """Update pages that are visible or near visible area"""
+        """Update pages that are visible with aggressive memory management"""
         if not self.document:
             return
 
@@ -251,31 +326,76 @@ class PDFViewer(QScrollArea):
         viewport_rect = self.viewport().rect()
         scroll_y = self.verticalScrollBar().value()
 
-        # Find visible pages with buffer
-        buffer_pages = 2  # Pages to load ahead and behind
+        # Find currently centered page and immediate neighbors only
+        buffer_pages = 1  # Reduced buffer - only 1 page ahead/behind
         visible_pages = set()
+        current_center_page = None
+
+        # Find the page closest to center of viewport
+        viewport_center_y = scroll_y + viewport_rect.height() // 2
 
         for i, widget in enumerate(self.page_widgets):
+            widget_center_y = widget.y() + widget.height() // 2
             widget_y = widget.y() - scroll_y
             widget_bottom = widget_y + widget.height()
 
-            # Check if page is visible or in buffer zone
-            if (widget_bottom >= -widget.height() * buffer_pages and
-                    widget_y <= viewport_rect.height() + widget.height() * buffer_pages):
+            # Check if page is actually visible
+            if widget_bottom >= 0 and widget_y <= viewport_rect.height():
                 visible_pages.add(i)
+
+                # Check if this is the center page
+                if current_center_page is None or abs(widget_center_y - viewport_center_y) < abs(
+                        self.page_widgets[current_center_page].y() + self.page_widgets[
+                            current_center_page].height() // 2 - viewport_center_y):
+                    current_center_page = i
+
+        # Add buffer pages around center page
+        if current_center_page is not None:
+            for offset in range(-buffer_pages, buffer_pages + 1):
+                page_num = current_center_page + offset
+                if 0 <= page_num < len(self.page_widgets):
+                    visible_pages.add(page_num)
+
+        # Aggressively clean up cache - keep only visible pages
+        self.page_cache.keep_only_pages(visible_pages)
+
+        # Reset widgets that are no longer visible
+        for page_num in self.last_visible_pages - visible_pages:
+            if page_num < len(self.page_widgets):
+                widget = self.page_widgets[page_num]
+                if widget.is_loaded:
+                    # Reset to placeholder to free pixmap memory
+                    widget.is_loaded = False
+                    page_info = self.pages_info[widget.page_num]
+                    display_width = int(page_info.width * self.zoom_level)
+                    display_height = int(page_info.height * self.zoom_level)
+                    widget.setFixedSize(display_width, display_height)
+                    widget.clear()  # Clear pixmap
+                    widget.setText(f"Page {widget.page_num + 1}")
+                    widget.setStyleSheet("""
+                        QLabel {
+                            border: 1px solid #ccc;
+                            background-color: #f5f5f5;
+                            color: #666;
+                        }
+                    """)
 
         # Load visible pages
         for page_num in visible_pages:
             self.load_page(page_num)
 
+        # Update last visible pages
+        self.last_visible_pages = visible_pages.copy()
+
         # Emit page changed signal for status bar
-        if visible_pages:
-            current_page = min(p for p in visible_pages
-                               if self.page_widgets[p].y() - scroll_y >= -self.page_widgets[p].height() // 2)
-            self.page_changed.emit(current_page)
+        if current_center_page is not None:
+            self.page_changed.emit(current_center_page)
+
+        # Force garbage collection after cleanup
+        gc.collect()
 
     def load_page(self, page_num: int):
-        """Load a specific page"""
+        """Load a specific page with cancellation support"""
         if page_num >= len(self.page_widgets):
             return
 
@@ -289,36 +409,60 @@ class PDFViewer(QScrollArea):
             widget.set_pixmap(cached_pixmap)
             return
 
-        # Render in background
+        # Generate unique render ID
+        with self.render_lock:
+            self.current_render_id += 1
+            render_id = f"render_{self.current_render_id}_{page_num}"
+
+        # Create and start worker
         worker = PageRenderWorker(
             self.doc_path,
             page_num,
             self.zoom_level,
-            self.on_page_rendered
+            self.on_page_rendered,
+            render_id
         )
+
+        with self.render_lock:
+            self.active_workers[render_id] = worker
+
         self.thread_pool.start(worker)
 
-    def on_page_rendered(self, page_num: int, pixmap: QPixmap):
-        """Handle rendered page result"""
+    def on_page_rendered(self, page_num: int, pixmap: QPixmap, render_id: str):
+        """Handle rendered page result with validation"""
+        # Remove from active workers
+        with self.render_lock:
+            if render_id in self.active_workers:
+                del self.active_workers[render_id]
+
+        # Check if page is still relevant (user might have scrolled away)
+        if page_num not in self.last_visible_pages:
+            # Page is no longer visible, discard the result
+            return
+
         if page_num < len(self.page_widgets):
             # Cache the pixmap
             self.page_cache.put(page_num, pixmap)
 
-            # Update widget
+            # Update widget if still relevant
             widget = self.page_widgets[page_num]
-            widget.set_pixmap(pixmap)
+            if not widget.is_loaded:  # Double check
+                widget.set_pixmap(pixmap)
 
     def set_zoom(self, zoom: float):
         """Set zoom level and refresh pages"""
         if not self.document or zoom == self.zoom_level:
             return
 
+        # Cancel all renders immediately
+        self.cancel_all_renders()
+
         self.zoom_level = zoom
 
         # Clear cache as zoom changed
         self.page_cache.clear()
 
-        # Mark all pages as not loaded
+        # Mark all pages as not loaded and reset to placeholders
         for widget in self.page_widgets:
             widget.is_loaded = False
             # Reset to placeholder
@@ -327,6 +471,7 @@ class PDFViewer(QScrollArea):
             display_height = int(page_info.height * self.zoom_level)
             widget.setMinimumSize(display_width, display_height)
             widget.setFixedSize(display_width, display_height)
+            widget.clear()  # Clear pixmap to free memory
             widget.setText(f"Page {widget.page_num + 1}")
             widget.setStyleSheet("""
                 QLabel {
@@ -336,12 +481,17 @@ class PDFViewer(QScrollArea):
                 }
             """)
 
+        # Force garbage collection
+        gc.collect()
+
         # Refresh visible pages
-        QTimer.singleShot(100, self.update_visible_pages)
+        QTimer.singleShot(50, self.update_visible_pages)
 
     def go_to_page(self, page_num: int):
         """Navigate to specific page"""
         if 0 <= page_num < len(self.page_widgets):
+            # Cancel current renders when jumping to different page
+            self.cancel_all_renders()
             widget = self.page_widgets[page_num]
             self.ensureWidgetVisible(widget)
 
