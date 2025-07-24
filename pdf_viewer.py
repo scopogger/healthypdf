@@ -217,6 +217,11 @@ class PDFViewer(QScrollArea):
         # Last visible pages for cleanup
         self.last_visible_pages = set()
 
+    def force_render_visible_pages(self):
+        """Force re-render all currently visible pages with slight delay"""
+        self.cancel_all_renders()
+        QTimer.singleShot(50, self.update_visible_pages)
+
     def setup_ui(self):
         """Setup the scrollable area"""
         self.setWidgetResizable(True)
@@ -466,6 +471,9 @@ class PDFViewer(QScrollArea):
             widget = self.page_widgets[current_page]
             widget.hide()
 
+        # Force re-render of visible pages
+        self.force_render_visible_pages()
+
         # Update display
         self.update_visible_pages()
         return True
@@ -515,6 +523,7 @@ class PDFViewer(QScrollArea):
         self.pages_layout.insertWidget(current_layout_pos, prev_widget)
 
         self.is_modified = True
+        self.force_render_visible_pages()
         return True
 
     def move_page_down(self):
@@ -562,6 +571,7 @@ class PDFViewer(QScrollArea):
         self.pages_layout.insertWidget(next_layout_pos, current_widget)
 
         self.is_modified = True
+        self.force_render_visible_pages()
         return True
 
     def save_changes(self, file_path: str = None) -> bool:
