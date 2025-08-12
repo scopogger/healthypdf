@@ -1,17 +1,3 @@
-"""
-PySide6 PDF Editor Interface (UI skeleton)
-
-This script builds a full-featured PDF editor interface skeleton using PySide6.
-It focuses on UI structure only (menus, toolbars, thumbnail side panel, main view,
-status bar). All heavy PDF logic is left as TODOs so you can plug-in
-PyMuPDF / fitz, pikepdf, pdfplumber, or other PDF libraries.
-
-Run: python pyside6_pdf_editor_interface.py
-Requires: PySide6
-
-Author: ChatGPT (interface scaffold)
-"""
-
 from PySide6.QtWidgets import (
     QApplication, QMainWindow, QFileDialog, QMessageBox, QWidget,
     QLabel, QVBoxLayout, QHBoxLayout, QToolBar, QAction, QMenu, QMenuBar,
