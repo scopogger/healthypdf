@@ -489,6 +489,32 @@ class ThumbnailPanel(QScrollArea):
             # Reload with new rotation
             self.load_thumbnail(page_num)
 
+    def swap_thumbnails(self, index1: int, index2: int):
+        if 0 <= index1 < len(self.thumbnail_widgets) and 0 <= index2 < len(self.thumbnail_widgets):
+            w1, w2 = self.thumbnail_widgets[index1], self.thumbnail_widgets[index2]
+            self.thumbnail_widgets[index1], self.thumbnail_widgets[index2] = w2, w1
+            self.layout.removeWidget(w1)
+            self.layout.removeWidget(w2)
+            self.layout.insertWidget(index1, self.thumbnail_widgets[index1])
+            self.layout.insertWidget(index2, self.thumbnail_widgets[index2])
+
+    def reorder_thumbnails(self, new_page_order):
+        """Rebuild thumbnails to match new page order."""
+        # Clear layout
+        while self.layout.count():
+            item = self.layout.takeAt(0)
+            if item.widget():
+                item.widget().setParent(None)
+
+        new_widgets = []
+        for page_num in new_page_order:
+            widget = self.thumbnail_widgets[page_num]
+            widget.page_num = page_num
+            new_widgets.append(widget)
+            self.layout.addWidget(widget)
+
+        self.thumbnail_widgets = new_widgets
+
 
 class PageWidget(QLabel):
     """Widget to display a single PDF page"""
@@ -562,6 +588,17 @@ class PDFViewer(QScrollArea):
 
         # Last visible pages for cleanup
         self.last_visible_pages = set()
+
+    def rerender_page_immediately(self, page_num: int):
+        """Re-render a specific page immediately, ignoring visibility."""
+        if 0 <= page_num < len(self.page_widgets):
+            if page_num in self.page_cache.cache:
+                del self.page_cache.cache[page_num]
+            widget = self.page_widgets[page_num]
+            widget.is_loaded = False
+            widget.clear()
+            widget.setText(f"Page {widget.page_num + 1}")
+            self.load_page(page_num)  # This now runs regardless of visibility
 
     def force_render_visible_pages(self):
         """Force re-render all currently visible pages with slight delay"""
@@ -1496,18 +1533,26 @@ class PDFEditor(QMainWindow):
                 self.setWindowTitle(f"PDF Editor - {filename}*")
 
     def move_page_up(self):
-        """Move current page up"""
+        current_page = self.pdf_viewer.get_current_page()
         if self.pdf_viewer.move_page_up():
+            # Update thumbnail order
+            self.thumbnail_panel.swap_thumbnails(current_page - 1, current_page)
             self.update_status_bar()
+            page_order = [w.page_num for w in self.pdf_viewer.page_widgets if not w.isHidden()]
+            self.thumbnail_panel.reorder_thumbnails(page_order)
             # Update window title to show unsaved changes
             if self.current_document_path and "*" not in self.windowTitle():
                 filename = os.path.basename(self.current_document_path)
                 self.setWindowTitle(f"PDF Editor - {filename}*")
 
     def move_page_down(self):
-        """Move current page down"""
+        current_page = self.pdf_viewer.get_current_page()
         if self.pdf_viewer.move_page_down():
+            # Update thumbnail order
+            self.thumbnail_panel.swap_thumbnails(current_page, current_page + 1)
             self.update_status_bar()
+            page_order = [w.page_num for w in self.pdf_viewer.page_widgets if not w.isHidden()]
+            self.thumbnail_panel.reorder_thumbnails(page_order)
             # Update window title to show unsaved changes
             if self.current_document_path and "*" not in self.windowTitle():
                 filename = os.path.basename(self.current_document_path)
@@ -1518,7 +1563,9 @@ class PDFEditor(QMainWindow):
         if self.pdf_viewer.rotate_page_clockwise():
             current_page = self.pdf_viewer.get_current_page()
             self.thumbnail_panel.rotate_page_thumbnail(current_page, 90)
+            self.pdf_viewer.load_page(current_page)  # Force re-render current page
             self.update_status_bar()
+            self.pdf_viewer.rerender_page_immediately(current_page)
             # Update window title to show unsaved changes
             if self.current_document_path and "*" not in self.windowTitle():
                 filename = os.path.basename(self.current_document_path)
@@ -1529,7 +1576,9 @@ class PDFEditor(QMainWindow):
         if self.pdf_viewer.rotate_page_counterclockwise():
             current_page = self.pdf_viewer.get_current_page()
             self.thumbnail_panel.rotate_page_thumbnail(current_page, -90)
+            self.pdf_viewer.load_page(current_page)  # Force re-render current page
             self.update_status_bar()
+            self.pdf_viewer.rerender_page_immediately(current_page)
             # Update window title to show unsaved changes
             if self.current_document_path and "*" not in self.windowTitle():
                 filename = os.path.basename(self.current_document_path)
