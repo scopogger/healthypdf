@@ -11,15 +11,16 @@ from PySide6.QtWidgets import (
     QApplication, QMainWindow, QVBoxLayout, QHBoxLayout, QWidget,
     QScrollArea, QLabel, QPushButton, QSlider, QSpinBox, QFileDialog,
     QMessageBox, QFrame, QSizePolicy, QProgressBar, QStatusBar,
-    QMenuBar, QMenu, QToolBar, QSplitter
+    QMenuBar, QMenu, QToolBar, QSplitter, QListWidget, QTreeView,
+    QListWidgetItem, QLineEdit
 )
 from PySide6.QtCore import (
     Qt, QThread, QObject, Signal, QTimer, QSize, QRect,
-    QRunnable, QThreadPool
+    QRunnable, QThreadPool, QPointF
 )
 from PySide6.QtGui import (
     QPixmap, QPainter, QColor, QPen, QAction, QKeySequence,
-    QDragEnterEvent, QDropEvent
+    QDragEnterEvent, QDropEvent, QIcon
 )
 
 import fitz  # PyMuPDF
@@ -37,13 +38,12 @@ class PageInfo:
 class PageCache:
     """Aggressive LRU Cache for rendered pages - keeps only essential pages"""
 
-    def __init__(self, max_size: int = 6):  # Reduced from 20 to 6
+    def __init__(self, max_size: int = 6):
         self.max_size = max_size
         self.cache: OrderedDict[int, QPixmap] = OrderedDict()
 
     def get(self, page_num: int) -> Optional[QPixmap]:
         if page_num in self.cache:
-            # Move to end (most recently used)
             self.cache.move_to_end(page_num)
             return self.cache[page_num]
         return None
@@ -54,10 +54,9 @@ class PageCache:
         else:
             self.cache[page_num] = pixmap
             if len(self.cache) > self.max_size:
-                # Remove least recently used
                 oldest = next(iter(self.cache))
                 del self.cache[oldest]
-                gc.collect()  # Force garbage collection
+                gc.collect()
 
     def clear(self):
         self.cache.clear()
@@ -96,68 +95,6 @@ class ThumbnailCache:
 
     def clear(self):
         self.cache.clear()
-
-
-class ThumbnailRenderWorker(QRunnable):
-    """Worker for rendering thumbnails in background"""
-
-    def __init__(self, doc_path: str, page_num: int, callback, render_id: str, rotation: int = 0):
-        super().__init__()
-        self.doc_path = doc_path
-        self.page_num = page_num
-        self.callback = callback
-        self.render_id = render_id
-        self.rotation = rotation
-        self.cancelled = False
-
-    def cancel(self):
-        """Cancel this rendering task"""
-        self.cancelled = True
-
-    def run(self):
-        if self.cancelled:
-            return
-
-        try:
-            doc = fitz.open(self.doc_path)
-            if self.cancelled:
-                doc.close()
-                return
-
-            page = doc[self.page_num]
-            if self.cancelled:
-                doc.close()
-                return
-
-            # Apply rotation if needed
-            if self.rotation != 0:
-                page.set_rotation(self.rotation)
-
-            # Small scale for thumbnail
-            matrix = fitz.Matrix(0.2, 0.2)  # 20% scale for thumbnails
-
-            pix = page.get_pixmap(
-                matrix=matrix,
-                alpha=False,
-                colorspace=fitz.csRGB
-            )
-
-            if self.cancelled:
-                doc.close()
-                return
-
-            img_data = pix.tobytes("ppm")
-            pixmap = QPixmap()
-            pixmap.loadFromData(img_data)
-
-            doc.close()
-
-            if not self.cancelled:
-                self.callback(self.page_num, pixmap, self.render_id)
-
-        except Exception as e:
-            if not self.cancelled:
-                print(f"Error rendering thumbnail {self.page_num}: {e}")
 
 
 class PageRenderWorker(QRunnable):
@@ -202,8 +139,8 @@ class PageRenderWorker(QRunnable):
             # Use lower quality settings to reduce memory usage
             pix = page.get_pixmap(
                 matrix=matrix,
-                alpha=False,  # No alpha channel
-                colorspace=fitz.csRGB,  # Use RGB instead of CMYK
+                alpha=False,
+                colorspace=fitz.csRGB,
                 clip=None
             )
 
@@ -218,7 +155,6 @@ class PageRenderWorker(QRunnable):
 
             # Apply mild compression to reduce memory footprint
             if not self.cancelled:
-                # Scale down slightly if very large to save memory
                 if pixmap.width() > 2000 or pixmap.height() > 2000:
                     pixmap = pixmap.scaled(
                         min(2000, pixmap.width()),
@@ -230,7 +166,6 @@ class PageRenderWorker(QRunnable):
             doc.close()
 
             if not self.cancelled:
-                # Call callback with result
                 self.callback(self.page_num, pixmap, self.render_id)
 
         except Exception as e:
@@ -238,116 +173,102 @@ class PageRenderWorker(QRunnable):
                 print(f"Error rendering page {self.page_num}: {e}")
 
 
-class ThumbnailWidget(QLabel):
-    """Widget to display a page thumbnail"""
+class ThumbnailRenderWorker(QRunnable):
+    """Worker for rendering thumbnails in background"""
 
-    clicked = Signal(int)  # Emits page number when clicked
-
-    def __init__(self, page_num: int, parent=None):
-        super().__init__(parent)
+    def __init__(self, doc_path: str, page_num: int, callback, render_id: str, rotation: int = 0):
+        super().__init__()
+        self.doc_path = doc_path
         self.page_num = page_num
-        self.is_loaded = False
-        self.is_current = False
+        self.callback = callback
+        self.render_id = render_id
+        self.rotation = rotation
+        self.cancelled = False
 
-        # Set fixed size for thumbnails
-        self.setFixedSize(120, 160)
-        self.setAlignment(Qt.AlignCenter)
-        self.setScaledContents(True)
+    def cancel(self):
+        self.cancelled = True
 
-        # Style
-        self.update_style()
+    def run(self):
+        if self.cancelled:
+            return
 
-        # Placeholder text
-        self.setText(f"Page\n{page_num + 1}")
+        try:
+            doc = fitz.open(self.doc_path)
+            if self.cancelled:
+                doc.close()
+                return
 
-    def update_style(self):
-        """Update styling based on current state"""
-        if self.is_current:
-            self.setStyleSheet("""
-                QLabel {
-                    border: 3px solid #007ACC;
-                    background-color: #f0f8ff;
-                    color: #333;
-                    font-size: 12px;
-                    font-weight: bold;
-                }
-            """)
-        else:
-            self.setStyleSheet("""
-                QLabel {
-                    border: 1px solid #ccc;
-                    background-color: #f9f9f9;
-                    color: #666;
-                    font-size: 10px;
-                }
-                QLabel:hover {
-                    border: 2px solid #007ACC;
-                    background-color: #f5f8ff;
-                }
-            """)
+            page = doc[self.page_num]
+            if self.cancelled:
+                doc.close()
+                return
 
-    def set_pixmap(self, pixmap: QPixmap):
-        """Set the thumbnail pixmap"""
-        # Scale pixmap to fit widget while maintaining aspect ratio
-        scaled_pixmap = pixmap.scaled(
-            self.size(),
-            Qt.KeepAspectRatio,
-            Qt.SmoothTransformation
-        )
-        self.setPixmap(scaled_pixmap)
-        self.is_loaded = True
+            if self.rotation != 0:
+                page.set_rotation(self.rotation)
 
-    def set_current(self, is_current: bool):
-        """Mark this thumbnail as current page"""
-        if self.is_current != is_current:
-            self.is_current = is_current
-            self.update_style()
+            matrix = fitz.Matrix(0.2, 0.2)  # 20% scale for thumbnails
 
-    def mousePressEvent(self, event):
-        """Handle mouse click"""
-        if event.button() == Qt.LeftButton:
-            self.clicked.emit(self.page_num)
+            pix = page.get_pixmap(
+                matrix=matrix,
+                alpha=False,
+                colorspace=fitz.csRGB
+            )
+
+            if self.cancelled:
+                doc.close()
+                return
+
+            img_data = pix.tobytes("ppm")
+            pixmap = QPixmap()
+            pixmap.loadFromData(img_data)
+
+            doc.close()
+
+            if not self.cancelled:
+                self.callback(self.page_num, pixmap, self.render_id)
+
+        except Exception as e:
+            if not self.cancelled:
+                print(f"Error rendering thumbnail {self.page_num}: {e}")
 
 
-class ThumbnailPanel(QScrollArea):
-    """Scrollable panel showing page thumbnails"""
+class IntegratedThumbnailWidget(QListWidget):
+    """Enhanced thumbnail widget that integrates with the old UI design"""
 
-    page_clicked = Signal(int)  # Emitted when a thumbnail is clicked
+    page_clicked = Signal(int)
 
     def __init__(self, parent=None):
         super().__init__(parent)
+        self.setViewMode(QListWidget.IconMode)
+        self.setResizeMode(QListWidget.Adjust)
+        self.setWrapping(True)
+        self.setUniformItemSizes(True)
+        self.setSpacing(10)
+        self.setMovement(QListWidget.Static)
 
+        # Document and caching
         self.document = None
         self.doc_path = ""
-        self.thumbnail_widgets = []
         self.thumbnail_cache = ThumbnailCache()
         self.thread_pool = QThreadPool()
-        self.thread_pool.setMaxThreadCount(1)  # Only one thumbnail renderer
+        self.thread_pool.setMaxThreadCount(1)
 
         # Track active render tasks
         self.active_workers: Dict[str, ThumbnailRenderWorker] = {}
         self.current_render_id = 0
         self.render_lock = threading.Lock()
 
-        # Page rotations (page_num -> rotation_degrees)
+        # Page modifications tracking
         self.page_rotations = {}
+        self.deleted_pages = set()
 
-        self.setup_ui()
+        # Connect signals
+        self.itemClicked.connect(self._on_item_clicked)
 
-    def setup_ui(self):
-        """Setup the thumbnail panel UI"""
-        self.setFixedWidth(140)
-        self.setWidgetResizable(True)
-        self.setVerticalScrollBarPolicy(Qt.ScrollBarAsNeeded)
-        self.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
-
-        # Container widget
-        self.container = QWidget()
-        self.layout = QVBoxLayout(self.container)
-        self.layout.setSpacing(5)
-        self.layout.setAlignment(Qt.AlignTop)
-
-        self.setWidget(self.container)
+        # Timer for delayed resize
+        self.resize_timer = QTimer(self)
+        self.resize_timer.setSingleShot(True)
+        self.resize_timer.timeout.connect(self.adjust_grid_size_delayed)
 
     def set_document(self, document, doc_path: str):
         """Set the document to display thumbnails for"""
@@ -356,43 +277,32 @@ class ThumbnailPanel(QScrollArea):
         self.document = document
         self.doc_path = doc_path
         self.page_rotations.clear()
+        self.deleted_pages.clear()
 
         if document:
-            self.create_thumbnail_widgets()
+            self.create_thumbnail_items()
             self.load_all_thumbnails()
 
     def clear_thumbnails(self):
         """Clear all thumbnails and reset state"""
-        # Cancel active renders
         with self.render_lock:
             for worker in self.active_workers.values():
                 worker.cancel()
             self.active_workers.clear()
 
-        # Clear widgets
-        for widget in self.thumbnail_widgets:
-            widget.deleteLater()
-        self.thumbnail_widgets.clear()
-
-        # Clear layout
-        while self.layout.count():
-            item = self.layout.takeAt(0)
-            if item.widget():
-                item.widget().deleteLater()
-
+        self.clear()
         self.thumbnail_cache.clear()
 
-    def create_thumbnail_widgets(self):
-        """Create thumbnail widgets for all pages"""
+    def create_thumbnail_items(self):
+        """Create thumbnail items for all pages"""
         if not self.document:
             return
 
         for page_num in range(len(self.document)):
-            widget = ThumbnailWidget(page_num)
-            widget.clicked.connect(self.on_thumbnail_clicked)
-
-            self.thumbnail_widgets.append(widget)
-            self.layout.addWidget(widget)
+            item = QListWidgetItem(f"Page {page_num + 1}")
+            item.setData(Qt.UserRole, page_num)
+            item.setSizeHint(QSize(120, 160))
+            self.addItem(item)
 
     def load_all_thumbnails(self):
         """Start loading all thumbnails in background"""
@@ -404,17 +314,17 @@ class ThumbnailPanel(QScrollArea):
 
     def load_thumbnail(self, page_num: int):
         """Load thumbnail for specific page"""
-        if page_num >= len(self.thumbnail_widgets):
+        if page_num >= self.count():
             return
 
-        widget = self.thumbnail_widgets[page_num]
-        if widget.is_loaded:
+        item = self.item(page_num)
+        if not item:
             return
 
         # Check cache first
         cached_pixmap = self.thumbnail_cache.get(page_num)
         if cached_pixmap:
-            widget.set_pixmap(cached_pixmap)
+            item.setIcon(QIcon(cached_pixmap))
             return
 
         # Generate unique render ID
@@ -445,33 +355,36 @@ class ThumbnailPanel(QScrollArea):
             if render_id in self.active_workers:
                 del self.active_workers[render_id]
 
-        if page_num < len(self.thumbnail_widgets):
-            # Cache the pixmap
+        if page_num < self.count():
             self.thumbnail_cache.put(page_num, pixmap)
+            item = self.item(page_num)
+            if item:
+                item.setIcon(QIcon(pixmap))
 
-            # Update widget
-            widget = self.thumbnail_widgets[page_num]
-            if not widget.is_loaded:
-                widget.set_pixmap(pixmap)
-
-    def on_thumbnail_clicked(self, page_num: int):
-        """Handle thumbnail click"""
-        self.page_clicked.emit(page_num)
+    def _on_item_clicked(self, item):
+        """Handle item click"""
+        page_num = item.data(Qt.UserRole)
+        if page_num is not None:
+            self.page_clicked.emit(page_num)
 
     def set_current_page(self, page_num: int):
         """Highlight the current page thumbnail"""
-        for i, widget in enumerate(self.thumbnail_widgets):
-            widget.set_current(i == page_num)
+        for i in range(self.count()):
+            item = self.item(i)
+            if item:
+                if i == page_num:
+                    self.setCurrentItem(item)
 
     def hide_page_thumbnail(self, page_num: int):
         """Hide thumbnail for deleted page"""
-        if page_num < len(self.thumbnail_widgets):
-            self.thumbnail_widgets[page_num].hide()
+        if page_num < self.count():
+            item = self.item(page_num)
+            if item:
+                item.setHidden(True)
 
     def rotate_page_thumbnail(self, page_num: int, rotation: int):
         """Rotate a page thumbnail and reload it"""
-        if page_num < len(self.thumbnail_widgets):
-            # Update rotation tracking
+        if page_num < self.count():
             current_rotation = self.page_rotations.get(page_num, 0)
             new_rotation = (current_rotation + rotation) % 360
             self.page_rotations[page_num] = new_rotation
@@ -480,105 +393,69 @@ class ThumbnailPanel(QScrollArea):
             if page_num in self.thumbnail_cache.cache:
                 del self.thumbnail_cache.cache[page_num]
 
-            widget = self.thumbnail_widgets[page_num]
-            widget.is_loaded = False
-            widget.clear()
-            widget.setText(f"Page\n{page_num + 1}")
-            widget.update_style()
+            item = self.item(page_num)
+            if item:
+                item.setIcon(QIcon())  # Clear icon
 
-            # Reload with new rotation
             self.load_thumbnail(page_num)
 
-    def swap_thumbnails(self, index1: int, index2: int):
-        if 0 <= index1 < len(self.thumbnail_widgets) and 0 <= index2 < len(self.thumbnail_widgets):
-            w1, w2 = self.thumbnail_widgets[index1], self.thumbnail_widgets[index2]
-            self.thumbnail_widgets[index1], self.thumbnail_widgets[index2] = w2, w1
-            self.layout.removeWidget(w1)
-            self.layout.removeWidget(w2)
-            self.layout.insertWidget(index1, self.thumbnail_widgets[index1])
-            self.layout.insertWidget(index2, self.thumbnail_widgets[index2])
+    def resizeEvent(self, event):
+        """Handle resize events"""
+        super().resizeEvent(event)
+        self.resize_timer.start(100)
 
-    def reorder_thumbnails(self, new_page_order):
-        """Rebuild thumbnails to match new page order."""
-        # Clear layout
-        while self.layout.count():
-            item = self.layout.takeAt(0)
-            if item.widget():
-                item.widget().setParent(None)
+    def adjust_grid_size_delayed(self):
+        """Adjust grid size with delay to avoid excessive updates"""
+        if self.count() == 0:
+            return
 
-        new_widgets = []
-        for page_num in new_page_order:
-            widget = self.thumbnail_widgets[page_num]
-            widget.page_num = page_num
-            new_widgets.append(widget)
-            self.layout.addWidget(widget)
+        width = self.viewport().width()
+        item_width = 120  # Fixed thumbnail width
+        num_columns = max(1, (width - self.spacing()) // (item_width + self.spacing()))
+        grid_width = (width - (num_columns + 1) * self.spacing()) // num_columns
 
-        self.thumbnail_widgets = new_widgets
+        new_grid_size = QSize(grid_width, item_width + 30)
+
+        if new_grid_size != self.gridSize():
+            self.setGridSize(new_grid_size)
 
 
-class PageWidget(QLabel):
-    """Widget to display a single PDF page"""
+class IntegratedPDFViewer(QScrollArea):
+    """Enhanced PDF viewer that integrates efficient rendering with the old UI architecture"""
 
-    def __init__(self, page_num: int, page_info: PageInfo, parent=None):
-        super().__init__(parent)
-        self.page_num = page_num
-        self.page_info = page_info
-        self.is_loaded = False
-
-        # Set placeholder
-        self.setMinimumSize(200, 280)  # A4 ratio placeholder
-        self.setAlignment(Qt.AlignCenter)
-        self.setStyleSheet("""
-            QLabel {
-                border: 1px solid #ccc;
-                background-color: #f5f5f5;
-                color: #666;
-            }
-        """)
-        self.setText(f"Page {page_num + 1}")
-
-    def set_pixmap(self, pixmap: QPixmap):
-        """Set the rendered page pixmap"""
-        self.setPixmap(pixmap)
-        self.setFixedSize(pixmap.size())
-        self.is_loaded = True
-        self.setStyleSheet("")  # Remove placeholder styling
-
-
-class PDFViewer(QScrollArea):
-    """Main PDF viewing widget with aggressive lazy loading and cancellation"""
-
-    page_changed = Signal(int)  # Emitted when visible page changes
+    page_changed = Signal(int)
+    document_modified = Signal(bool)  # New signal for document modification status
 
     def __init__(self, parent=None):
         super().__init__(parent)
 
+        # Core properties
         self.document = None
         self.doc_path = ""
         self.pages_info = []
         self.page_widgets = []
         self.zoom_level = 1.0
 
-        # Document modification tracking
+        # Document modification tracking (from new version)
         self.is_modified = False
         self.deleted_pages = set()
-        self.page_order = []  # Track current page order
-        self.page_rotations = {}  # Track page rotations
+        self.page_order = []
+        self.page_rotations = {}
 
-        # Cache and thread pool with aggressive memory management
-        self.page_cache = PageCache(max_size=6)  # Only 6 pages max
+        # Caching and threading (from new version)
+        self.page_cache = PageCache(max_size=6)
         self.thread_pool = QThreadPool()
-        self.thread_pool.setMaxThreadCount(2)  # Reduced threads
+        self.thread_pool.setMaxThreadCount(2)
 
-        # Track active render tasks for cancellation
+        # Track active render tasks
         self.active_workers: Dict[str, PageRenderWorker] = {}
         self.current_render_id = 0
         self.render_lock = threading.Lock()
 
-        # Setup UI
+        # UI setup
         self.setup_ui()
 
-        # Timer for lazy loading with faster response
+        # Timer for lazy loading
         self.scroll_timer = QTimer()
         self.scroll_timer.setSingleShot(True)
         self.scroll_timer.timeout.connect(self.update_visible_pages)
@@ -588,22 +465,6 @@ class PDFViewer(QScrollArea):
 
         # Last visible pages for cleanup
         self.last_visible_pages = set()
-
-    def rerender_page_immediately(self, page_num: int):
-        """Re-render a specific page immediately, ignoring visibility."""
-        if 0 <= page_num < len(self.page_widgets):
-            if page_num in self.page_cache.cache:
-                del self.page_cache.cache[page_num]
-            widget = self.page_widgets[page_num]
-            widget.is_loaded = False
-            widget.clear()
-            widget.setText(f"Page {widget.page_num + 1}")
-            self.load_page(page_num)  # This now runs regardless of visibility
-
-    def force_render_visible_pages(self):
-        """Force re-render all currently visible pages with slight delay"""
-        self.cancel_all_renders()
-        QTimer.singleShot(50, self.update_visible_pages)
 
     def setup_ui(self):
         """Setup the scrollable area"""
@@ -619,23 +480,19 @@ class PDFViewer(QScrollArea):
         self.setWidget(self.pages_container)
 
     def open_document(self, file_path: str) -> bool:
-        """Open a PDF document"""
+        """Open a PDF document (enhanced from new version)"""
         try:
-            # Clear existing document completely
             self.close_document()
-
-            # Reset zoom level to 100% for new document
             self.zoom_level = 1.0
 
-            # Open new document
             self.document = fitz.open(file_path)
             self.doc_path = file_path
 
-            # Track if document has been modified
+            # Reset modification tracking
             self.is_modified = False
-            self.deleted_pages = set()  # Track deleted page numbers
-            self.page_order = list(range(len(self.document)))  # Track current page order
-            self.page_rotations = {}  # Track page rotations
+            self.deleted_pages = set()
+            self.page_order = list(range(len(self.document)))
+            self.page_rotations = {}
 
             # Get page information
             self.pages_info = []
@@ -649,13 +506,9 @@ class PDFViewer(QScrollArea):
                 )
                 self.pages_info.append(page_info)
 
-            # Create page widgets (placeholders initially)
             self.create_page_widgets()
-
-            # Reset scroll position to top
             self.verticalScrollBar().setValue(0)
 
-            # Start loading visible pages
             QTimer.singleShot(50, self.update_visible_pages)
 
             return True
@@ -665,8 +518,7 @@ class PDFViewer(QScrollArea):
             return False
 
     def close_document(self):
-        """Close current document and clear resources"""
-        # Cancel all active rendering tasks
+        """Close current document and clear resources (enhanced from new version)"""
         self.cancel_all_renders()
 
         if self.document:
@@ -695,7 +547,6 @@ class PDFViewer(QScrollArea):
             if item.widget():
                 item.widget().deleteLater()
 
-        # Force cleanup
         gc.collect()
 
     def cancel_all_renders(self):
@@ -710,39 +561,41 @@ class PDFViewer(QScrollArea):
         self.page_widgets = []
 
         for page_info in self.pages_info:
-            # Calculate display size based on zoom
             display_width = int(page_info.width * self.zoom_level)
             display_height = int(page_info.height * self.zoom_level)
 
-            page_widget = PageWidget(page_info.page_num, page_info)
+            page_widget = QLabel(f"Page {page_info.page_num + 1}")
             page_widget.setMinimumSize(display_width, display_height)
+            page_widget.setAlignment(Qt.AlignCenter)
+            page_widget.setStyleSheet("""
+                QLabel {
+                    border: 1px solid #ccc;
+                    background-color: #f5f5f5;
+                    color: #666;
+                }
+            """)
 
             self.page_widgets.append(page_widget)
             self.pages_layout.addWidget(page_widget)
 
     def on_scroll(self):
-        """Handle scroll events with immediate cancellation of irrelevant renders"""
-        # Cancel existing renders immediately
+        """Handle scroll events"""
         self.cancel_all_renders()
-
-        # Start timer for new renders
-        self.scroll_timer.start(100)  # Faster debounce
+        self.scroll_timer.start(100)
 
     def update_visible_pages(self):
         """Update pages that are visible with aggressive memory management"""
         if not self.document:
             return
 
-        # Get viewport rectangle
         viewport_rect = self.viewport().rect()
         scroll_y = self.verticalScrollBar().value()
 
-        # Find currently centered page and immediate neighbors only
-        buffer_pages = 1  # Reduced buffer - only 1 page ahead/behind
+        # Find visible pages
+        buffer_pages = 1
         visible_pages = set()
         current_center_page = None
 
-        # Find the page closest to center of viewport
         viewport_center_y = scroll_y + viewport_rect.height() // 2
 
         for i, widget in enumerate(self.page_widgets):
@@ -750,63 +603,144 @@ class PDFViewer(QScrollArea):
             widget_y = widget.y() - scroll_y
             widget_bottom = widget_y + widget.height()
 
-            # Check if page is actually visible
             if widget_bottom >= 0 and widget_y <= viewport_rect.height():
                 visible_pages.add(i)
 
-                # Check if this is the center page
                 if current_center_page is None or abs(widget_center_y - viewport_center_y) < abs(
                         self.page_widgets[current_center_page].y() + self.page_widgets[
                             current_center_page].height() // 2 - viewport_center_y):
                     current_center_page = i
 
-        # Add buffer pages around center page
+        # Add buffer pages
         if current_center_page is not None:
             for offset in range(-buffer_pages, buffer_pages + 1):
                 page_num = current_center_page + offset
                 if 0 <= page_num < len(self.page_widgets):
                     visible_pages.add(page_num)
 
-        # Aggressively clean up cache - keep only visible pages
+        # Clean up cache
         self.page_cache.keep_only_pages(visible_pages)
 
-        # Reset widgets that are no longer visible
+        # Reset non-visible widgets
         for page_num in self.last_visible_pages - visible_pages:
             if page_num < len(self.page_widgets):
                 widget = self.page_widgets[page_num]
-                if widget.is_loaded:
-                    # Reset to placeholder to free pixmap memory
-                    widget.is_loaded = False
-                    page_info = self.pages_info[widget.page_num]
-                    display_width = int(page_info.width * self.zoom_level)
-                    display_height = int(page_info.height * self.zoom_level)
-                    widget.setFixedSize(display_width, display_height)
-                    widget.clear()  # Clear pixmap
-                    widget.setText(f"Page {widget.page_num + 1}")
-                    widget.setStyleSheet("""
-                        QLabel {
-                            border: 1px solid #ccc;
-                            background-color: #f5f5f5;
-                            color: #666;
-                        }
-                    """)
+                page_info = self.pages_info[page_num]
+                display_width = int(page_info.width * self.zoom_level)
+                display_height = int(page_info.height * self.zoom_level)
+                widget.setFixedSize(display_width, display_height)
+                widget.clear()
+                widget.setText(f"Page {page_num + 1}")
+                widget.setStyleSheet("""
+                    QLabel {
+                        border: 1px solid #ccc;
+                        background-color: #f5f5f5;
+                        color: #666;
+                    }
+                """)
 
         # Load visible pages
         for page_num in visible_pages:
             self.load_page(page_num)
 
-        # Update last visible pages
         self.last_visible_pages = visible_pages.copy()
 
-        # Emit page changed signal for status bar
         if current_center_page is not None:
             self.page_changed.emit(current_center_page)
 
-        # Force garbage collection after cleanup
         gc.collect()
 
+    def load_page(self, page_num: int):
+        """Load a specific page with cancellation support"""
+        if page_num >= len(self.page_widgets):
+            return
+
+        widget = self.page_widgets[page_num]
+
+        # Check if already loaded
+        if hasattr(widget, 'pixmap') and widget.pixmap():
+            return
+
+        # Check cache
+        cached_pixmap = self.page_cache.get(page_num)
+        if cached_pixmap:
+            widget.setPixmap(cached_pixmap)
+            widget.setFixedSize(cached_pixmap.size())
+            widget.setStyleSheet("")
+            return
+
+        # Generate render ID
+        with self.render_lock:
+            self.current_render_id += 1
+            render_id = f"render_{self.current_render_id}_{page_num}"
+
+        # Get rotation
+        rotation = self.page_rotations.get(page_num, 0)
+
+        # Create worker
+        worker = PageRenderWorker(
+            self.doc_path,
+            page_num,
+            self.zoom_level,
+            self.on_page_rendered,
+            render_id,
+            rotation
+        )
+
+        with self.render_lock:
+            self.active_workers[render_id] = worker
+
+        self.thread_pool.start(worker)
+
+    def on_page_rendered(self, page_num: int, pixmap: QPixmap, render_id: str):
+        """Handle rendered page result"""
+        with self.render_lock:
+            if render_id in self.active_workers:
+                del self.active_workers[render_id]
+
+        if page_num not in self.last_visible_pages:
+            return
+
+        if page_num < len(self.page_widgets):
+            self.page_cache.put(page_num, pixmap)
+            widget = self.page_widgets[page_num]
+
+            if not (hasattr(widget, 'pixmap') and widget.pixmap()):
+                widget.setPixmap(pixmap)
+                widget.setFixedSize(pixmap.size())
+                widget.setStyleSheet("")
+
+    def set_zoom(self, zoom: float):
+        """Set zoom level and refresh pages"""
+        if not self.document or zoom == self.zoom_level:
+            return
+
+        self.cancel_all_renders()
+        self.zoom_level = zoom
+        self.page_cache.clear()
+
+        # Reset all widgets
+        for i, widget in enumerate(self.page_widgets):
+            page_info = self.pages_info[i]
+            display_width = int(page_info.width * self.zoom_level)
+            display_height = int(page_info.height * self.zoom_level)
+            widget.setMinimumSize(display_width, display_height)
+            widget.setFixedSize(display_width, display_height)
+            widget.clear()
+            widget.setText(f"Page {i + 1}")
+            widget.setStyleSheet("""
+                QLabel {
+                    border: 1px solid #ccc;
+                    background-color: #f5f5f5;
+                    color: #666;
+                }
+            """)
+
+        gc.collect()
+        QTimer.singleShot(50, self.update_visible_pages)
+
     def get_current_page(self) -> int:
-        """Get the currently centered page number with proper handling of deleted/moved pages"""
+        """Get the currently centered page number"""
         if not self.document or not self.page_widgets:
             return 0
 
@@ -814,26 +748,23 @@ class PDFViewer(QScrollArea):
         scroll_y = self.verticalScrollBar().value()
         viewport_center_y = scroll_y + viewport_rect.height() // 2
 
-        # Find visible page closest to viewport center
         current_page = 0
         min_distance = float('inf')
 
-        for i in range(self.pages_layout.count()):
-            item = self.pages_layout.itemAt(i)
-            if item and item.widget() and hasattr(item.widget(), 'page_num'):
-                widget = item.widget()
-                if widget.isHidden():  # Skip deleted pages
-                    continue
+        for i, widget in enumerate(self.page_widgets):
+            if widget.isHidden():
+                continue
 
-                widget_center_y = widget.y() + widget.height() // 2
-                distance = abs(widget_center_y - viewport_center_y)
+            widget_center_y = widget.y() + widget.height() // 2
+            distance = abs(widget_center_y - viewport_center_y)
 
-                if distance < min_distance:
-                    min_distance = distance
-                    current_page = widget.page_num
+            if distance < min_distance:
+                min_distance = distance
+                current_page = i
 
         return current_page
 
+    # Page manipulation methods (from new version)
     def rotate_page_clockwise(self):
         """Rotate current page clockwise by 90 degrees"""
         return self._rotate_page(90)
@@ -849,24 +780,23 @@ class PDFViewer(QScrollArea):
 
         current_page = self.get_current_page()
 
-        # Update rotation tracking
         current_rotation = self.page_rotations.get(current_page, 0)
         new_rotation = (current_rotation + rotation) % 360
         self.page_rotations[current_page] = new_rotation
 
         self.is_modified = True
+        self.document_modified.emit(True)
 
-        # Clear cached version of this page
+        # Clear cached version
         if current_page in self.page_cache.cache:
             del self.page_cache.cache[current_page]
 
         # Force re-render
         self.force_render_visible_pages()
-
         return True
 
     def delete_current_page(self):
-        """Delete the current page (mark for deletion)"""
+        """Delete the current page"""
         if not self.document:
             return False
 
@@ -878,9 +808,9 @@ class PDFViewer(QScrollArea):
             QMessageBox.warning(None, "Cannot Delete", "Cannot delete the last remaining page.")
             return False
 
-        # Mark page as deleted
         self.deleted_pages.add(current_page)
         self.is_modified = True
+        self.document_modified.emit(True)
 
         # Hide the widget
         if current_page < len(self.page_widgets):
@@ -888,37 +818,34 @@ class PDFViewer(QScrollArea):
             widget.hide()
 
         self.page_changed.emit(self.get_current_page())
-        # Force re-render of visible pages
         self.force_render_visible_pages()
-
-        # Update display
         self.update_visible_pages()
         return True
 
     def move_page_up(self):
-        """Move current page up by one position (like move_page_down but inverted)"""
+        """Move current page up by one position"""
         if not self.document:
             return False
 
         current_page = self.get_current_page()
 
-        # Find current widget
+        # Find current widget and previous visible widget
         current_widget = None
         current_layout_pos = -1
 
         for i in range(self.pages_layout.count()):
             item = self.pages_layout.itemAt(i)
-            if item and item.widget() and hasattr(item.widget(), 'page_num'):
+            if item and item.widget() and hasattr(item.widget(), 'objectName'):
                 widget = item.widget()
-                if widget.page_num == current_page and not widget.isHidden():
+                if widget == self.page_widgets[current_page] and not widget.isHidden():
                     current_widget = widget
                     current_layout_pos = i
                     break
 
         if current_widget is None or current_layout_pos <= 0:
-            return False  # Can't move up from first position
+            return False
 
-        # Find the previous visible widget
+        # Find previous visible widget
         prev_widget = None
         prev_layout_pos = -1
 
@@ -930,9 +857,9 @@ class PDFViewer(QScrollArea):
                 break
 
         if prev_widget is None:
-            return False  # No previous visible page
+            return False
 
-        # Swap the widgets
+        # Swap widgets
         self.pages_layout.removeWidget(current_widget)
         self.pages_layout.removeWidget(prev_widget)
 
@@ -940,6 +867,7 @@ class PDFViewer(QScrollArea):
         self.pages_layout.insertWidget(current_layout_pos, prev_widget)
 
         self.is_modified = True
+        self.document_modified.emit(True)
         self.page_changed.emit(self.get_current_page())
         self.force_render_visible_pages()
         return True
@@ -957,9 +885,9 @@ class PDFViewer(QScrollArea):
 
         for i in range(self.pages_layout.count()):
             item = self.pages_layout.itemAt(i)
-            if item and item.widget() and hasattr(item.widget(), 'page_num'):
+            if item and item.widget() and hasattr(item.widget(), 'objectName'):
                 widget = item.widget()
-                if widget.page_num == current_page and not widget.isHidden():
+                if widget == self.page_widgets[current_page] and not widget.isHidden():
                     current_widget = widget
                     current_layout_pos = i
                     break
@@ -967,7 +895,7 @@ class PDFViewer(QScrollArea):
         if current_widget is None:
             return False
 
-        # Find the next visible widget
+        # Find next visible widget
         next_widget = None
         next_layout_pos = -1
 
@@ -979,9 +907,9 @@ class PDFViewer(QScrollArea):
                 break
 
         if next_widget is None:
-            return False  # No next visible page
+            return False
 
-        # Swap the widgets
+        # Swap widgets
         self.pages_layout.removeWidget(current_widget)
         self.pages_layout.removeWidget(next_widget)
 
@@ -989,17 +917,29 @@ class PDFViewer(QScrollArea):
         self.pages_layout.insertWidget(next_layout_pos, current_widget)
 
         self.is_modified = True
+        self.document_modified.emit(True)
         self.force_render_visible_pages()
         self.page_changed.emit(self.get_current_page())
         return True
 
+    def force_render_visible_pages(self):
+        """Force re-render all currently visible pages"""
+        self.cancel_all_renders()
+        QTimer.singleShot(50, self.update_visible_pages)
+
+    def go_to_page(self, page_num: int):
+        """Navigate to specific page"""
+        if 0 <= page_num < len(self.page_widgets):
+            self.cancel_all_renders()
+            widget = self.page_widgets[page_num]
+            self.ensureWidgetVisible(widget)
+
     def save_changes(self, file_path: str = None) -> bool:
-        """Save changes to file"""
+        """Save changes to file (enhanced from new version)"""
         if not self.document or not self.is_modified:
             return True
 
         try:
-            # Use current file path if none provided
             save_path = file_path if file_path else self.doc_path
 
             # Create new document with modifications
@@ -1009,15 +949,18 @@ class PDFViewer(QScrollArea):
             page_order = []
             for i in range(self.pages_layout.count()):
                 item = self.pages_layout.itemAt(i)
-                if item and item.widget() and hasattr(item.widget(), 'page_num'):
+                if item and item.widget():
                     widget = item.widget()
-                    if not widget.isHidden():  # Only non-deleted pages
-                        page_order.append(widget.page_num)
+                    if not widget.isHidden():
+                        # Find which page this widget represents
+                        for j, page_widget in enumerate(self.page_widgets):
+                            if page_widget == widget:
+                                page_order.append(j)
+                                break
 
             # Copy pages in the new order with rotations applied
             for page_num in page_order:
                 if 0 <= page_num < len(self.document):
-                    # Create a temporary document for this page with rotation
                     temp_doc = fitz.open()
                     temp_doc.insert_pdf(self.document, from_page=page_num, to_page=page_num)
 
@@ -1027,13 +970,11 @@ class PDFViewer(QScrollArea):
                         temp_page = temp_doc[0]
                         temp_page.set_rotation(rotation)
 
-                    # Insert into new document
                     new_doc.insert_pdf(temp_doc)
                     temp_doc.close()
 
             # Save the new document
             if save_path == self.doc_path:
-                # Saving to same file - use temporary file approach
                 import tempfile
                 import shutil
 
@@ -1043,16 +984,10 @@ class PDFViewer(QScrollArea):
                 new_doc.save(temp_path)
                 new_doc.close()
 
-                # Close original document before replacing
                 self.document.close()
-
-                # Replace original with temporary file
                 shutil.move(temp_path, self.doc_path)
-
-                # Reopen the document
                 self.document = fitz.open(self.doc_path)
             else:
-                # Saving to new file
                 new_doc.save(save_path)
                 new_doc.close()
 
@@ -1060,6 +995,7 @@ class PDFViewer(QScrollArea):
             self.is_modified = False
             self.deleted_pages.clear()
             self.page_rotations.clear()
+            self.document_modified.emit(False)
 
             return True
 
@@ -1071,122 +1007,68 @@ class PDFViewer(QScrollArea):
         """Check if document has unsaved changes"""
         return self.is_modified
 
-    def load_page(self, page_num: int):
-        """Load a specific page with cancellation support"""
-        if page_num >= len(self.page_widgets):
-            return
 
-        widget = self.page_widgets[page_num]
-        if widget.is_loaded:
-            return
+class ZoomSelector(QWidget):
+    """Zoom selector widget compatible with old UI"""
 
-        # Check cache first
-        cached_pixmap = self.page_cache.get(page_num)
-        if cached_pixmap:
-            widget.set_pixmap(cached_pixmap)
-            return
+    zoom_changed = Signal(float)
 
-        # Generate unique render ID
-        with self.render_lock:
-            self.current_render_id += 1
-            render_id = f"render_{self.current_render_id}_{page_num}"
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.pdf_viewer = None
 
-        # Get rotation for this page
-        rotation = self.page_rotations.get(page_num, 0)
+        layout = QHBoxLayout(self)
+        layout.setContentsMargins(0, 0, 0, 0)
 
-        # Create and start worker
-        worker = PageRenderWorker(
-            self.doc_path,
-            page_num,
-            self.zoom_level,
-            self.on_page_rendered,
-            render_id,
-            rotation
-        )
+        self.zoom_input = QLineEdit()
+        self.zoom_input.setFixedWidth(60)
+        self.zoom_input.setText("100%")
+        self.zoom_input.editingFinished.connect(self._on_zoom_input_changed)
 
-        with self.render_lock:
-            self.active_workers[render_id] = worker
+        layout.addWidget(self.zoom_input)
 
-        self.thread_pool.start(worker)
+    def set_pdf_viewer(self, viewer):
+        """Connect to PDF viewer"""
+        self.pdf_viewer = viewer
 
-    def on_page_rendered(self, page_num: int, pixmap: QPixmap, render_id: str):
-        """Handle rendered page result with validation"""
-        # Remove from active workers
-        with self.render_lock:
-            if render_id in self.active_workers:
-                del self.active_workers[render_id]
+    def _on_zoom_input_changed(self):
+        """Handle zoom input change"""
+        try:
+            text = self.zoom_input.text().replace('%', '')
+            zoom_percent = float(text)
+            zoom_factor = zoom_percent / 100.0
 
-        # Check if page is still relevant (user might have scrolled away)
-        if page_num not in self.last_visible_pages:
-            # Page is no longer visible, discard the result
-            return
+            if self.pdf_viewer:
+                self.pdf_viewer.set_zoom(zoom_factor)
 
-        if page_num < len(self.page_widgets):
-            # Cache the pixmap
-            self.page_cache.put(page_num, pixmap)
+            self.zoom_changed.emit(zoom_factor)
+        except ValueError:
+            # Reset to current zoom if invalid input
+            if self.pdf_viewer:
+                current_zoom = int(self.pdf_viewer.zoom_level * 100)
+                self.zoom_input.setText(f"{current_zoom}%")
 
-            # Update widget if still relevant
-            widget = self.page_widgets[page_num]
-            if not widget.is_loaded:  # Double check
-                widget.set_pixmap(pixmap)
-
-    def set_zoom(self, zoom: float):
-        """Set zoom level and refresh pages"""
-        if not self.document or zoom == self.zoom_level:
-            return
-
-        # Cancel all renders immediately
-        self.cancel_all_renders()
-
-        self.zoom_level = zoom
-
-        # Clear cache as zoom changed
-        self.page_cache.clear()
-
-        # Mark all pages as not loaded and reset to placeholders
-        for widget in self.page_widgets:
-            widget.is_loaded = False
-            # Reset to placeholder
-            page_info = self.pages_info[widget.page_num]
-            display_width = int(page_info.width * self.zoom_level)
-            display_height = int(page_info.height * self.zoom_level)
-            widget.setMinimumSize(display_width, display_height)
-            widget.setFixedSize(display_width, display_height)
-            widget.clear()  # Clear pixmap to free memory
-            widget.setText(f"Page {widget.page_num + 1}")
-            widget.setStyleSheet("""
-                QLabel {
-                    border: 1px solid #ccc;
-                    background-color: #f5f5f5;
-                    color: #666;
-                }
-            """)
-
-        # Force garbage collection
-        gc.collect()
-
-        # Refresh visible pages
-        QTimer.singleShot(50, self.update_visible_pages)
-
-    def go_to_page(self, page_num: int):
-        """Navigate to specific page"""
-        if 0 <= page_num < len(self.page_widgets):
-            # Cancel current renders when jumping to different page
-            self.cancel_all_renders()
-            widget = self.page_widgets[page_num]
-            self.ensureWidgetVisible(widget)
+    def set_zoom_value(self, zoom_factor: float):
+        """Set zoom value programmatically"""
+        zoom_percent = int(zoom_factor * 100)
+        self.zoom_input.setText(f"{zoom_percent}%")
 
 
-class PDFEditor(QMainWindow):
-    """Main PDF Editor window"""
+class IntegratedMainWindow(QMainWindow):
+    """Main window that integrates both UI systems"""
 
     def __init__(self):
         super().__init__()
 
+        # Core components
         self.pdf_viewer = None
-        self.thumbnail_panel = None
+        self.thumbnail_widget = None
+        self.zoom_selector = None
+
+        # UI state
         self.current_document_path = ""
 
+        # Setup UI
         self.setup_ui()
         self.setup_menus()
         self.setup_toolbar()
@@ -1196,92 +1078,92 @@ class PDFEditor(QMainWindow):
         self.setAcceptDrops(True)
 
         # Window settings
-        self.setWindowTitle("PDF Editor")
+        self.setWindowTitle("Integrated PDF Editor")
         self.resize(1400, 800)
 
-        # Initialize toolbar state
-        self.update_toolbar_state()
-
-    def update_toolbar_state(self):
-        """Update toolbar button states based on document status"""
-        has_document = self.pdf_viewer.document is not None
-
-        # Enable/disable page manipulation buttons
-        self.delete_btn.setEnabled(has_document)
-        self.move_up_btn.setEnabled(has_document)
-        self.move_down_btn.setEnabled(has_document)
-        self.rotate_cw_btn.setEnabled(has_document)
-        self.rotate_ccw_btn.setEnabled(has_document)
-        self.save_btn.setEnabled(has_document)
-        self.save_as_btn.setEnabled(has_document)
-
-        # Update menu actions
-        if hasattr(self, 'delete_page_action'):
-            self.delete_page_action.setEnabled(has_document)
-            self.move_up_action.setEnabled(has_document)
-            self.move_down_action.setEnabled(has_document)
-            self.rotate_cw_action.setEnabled(has_document)
-            self.rotate_ccw_action.setEnabled(has_document)
+        # Update initial state
+        self.update_ui_state()
 
     def setup_ui(self):
-        """Setup main UI layout with splitter"""
+        """Setup main UI layout"""
         central_widget = QWidget()
         self.setCentralWidget(central_widget)
 
         layout = QHBoxLayout(central_widget)
 
-        # Create splitter for thumbnail panel and main viewer
+        # Create splitter
         splitter = QSplitter(Qt.Horizontal)
 
-        # Thumbnail Panel
-        self.thumbnail_panel = ThumbnailPanel()
-        self.thumbnail_panel.page_clicked.connect(self.on_thumbnail_clicked)
-        splitter.addWidget(self.thumbnail_panel)
+        # Left panel for thumbnails
+        left_panel = QWidget()
+        left_panel.setMinimumWidth(180)
+        left_panel.setMaximumWidth(250)
 
-        # PDF Viewer
-        self.pdf_viewer = PDFViewer()
+        left_layout = QVBoxLayout(left_panel)
+        left_layout.setContentsMargins(2, 2, 2, 2)
+
+        # Thumbnail label
+        thumbnail_label = QLabel("Page Thumbnails")
+        thumbnail_label.setFrameStyle(QFrame.Panel | QFrame.Sunken)
+        thumbnail_label.setAlignment(Qt.AlignCenter)
+        left_layout.addWidget(thumbnail_label)
+
+        # Thumbnail widget
+        self.thumbnail_widget = IntegratedThumbnailWidget()
+        self.thumbnail_widget.page_clicked.connect(self.on_thumbnail_clicked)
+        left_layout.addWidget(self.thumbnail_widget)
+
+        # Thumbnail size slider
+        self.thumbnail_size_slider = QSlider(Qt.Horizontal)
+        self.thumbnail_size_slider.setRange(0, 19)
+        self.thumbnail_size_slider.setValue(1)
+        self.thumbnail_size_slider.setTickPosition(QSlider.TicksBelow)
+        self.thumbnail_size_slider.setTickInterval(1)
+        left_layout.addWidget(self.thumbnail_size_slider)
+
+        splitter.addWidget(left_panel)
+
+        # Main PDF viewer
+        self.pdf_viewer = IntegratedPDFViewer()
         self.pdf_viewer.page_changed.connect(self.on_page_changed)
+        self.pdf_viewer.document_modified.connect(self.on_document_modified)
         splitter.addWidget(self.pdf_viewer)
 
-        # Set initial splitter sizes (thumbnail panel smaller)
-        splitter.setSizes([140, 1000])
-        splitter.setCollapsible(0, True)  # Allow thumbnail panel to collapse
-        splitter.setCollapsible(1, False)  # Don't allow main viewer to collapse
+        # Set initial splitter sizes
+        splitter.setSizes([200, 1200])
+        splitter.setCollapsible(0, True)
+        splitter.setCollapsible(1, False)
 
         layout.addWidget(splitter)
 
-    def on_thumbnail_clicked(self, page_num: int):
-        """Handle thumbnail click - navigate to that page"""
-        self.pdf_viewer.go_to_page(page_num)
-
     def setup_menus(self):
-        """Setup menu bar"""
+        """Setup menu bar (compatible with old UI)"""
         menubar = self.menuBar()
 
         # File menu
         file_menu = menubar.addMenu("File")
 
-        open_action = QAction("Open...", self)
-        open_action.setShortcut(QKeySequence.Open)
-        open_action.triggered.connect(self.open_file)
-        file_menu.addAction(open_action)
+        self.action_open = QAction("Open...", self)
+        self.action_open.setShortcut(QKeySequence.Open)
+        self.action_open.triggered.connect(self.open_file)
+        file_menu.addAction(self.action_open)
 
-        close_action = QAction("Close", self)
-        close_action.setShortcut(QKeySequence.Close)
-        close_action.triggered.connect(self.close_file)
-        file_menu.addAction(close_action)
+        self.action_close = QAction("Close", self)
+        self.action_close.setShortcut(QKeySequence.Close)
+        self.action_close.triggered.connect(self.close_file)
+        file_menu.addAction(self.action_close)
 
         file_menu.addSeparator()
 
-        save_action = QAction("Save", self)
-        save_action.setShortcut(QKeySequence.Save)
-        save_action.triggered.connect(self.save_file)
-        file_menu.addAction(save_action)
+        self.action_save = QAction("Save", self)
+        self.action_save.setShortcut(QKeySequence.Save)
+        self.action_save.triggered.connect(self.save_file)
+        file_menu.addAction(self.action_save)
 
-        save_as_action = QAction("Save As...", self)
-        save_as_action.setShortcut(QKeySequence.SaveAs)
-        save_as_action.triggered.connect(self.save_file_as)
-        file_menu.addAction(save_as_action)
+        self.action_save_as = QAction("Save As...", self)
+        self.action_save_as.setShortcut(QKeySequence.SaveAs)
+        self.action_save_as.triggered.connect(self.save_file_as)
+        file_menu.addAction(self.action_save_as)
 
         file_menu.addSeparator()
 
@@ -1293,119 +1175,168 @@ class PDFEditor(QMainWindow):
         # Edit menu
         edit_menu = menubar.addMenu("Edit")
 
-        self.delete_page_action = QAction("Delete Current Page", self)
-        self.delete_page_action.setShortcut("Delete")
-        self.delete_page_action.triggered.connect(self.delete_current_page)
-        edit_menu.addAction(self.delete_page_action)
+        self.action_delete_page = QAction("Delete Current Page", self)
+        self.action_delete_page.setShortcut("Delete")
+        self.action_delete_page.triggered.connect(self.delete_current_page)
+        edit_menu.addAction(self.action_delete_page)
 
         edit_menu.addSeparator()
 
-        self.move_up_action = QAction("Move Page Up", self)
-        self.move_up_action.setShortcut("Ctrl+Up")
-        self.move_up_action.triggered.connect(self.move_page_up)
-        edit_menu.addAction(self.move_up_action)
+        self.action_move_up = QAction("Move Page Up", self)
+        self.action_move_up.setShortcut("Ctrl+Up")
+        self.action_move_up.triggered.connect(self.move_page_up)
+        edit_menu.addAction(self.action_move_up)
 
-        self.move_down_action = QAction("Move Page Down", self)
-        self.move_down_action.setShortcut("Ctrl+Down")
-        self.move_down_action.triggered.connect(self.move_page_down)
-        edit_menu.addAction(self.move_down_action)
+        self.action_move_down = QAction("Move Page Down", self)
+        self.action_move_down.setShortcut("Ctrl+Down")
+        self.action_move_down.triggered.connect(self.move_page_down)
+        edit_menu.addAction(self.action_move_down)
 
         edit_menu.addSeparator()
 
-        self.rotate_cw_action = QAction("Rotate Clockwise", self)
-        self.rotate_cw_action.setShortcut("Ctrl+R")
-        self.rotate_cw_action.triggered.connect(self.rotate_clockwise)
-        edit_menu.addAction(self.rotate_cw_action)
+        self.action_rotate_cw = QAction("Rotate Clockwise", self)
+        self.action_rotate_cw.setShortcut("Ctrl+R")
+        self.action_rotate_cw.triggered.connect(self.rotate_clockwise)
+        edit_menu.addAction(self.action_rotate_cw)
 
-        self.rotate_ccw_action = QAction("Rotate Counterclockwise", self)
-        self.rotate_ccw_action.setShortcut("Ctrl+Shift+R")
-        self.rotate_ccw_action.triggered.connect(self.rotate_counterclockwise)
-        edit_menu.addAction(self.rotate_ccw_action)
+        self.action_rotate_ccw = QAction("Rotate Counterclockwise", self)
+        self.action_rotate_ccw.setShortcut("Ctrl+Shift+R")
+        self.action_rotate_ccw.triggered.connect(self.rotate_counterclockwise)
+        edit_menu.addAction(self.action_rotate_ccw)
+
+        # View menu
+        view_menu = menubar.addMenu("View")
+
+        zoom_in_action = QAction("Zoom In", self)
+        zoom_in_action.setShortcut("Ctrl++")
+        zoom_in_action.triggered.connect(self.zoom_in)
+        view_menu.addAction(zoom_in_action)
+
+        zoom_out_action = QAction("Zoom Out", self)
+        zoom_out_action.setShortcut("Ctrl+-")
+        zoom_out_action.triggered.connect(self.zoom_out)
+        view_menu.addAction(zoom_out_action)
 
     def setup_toolbar(self):
-        """Setup toolbar with zoom and page manipulation controls"""
+        """Setup toolbar (compatible with old UI)"""
         toolbar = self.addToolBar("Main")
 
-        # Zoom controls
-        toolbar.addWidget(QLabel("Zoom:"))
+        # File operations
+        toolbar.addAction(self.action_open)
+        toolbar.addAction(self.action_save)
+        toolbar.addAction(self.action_save_as)
+        toolbar.addSeparator()
 
-        # Zoom out button
+        # Navigation
+        prev_page_action = QAction("Previous Page", self)
+        prev_page_action.triggered.connect(self.previous_page)
+        toolbar.addAction(prev_page_action)
+
+        next_page_action = QAction("Next Page", self)
+        next_page_action.triggered.connect(self.next_page)
+        toolbar.addAction(next_page_action)
+
+        toolbar.addSeparator()
+
+        # Page input
+        self.page_input = QLineEdit()
+        self.page_input.setFixedWidth(60)
+        self.page_input.setPlaceholderText("Page")
+        self.page_input.editingFinished.connect(self.go_to_page_input)
+        toolbar.addWidget(self.page_input)
+
+        self.page_label = QLabel("of 0")
+        toolbar.addWidget(self.page_label)
+
+        toolbar.addSeparator()
+
+        # Zoom controls
         zoom_out_btn = QPushButton("-")
         zoom_out_btn.setFixedSize(30, 30)
         zoom_out_btn.clicked.connect(self.zoom_out)
         toolbar.addWidget(zoom_out_btn)
 
-        # Zoom slider
-        self.zoom_slider = QSlider(Qt.Horizontal)
-        self.zoom_slider.setRange(10, 500)  # 10% to 500%
-        self.zoom_slider.setValue(100)  # 100%
-        self.zoom_slider.setFixedWidth(200)
-        self.zoom_slider.valueChanged.connect(self.on_zoom_changed)
-        toolbar.addWidget(self.zoom_slider)
+        self.zoom_selector = ZoomSelector()
+        self.zoom_selector.set_pdf_viewer(self.pdf_viewer)
+        toolbar.addWidget(self.zoom_selector)
 
-        # Zoom in button
         zoom_in_btn = QPushButton("+")
         zoom_in_btn.setFixedSize(30, 30)
         zoom_in_btn.clicked.connect(self.zoom_in)
         toolbar.addWidget(zoom_in_btn)
 
-        # Zoom percentage
-        self.zoom_label = QLabel("100%")
-        self.zoom_label.setFixedWidth(50)
-        toolbar.addWidget(self.zoom_label)
-
         toolbar.addSeparator()
 
-        # Page manipulation controls
-        self.delete_btn = QPushButton("Delete Page")
-        self.delete_btn.clicked.connect(self.delete_current_page)
-        self.delete_btn.setEnabled(False)
-        toolbar.addWidget(self.delete_btn)
-
-        self.move_up_btn = QPushButton("Move Up")
-        self.move_up_btn.clicked.connect(self.move_page_up)
-        self.move_up_btn.setEnabled(False)
-        toolbar.addWidget(self.move_up_btn)
-
-        self.move_down_btn = QPushButton("Move Down")
-        self.move_down_btn.clicked.connect(self.move_page_down)
-        self.move_down_btn.setEnabled(False)
-        toolbar.addWidget(self.move_down_btn)
-
-        toolbar.addSeparator()
-
-        # Rotation controls
-        self.rotate_cw_btn = QPushButton("Rotate ↻")
-        self.rotate_cw_btn.clicked.connect(self.rotate_clockwise)
-        self.rotate_cw_btn.setEnabled(False)
-        toolbar.addWidget(self.rotate_cw_btn)
-
-        self.rotate_ccw_btn = QPushButton("Rotate ↺")
-        self.rotate_ccw_btn.clicked.connect(self.rotate_counterclockwise)
-        self.rotate_ccw_btn.setEnabled(False)
-        toolbar.addWidget(self.rotate_ccw_btn)
-
-        toolbar.addSeparator()
-
-        # Save controls
-        self.save_btn = QPushButton("Save")
-        self.save_btn.clicked.connect(self.save_file)
-        self.save_btn.setEnabled(False)
-        toolbar.addWidget(self.save_btn)
-
-        self.save_as_btn = QPushButton("Save As...")
-        self.save_as_btn.clicked.connect(self.save_file_as)
-        self.save_as_btn.setEnabled(False)
-        toolbar.addWidget(self.save_as_btn)
+        # Page manipulation
+        toolbar.addAction(self.action_delete_page)
+        toolbar.addAction(self.action_move_up)
+        toolbar.addAction(self.action_move_down)
+        toolbar.addAction(self.action_rotate_cw)
+        toolbar.addAction(self.action_rotate_ccw)
 
     def setup_status_bar(self):
         """Setup status bar"""
         self.status_bar = QStatusBar()
         self.setStatusBar(self.status_bar)
 
-        self.page_info_label = QLabel("No document")
-        self.status_bar.addWidget(self.page_info_label)
+        self.status_label = QLabel("No document")
+        self.status_bar.addWidget(self.status_label)
 
+    def update_ui_state(self):
+        """Update UI state based on document availability"""
+        has_document = self.pdf_viewer.document is not None
+
+        # Update actions
+        self.action_save.setEnabled(has_document and self.pdf_viewer.has_unsaved_changes())
+        self.action_save_as.setEnabled(has_document)
+        self.action_close.setEnabled(has_document)
+        self.action_delete_page.setEnabled(has_document)
+        self.action_move_up.setEnabled(has_document)
+        self.action_move_down.setEnabled(has_document)
+        self.action_rotate_cw.setEnabled(has_document)
+        self.action_rotate_ccw.setEnabled(has_document)
+
+    # Event handlers
+    def on_thumbnail_clicked(self, page_num: int):
+        """Handle thumbnail click"""
+        self.pdf_viewer.go_to_page(page_num)
+
+    def on_page_changed(self, page_num: int):
+        """Handle page change in viewer"""
+        self.thumbnail_widget.set_current_page(page_num)
+        self.update_status_bar(page_num)
+
+        # Update page input
+        self.page_input.setText(str(page_num + 1))
+
+    def on_document_modified(self, is_modified: bool):
+        """Handle document modification status change"""
+        self.update_ui_state()
+
+        # Update window title
+        if self.current_document_path:
+            filename = os.path.basename(self.current_document_path)
+            if is_modified and "*" not in self.windowTitle():
+                self.setWindowTitle(f"Integrated PDF Editor - {filename}*")
+            elif not is_modified and "*" in self.windowTitle():
+                self.setWindowTitle(f"Integrated PDF Editor - {filename}")
+
+    def update_status_bar(self, current_page: int = 0):
+        """Update status bar"""
+        if self.pdf_viewer.document:
+            # Count visible pages
+            visible_count = 0
+            for i in range(len(self.pdf_viewer.page_widgets)):
+                if not self.pdf_viewer.page_widgets[i].isHidden():
+                    visible_count += 1
+
+            self.status_label.setText(f"Page {current_page + 1} of {visible_count}")
+            self.page_label.setText(f"of {visible_count}")
+        else:
+            self.status_label.setText("No document")
+            self.page_label.setText("of 0")
+
+    # File operations
     def open_file(self):
         """Open PDF file dialog"""
         file_path, _ = QFileDialog.getOpenFileName(
@@ -1416,7 +1347,6 @@ class PDFEditor(QMainWindow):
         )
 
         if file_path:
-            # Check for unsaved changes
             if self.pdf_viewer.has_unsaved_changes():
                 reply = QMessageBox.question(
                     self,
@@ -1427,25 +1357,165 @@ class PDFEditor(QMainWindow):
 
                 if reply == QMessageBox.Save:
                     if not self.pdf_viewer.save_changes():
-                        return  # Save failed, don't open new file
+                        return
                 elif reply == QMessageBox.Cancel:
-                    return  # User cancelled
-
-            # Reset zoom slider to 100% before opening new document
-            self.zoom_slider.setValue(100)
-            self.zoom_label.setText("100%")
+                    return
 
             if self.pdf_viewer.open_document(file_path):
                 self.current_document_path = file_path
                 filename = os.path.basename(file_path)
-                self.setWindowTitle(f"PDF Editor - {filename}")
-                self.update_status_bar()
+                self.setWindowTitle(f"Integrated PDF Editor - {filename}")
 
                 # Update thumbnail panel
-                self.thumbnail_panel.set_document(self.pdf_viewer.document, file_path)
+                self.thumbnail_widget.set_document(self.pdf_viewer.document, file_path)
 
-                # Enable page manipulation actions
-                self.update_toolbar_state()
+                self.update_ui_state()
+                self.update_status_bar()
+
+    def close_file(self):
+        """Close current document"""
+        if self.pdf_viewer.has_unsaved_changes():
+            reply = QMessageBox.question(
+                self,
+                "Unsaved Changes",
+                "The current document has unsaved changes. Do you want to save them?",
+                QMessageBox.Save | QMessageBox.Discard | QMessageBox.Cancel
+            )
+
+            if reply == QMessageBox.Save:
+                if not self.pdf_viewer.save_changes():
+                    return
+            elif reply == QMessageBox.Cancel:
+                return
+
+        self.pdf_viewer.close_document()
+        self.thumbnail_widget.clear_thumbnails()
+        self.current_document_path = ""
+        self.setWindowTitle("Integrated PDF Editor")
+
+        self.update_ui_state()
+        self.update_status_bar()
+
+    def save_file(self):
+        """Save changes to current file"""
+        if not self.current_document_path:
+            self.save_file_as()
+            return
+
+        if self.pdf_viewer.save_changes():
+            self.on_document_modified(False)
+
+    def save_file_as(self):
+        """Save changes to a new file"""
+        file_path, _ = QFileDialog.getSaveFileName(
+            self,
+            "Save PDF As",
+            "",
+            "PDF Files (*.pdf)"
+        )
+
+        if file_path:
+            if self.pdf_viewer.save_changes(file_path):
+                self.current_document_path = file_path
+                filename = os.path.basename(file_path)
+                self.setWindowTitle(f"Integrated PDF Editor - {filename}")
+
+    # Page operations
+    def delete_current_page(self):
+        """Delete the current page"""
+        if self.pdf_viewer.delete_current_page():
+            current_page = self.pdf_viewer.get_current_page()
+            self.thumbnail_widget.hide_page_thumbnail(current_page)
+            self.update_status_bar()
+
+    def move_page_up(self):
+        """Move current page up"""
+        if self.pdf_viewer.move_page_up():
+            self.update_status_bar()
+
+    def move_page_down(self):
+        """Move current page down"""
+        if self.pdf_viewer.move_page_down():
+            self.update_status_bar()
+
+    def rotate_clockwise(self):
+        """Rotate current page clockwise"""
+        if self.pdf_viewer.rotate_page_clockwise():
+            current_page = self.pdf_viewer.get_current_page()
+            self.thumbnail_widget.rotate_page_thumbnail(current_page, 90)
+            self.update_status_bar()
+
+    def rotate_counterclockwise(self):
+        """Rotate current page counterclockwise"""
+        if self.pdf_viewer.rotate_page_counterclockwise():
+            current_page = self.pdf_viewer.get_current_page()
+            self.thumbnail_widget.rotate_page_thumbnail(current_page, -90)
+            self.update_status_bar()
+
+    # Navigation
+    def previous_page(self):
+        """Go to previous page"""
+        current = self.pdf_viewer.get_current_page()
+        if current > 0:
+            self.pdf_viewer.go_to_page(current - 1)
+
+    def next_page(self):
+        """Go to next page"""
+        current = self.pdf_viewer.get_current_page()
+        if current < len(self.pdf_viewer.page_widgets) - 1:
+            self.pdf_viewer.go_to_page(current + 1)
+
+    def go_to_page_input(self):
+        """Handle page input"""
+        try:
+            page_num = int(self.page_input.text()) - 1
+            if 0 <= page_num < len(self.pdf_viewer.page_widgets):
+                self.pdf_viewer.go_to_page(page_num)
+        except ValueError:
+            # Reset to current page if invalid input
+            current = self.pdf_viewer.get_current_page()
+            self.page_input.setText(str(current + 1))
+
+    # Zoom operations
+    def zoom_in(self):
+        """Zoom in"""
+        current_zoom = self.pdf_viewer.zoom_level
+        new_zoom = min(5.0, current_zoom * 1.25)
+        self.pdf_viewer.set_zoom(new_zoom)
+        self.zoom_selector.set_zoom_value(new_zoom)
+
+    def zoom_out(self):
+        """Zoom out"""
+        current_zoom = self.pdf_viewer.zoom_level
+        new_zoom = max(0.1, current_zoom * 0.8)
+        self.pdf_viewer.set_zoom(new_zoom)
+        self.zoom_selector.set_zoom_value(new_zoom)
+
+    # Drag and drop
+    def dragEnterEvent(self, event: QDragEnterEvent):
+        """Handle drag enter events"""
+        if event.mimeData().hasUrls():
+            urls = event.mimeData().urls()
+            if urls and urls[0].toLocalFile().lower().endswith('.pdf'):
+                event.accept()
+            else:
+                event.ignore()
+        else:
+            event.ignore()
+
+    def dropEvent(self, event: QDropEvent):
+        """Handle drop events"""
+        urls = event.mimeData().urls()
+        if urls:
+            file_path = urls[0].toLocalFile()
+            if file_path.lower().endswith('.pdf'):
+                if self.pdf_viewer.open_document(file_path):
+                    self.current_document_path = file_path
+                    filename = os.path.basename(file_path)
+                    self.setWindowTitle(f"Integrated PDF Editor - {filename}")
+                    self.thumbnail_widget.set_document(self.pdf_viewer.document, file_path)
+                    self.update_ui_state()
+                    self.update_status_bar()
 
     def closeEvent(self, event):
         """Handle application close event"""
@@ -1467,216 +1537,15 @@ class PDFEditor(QMainWindow):
 
         event.accept()
 
-    def close_file(self):
-        """Close current document"""
-        # Check for unsaved changes
-        if self.pdf_viewer.has_unsaved_changes():
-            reply = QMessageBox.question(
-                self,
-                "Unsaved Changes",
-                "The current document has unsaved changes. Do you want to save them?",
-                QMessageBox.Save | QMessageBox.Discard | QMessageBox.Cancel
-            )
-
-            if reply == QMessageBox.Save:
-                if not self.pdf_viewer.save_changes():
-                    return  # Save failed, don't close
-            elif reply == QMessageBox.Cancel:
-                return  # User cancelled
-
-        # Reset zoom slider to 100%
-        self.zoom_slider.setValue(100)
-        self.zoom_label.setText("100%")
-
-        self.pdf_viewer.close_document()
-        self.thumbnail_panel.clear_thumbnails()
-        self.current_document_path = ""
-        self.setWindowTitle("PDF Editor")
-        self.page_info_label.setText("No document")
-
-        # Disable page manipulation actions
-        self.update_toolbar_state()
-
-    def zoom_in(self):
-        """Zoom in"""
-        current_value = self.zoom_slider.value()
-        self.zoom_slider.setValue(min(500, current_value + 25))
-
-    def zoom_out(self):
-        """Zoom out"""
-        current_value = self.zoom_slider.value()
-        self.zoom_slider.setValue(max(10, current_value - 25))
-
-    def on_zoom_changed(self, value):
-        """Handle zoom slider change"""
-        zoom_percent = value
-        zoom_factor = zoom_percent / 100.0
-
-        self.zoom_label.setText(f"{zoom_percent}%")
-        self.pdf_viewer.set_zoom(zoom_factor)
-
-    def on_page_changed(self, page_num):
-        """Handle page change in viewer"""
-        self.update_status_bar(page_num)
-        # Update thumbnail panel current page highlight
-        self.thumbnail_panel.set_current_page(page_num)
-
-    def delete_current_page(self):
-        """Delete the current page"""
-        if self.pdf_viewer.delete_current_page():
-            current_page = self.pdf_viewer.get_current_page()
-            self.thumbnail_panel.hide_page_thumbnail(current_page)
-            self.update_status_bar()
-            # Update window title to show unsaved changes
-            if self.current_document_path and "*" not in self.windowTitle():
-                filename = os.path.basename(self.current_document_path)
-                self.setWindowTitle(f"PDF Editor - {filename}*")
-
-    def move_page_up(self):
-        current_page = self.pdf_viewer.get_current_page()
-        if self.pdf_viewer.move_page_up():
-            # Update thumbnail order
-            self.thumbnail_panel.swap_thumbnails(current_page - 1, current_page)
-            self.update_status_bar()
-            page_order = [w.page_num for w in self.pdf_viewer.page_widgets if not w.isHidden()]
-            self.thumbnail_panel.reorder_thumbnails(page_order)
-            # Update window title to show unsaved changes
-            if self.current_document_path and "*" not in self.windowTitle():
-                filename = os.path.basename(self.current_document_path)
-                self.setWindowTitle(f"PDF Editor - {filename}*")
-
-    def move_page_down(self):
-        current_page = self.pdf_viewer.get_current_page()
-        if self.pdf_viewer.move_page_down():
-            # Update thumbnail order
-            self.thumbnail_panel.swap_thumbnails(current_page, current_page + 1)
-            self.update_status_bar()
-            page_order = [w.page_num for w in self.pdf_viewer.page_widgets if not w.isHidden()]
-            self.thumbnail_panel.reorder_thumbnails(page_order)
-            # Update window title to show unsaved changes
-            if self.current_document_path and "*" not in self.windowTitle():
-                filename = os.path.basename(self.current_document_path)
-                self.setWindowTitle(f"PDF Editor - {filename}*")
-
-    def rotate_clockwise(self):
-        """Rotate current page clockwise"""
-        if self.pdf_viewer.rotate_page_clockwise():
-            current_page = self.pdf_viewer.get_current_page()
-            self.thumbnail_panel.rotate_page_thumbnail(current_page, 90)
-            self.pdf_viewer.load_page(current_page)  # Force re-render current page
-            self.update_status_bar()
-            self.pdf_viewer.rerender_page_immediately(current_page)
-            # Update window title to show unsaved changes
-            if self.current_document_path and "*" not in self.windowTitle():
-                filename = os.path.basename(self.current_document_path)
-                self.setWindowTitle(f"PDF Editor - {filename}*")
-
-    def rotate_counterclockwise(self):
-        """Rotate current page counterclockwise"""
-        if self.pdf_viewer.rotate_page_counterclockwise():
-            current_page = self.pdf_viewer.get_current_page()
-            self.thumbnail_panel.rotate_page_thumbnail(current_page, -90)
-            self.pdf_viewer.load_page(current_page)  # Force re-render current page
-            self.update_status_bar()
-            self.pdf_viewer.rerender_page_immediately(current_page)
-            # Update window title to show unsaved changes
-            if self.current_document_path and "*" not in self.windowTitle():
-                filename = os.path.basename(self.current_document_path)
-                self.setWindowTitle(f"PDF Editor - {filename}*")
-
-    def save_file(self):
-        """Save changes to current file"""
-        if not self.current_document_path:
-            self.save_file_as()
-            return
-
-        if self.pdf_viewer.save_changes():
-            # Remove asterisk from title
-            if "*" in self.windowTitle():
-                filename = os.path.basename(self.current_document_path)
-                self.setWindowTitle(f"PDF Editor - {filename}")
-
-    def save_file_as(self):
-        """Save changes to a new file"""
-        file_path, _ = QFileDialog.getSaveFileName(
-            self,
-            "Save PDF As",
-            "",
-            "PDF Files (*.pdf)"
-        )
-
-        if file_path:
-            if self.pdf_viewer.save_changes(file_path):
-                self.current_document_path = file_path
-                filename = os.path.basename(file_path)
-                self.setWindowTitle(f"PDF Editor - {filename}")
-
-    def update_status_bar(self, current_page=0):
-        """Update status bar with current visual page order"""
-        if self.pdf_viewer.document:
-            # Get visible pages in current order
-            visible_pages = []
-            for i in range(self.pdf_viewer.pages_layout.count()):
-                item = self.pdf_viewer.pages_layout.itemAt(i)
-                if item and item.widget() and not item.widget().isHidden():
-                    visible_pages.append(item.widget())
-
-            # Find which visible page is currently centered
-            current_visible_index = 0
-            if visible_pages:
-                viewport_rect = self.pdf_viewer.viewport().rect()
-                scroll_y = self.pdf_viewer.verticalScrollBar().value()
-                viewport_center_y = scroll_y + viewport_rect.height() // 2
-
-                min_distance = float('inf')
-                for i, widget in enumerate(visible_pages):
-                    widget_center_y = widget.y() + widget.height() // 2
-                    distance = abs(widget_center_y - viewport_center_y)
-                    if distance < min_distance:
-                        min_distance = distance
-                        current_visible_index = i
-
-            self.page_info_label.setText(
-                f"Page {current_visible_index + 1} of {len(visible_pages)}"
-            )
-        else:
-            self.page_info_label.setText("No document")
-
-    def dragEnterEvent(self, event: QDragEnterEvent):
-        """Handle drag enter events"""
-        if event.mimeData().hasUrls():
-            urls = event.mimeData().urls()
-            if urls and urls[0].toLocalFile().lower().endswith('.pdf'):
-                event.accept()
-            else:
-                event.ignore()
-        else:
-            event.ignore()
-
-    def dropEvent(self, event: QDropEvent):
-        """Handle drop events"""
-        urls = event.mimeData().urls()
-        if urls:
-            file_path = urls[0].toLocalFile()
-            if file_path.lower().endswith('.pdf'):
-                if self.pdf_viewer.open_document(file_path):
-                    self.current_document_path = file_path
-                    filename = os.path.basename(file_path)
-                    self.setWindowTitle(f"PDF Editor - {filename}")
-                    self.update_status_bar()
-                    # Update thumbnail panel
-                    self.thumbnail_panel.set_document(self.pdf_viewer.document, file_path)
-
 
 def main():
+    """Main entry point"""
     app = QApplication(sys.argv)
 
-    # Set application properties
-    app.setApplicationName("PDF Editor")
-    app.setApplicationVersion("1.0")
+    app.setApplicationName("Integrated PDF Editor")
+    app.setApplicationVersion("2.0")
 
-    # Create and show main window
-    editor = PDFEditor()
+    editor = IntegratedMainWindow()
     editor.show()
 
     sys.exit(app.exec())
