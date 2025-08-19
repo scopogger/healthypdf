@@ -1,544 +1,417 @@
-from PySide6.QtCore import (QMetaObject, QRect,
-                            QSize, Qt, QTimer, QPointF)
-from PySide6.QtGui import (QAction, QIcon, QPainter)
-from PySide6.QtWidgets import (QMenu, QMenuBar,
-                               QSizePolicy, QSplitter, QStatusBar, QTabWidget,
-                               QToolBar, QVBoxLayout, QWidget, QListWidget, QHBoxLayout, QLineEdit,
-                               QLabel, QFrame, QSlider, QTreeView, QToolButton, QStyleOptionToolButton, QStyle)
+"""
+Complete UI Main Window - Combines all UI components with proper menu structure
+"""
 
-# Import the integrated components
-from integrated_pdf_viewer import IntegratedPDFViewer, IntegratedThumbnailWidget, ZoomSelector
+from PySide6.QtWidgets import (
+    QMainWindow, QMenuBar, QToolBar, QStatusBar, QWidget, QHBoxLayout, 
+    QVBoxLayout, QSplitter, QFrame, QLabel, QLineEdit, QPushButton, 
+    QSlider, QSpacerItem, QSizePolicy
+)
+from PySide6.QtCore import Qt, QSize
+from PySide6.QtGui import QAction, QKeySequence, QIcon
 
-try:
-    import resources  # icons
-except ImportError:
-    pass  # Handle case where resources aren't available
+from zoom_selector import ZoomSelector
 
 
-class UiMainWindow(object):
-    def __init__(self):
-        self.menuEdit = None
-        self.m_pageLabel = None
-        self.menuHelp = None
-        self.menuView = None
-        self.menuFile = None
-        self.menuRotation = None
-        self.menuNavigation = None
-        self.menuZoom = None
-        self.menuBar = None
-        self.m_pageInput = None
-        self.spacerMiddle = None
-        self.page_widget = None
-        self.spacerLeft = None
-        self.mainToolBar = None
-        self.m_zoomSelector = None
-        self.statusBar = None
-        self.thumbnail_size_slider = None
-        self.thumbnailList = None
-        self.pagesTabLayout = None
-        self.verticalLayout = None
-        self.verticalLayout_2 = None
-        self.verticalLayout_3 = None
-        self.pdfView = None
-        self.pagesTab = None
-        self.bookmarkView = None
-        self.bookmarkTab = None
-        self.tabWidget = None
-        self.widget = None
-        self.centralWidget = None
-        self.splitter = None
+class UiMainWindow:
+    """UI setup for the main window"""
 
-    def setup_ui(self, main_window, localization_language="en"):
-        if not main_window.objectName():
-            main_window.setObjectName("mainWindow")
+    def setup_ui(self, main_window, language="en"):
+        """Setup the complete UI"""
+        main_window.setObjectName("MainWindow")
+        main_window.resize(1400, 800)
 
-        self.setup_layout(main_window)
-        self.setup_sidepanel_tab_widget()
-        self.setup_pdf_view()
-        self.add_statusbar_ui(main_window)
+        # Create central widget
+        self.centralwidget = QWidget()
+        self.centralwidget.setObjectName("centralwidget")
+        main_window.setCentralWidget(self.centralwidget)
 
-        self.setup_actions(main_window)
+        # Main layout
+        self.main_layout = QHBoxLayout(self.centralwidget)
+        self.main_layout.setContentsMargins(4, 4, 4, 4)
 
-        self.define_menus_ui(main_window)
-        self.connect_menus_ui()
-        self.define_toolbar_elements(main_window)
-        self.connect_toolbar_ui()
+        # Create splitter
+        self.splitter = QSplitter(Qt.Horizontal)
+        self.splitter.setObjectName("mainSplitter")
 
-        # Setup icons if resources are available
-        try:
-            self.setup_action_icons("light_theme_v2")
-        except:
-            pass  # Skip icons if resources not available
+        # Create side panel
+        self.setup_side_panel()
+        
+        # Create main content area
+        self.setup_main_content()
 
-        main_window.resize(1200, 700)
+        # Add to splitter
+        self.splitter.addWidget(self.sidePanelContent)
+        self.splitter.addWidget(self.mainContent)
+        
+        # Set initial splitter sizes (side panel smaller)
+        self.splitter.setSizes([250, 1150])
+        self.splitter.setCollapsible(0, True)  # Side panel can be collapsed
+        self.splitter.setCollapsible(1, False)  # Main content cannot be collapsed
 
-        # Set initially open tab to "Pages"
-        self.pagesButton.setChecked(True)
-        self.pagesTab.show()
-        self.sidePanelContent.show()
+        self.main_layout.addWidget(self.splitter)
 
-        self.splitter.setChildrenCollapsible(False)
+        # Setup menus, toolbar, and status bar
+        self.setup_menu_bar(main_window)
+        self.setup_toolbar(main_window)
+        self.setup_status_bar(main_window)
 
-        # Import localization
-        try:
-            import ui_localization
-            ui_localization.translate_ui(self, main_window, localization_language)
-            ui_localization.shortcuts_ui(self)
-        except ImportError:
-            pass  # Handle case where localization isn't available
+        # Set window properties
+        main_window.setWindowTitle("PDF Editor")
+        main_window.setMinimumSize(800, 600)
 
-    def setup_layout(self, main_window):
-        self.centralWidget = QWidget(main_window)
-        self.centralWidget.setObjectName("centralWidget")
-        main_window.setCentralWidget(self.centralWidget)
+        # Apply translations
+        self.retranslate_ui(main_window, language)
 
-        self.verticalLayout = QVBoxLayout(self.centralWidget)
-        self.verticalLayout.setObjectName("verticalLayout")
-        self.verticalLayout.setContentsMargins(0, 0, 0, 0)
-        self.verticalLayout.setSpacing(0)
+    def setup_side_panel(self):
+        """Setup the side panel with thumbnails"""
+        self.sidePanelContent = QWidget()
+        self.sidePanelContent.setObjectName("sidePanelContent")
+        self.sidePanelContent.setMinimumWidth(150)
+        self.sidePanelContent.setMaximumWidth(300)
 
-        self.splitter = QSplitter(self.centralWidget)
-        self.splitter.setObjectName("splitter")
-        self.splitter.setOrientation(Qt.Horizontal)
-        self.verticalLayout.addWidget(self.splitter)
+        # Side panel layout
+        side_layout = QVBoxLayout(self.sidePanelContent)
+        side_layout.setContentsMargins(4, 4, 4, 4)
 
-    def setup_sidepanel_tab_widget(self):
-        # Create a widget to hold the tab buttons (vertical stripe)
-        self.tabButtonsWidget = QWidget(self.splitter)
-        self.tabButtonsLayout = QVBoxLayout(self.tabButtonsWidget)
-        self.tabButtonsLayout.setContentsMargins(0, 0, 0, 0)
-        self.tabButtonsLayout.setSpacing(0)
+        # Thumbnails label
+        thumbnails_label = QLabel("Page Thumbnails")
+        thumbnails_label.setObjectName("thumbnailsLabel")
+        thumbnails_label.setFrameStyle(QFrame.Panel | QFrame.Sunken)
+        thumbnails_label.setAlignment(Qt.AlignCenter)
+        thumbnails_label.setStyleSheet("""
+            QLabel {
+                background-color: #f0f0f0;
+                border: 1px solid #ccc;
+                padding: 4px;
+                font-weight: bold;
+            }
+        """)
+        side_layout.addWidget(thumbnails_label)
 
-        # Create the two tab buttons
-        self.bookmarksButton = VerticalButton("Закладки", self.tabButtonsWidget)
-        self.bookmarksButton.clicked.connect(self.toggle_bookmark_tab)
+        # Placeholder for thumbnail list (will be replaced)
+        self.thumbnailList = QLabel("Thumbnails will appear here")
+        self.thumbnailList.setObjectName("thumbnailList")
+        self.thumbnailList.setAlignment(Qt.AlignCenter)
+        self.thumbnailList.setStyleSheet("""
+            QLabel {
+                border: 1px solid #ddd;
+                background-color: #fafafa;
+                color: #888;
+            }
+        """)
+        side_layout.addWidget(self.thumbnailList)
 
-        self.pagesButton = VerticalButton("Страницы", self.tabButtonsWidget)
-        self.pagesButton.clicked.connect(self.toggle_pages_tab)
+        # Thumbnail size controls
+        size_layout = QHBoxLayout()
+        size_layout.addWidget(QLabel("Size:"))
+        
+        self.thumbnailSizeSlider = QSlider(Qt.Horizontal)
+        self.thumbnailSizeSlider.setObjectName("thumbnailSizeSlider")
+        self.thumbnailSizeSlider.setRange(50, 200)
+        self.thumbnailSizeSlider.setValue(100)
+        self.thumbnailSizeSlider.setMaximumWidth(100)
+        size_layout.addWidget(self.thumbnailSizeSlider)
+        
+        size_layout.addStretch()
+        side_layout.addLayout(size_layout)
 
-        # Add the buttons to the vertical layout
-        self.tabButtonsLayout.addWidget(self.bookmarksButton)
-        self.tabButtonsLayout.addWidget(self.pagesButton)
-        self.tabButtonsLayout.addStretch()
+    def setup_main_content(self):
+        """Setup the main content area"""
+        self.mainContent = QWidget()
+        self.mainContent.setObjectName("mainContent")
 
-        # Set fixed size for the tabButtonsWidget
-        self.tabButtonsWidget.setMinimumWidth(25)
-        self.tabButtonsWidget.setMaximumWidth(25)
-        self.tabButtonsWidget.setSizePolicy(QSizePolicy.Fixed, QSizePolicy.Expanding)
+        # Main content layout
+        main_content_layout = QVBoxLayout(self.mainContent)
+        main_content_layout.setContentsMargins(0, 0, 0, 0)
 
-        # Create a widget to act as the contents panel
-        self.sidePanelContent = QWidget(self.splitter)
-        self.sidePanelContentLayout = QVBoxLayout(self.sidePanelContent)
-        self.sidePanelContentLayout.setContentsMargins(0, 0, 0, 0)
-
-        # Set up the existing bookmark and pages tabs
-        self.setup_bookmarks_tab()
-        self.setup_pages_tab()
-
-        # Add these to the content layout, initially hidden
-        self.sidePanelContentLayout.addWidget(self.bookmarkTab)
-        self.sidePanelContentLayout.addWidget(self.pagesTab)
-        self.bookmarkTab.hide()
-        self.pagesTab.hide()
-
-        # Set the stretch factors in the splitter
-        self.splitter.setStretchFactor(0, 0)  # No resizing for the tabButtonsWidget
-        self.splitter.setStretchFactor(1, 1)  # sidePanelContent resizable
-
-    def toggle_bookmark_tab(self):
-        if self.bookmarksButton.isChecked():
-            self.pagesButton.setChecked(False)
-            self.pagesTab.hide()
-            self.bookmarkTab.show()
-            self.sidePanelContent.show()
-        else:
-            self.sidePanelContent.hide()
-
-    def toggle_pages_tab(self):
-        if self.pagesButton.isChecked():
-            self.bookmarksButton.setChecked(False)
-            self.bookmarkTab.hide()
-            self.pagesTab.show()
-            self.sidePanelContent.show()
-        else:
-            self.sidePanelContent.hide()
-
-    def setup_bookmarks_tab(self):
-        self.bookmarkTab = QWidget()
-        self.verticalLayout_3 = QVBoxLayout(self.bookmarkTab)
-        self.verticalLayout_3.setContentsMargins(2, 2, 2, 2)
-        self.verticalLayout_3.setSpacing(0)
-
-        self.bookmarkView = QTreeView(self.bookmarkTab)
-        self.bookmarkView.setObjectName("bookmarkView")
-        self.bookmarkView.setHeaderHidden(True)
-        self.bookmarkView.setMinimumWidth(150)
-        self.verticalLayout_3.addWidget(self.bookmarkView)
-
-    def setup_pages_tab(self):
-        self.pagesTab = QWidget()
-        self.pagesTabLayout = QVBoxLayout(self.pagesTab)
-        self.pagesTabLayout.setContentsMargins(0, 0, 0, 0)
-        self.pagesTabLayout.setSpacing(0)
-
-        # Pages label at the top of the sidepanel
-        thumbnail_label = QLabel("Миниатюры страниц")
-        thumbnail_label.setFrameStyle(QFrame.Panel | QFrame.Sunken)
-        thumbnail_label.setAlignment(Qt.AlignCenter)
-        self.pagesTabLayout.addWidget(thumbnail_label)
-
-        # Use the integrated thumbnail widget instead of the old one
-        self.thumbnailList = IntegratedThumbnailWidget()
-        self.thumbnailList.setStyleSheet("background-color: rgb(190, 190, 190);")
-        self.thumbnailList.setMinimumWidth(150)
-        self.pagesTabLayout.addWidget(self.thumbnailList)
-
-        # Slider for changing thumbnails' size
-        self.thumbnail_size_slider = QSlider(Qt.Horizontal)
-        self.thumbnail_size_slider.setRange(0, 19)
-        self.thumbnail_size_slider.setValue(1)
-        self.thumbnail_size_slider.setTickPosition(QSlider.TicksBelow)
-        self.thumbnail_size_slider.setTickInterval(1)
-        self.pagesTabLayout.addWidget(self.thumbnail_size_slider)
-
-    def setup_pdf_view(self):
-        # Use the integrated PDF viewer instead of QPdfView
-        self.pdfView = IntegratedPDFViewer(self.splitter)
+        # Placeholder for PDF view (will be replaced)
+        self.pdfView = QLabel("PDF content will appear here")
         self.pdfView.setObjectName("pdfView")
-        size_policy = QSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
-        size_policy.setHorizontalStretch(10)
-        self.pdfView.setSizePolicy(size_policy)
+        self.pdfView.setAlignment(Qt.AlignCenter)
+        self.pdfView.setStyleSheet("""
+            QLabel {
+                border: 1px solid #ddd;
+                background-color: #ffffff;
+                color: #888;
+                font-size: 18px;
+            }
+        """)
+        main_content_layout.addWidget(self.pdfView)
 
-    def setup_actions(self, main_window):
-        self.actionToggle_Panel = QAction(main_window)
-        self.actionToggle_Panel.setObjectName("actionToggle_Panel")
+    def setup_menu_bar(self, main_window):
+        """Setup the menu bar with all menus"""
+        self.menubar = QMenuBar(main_window)
+        self.menubar.setObjectName("menubar")
+        main_window.setMenuBar(self.menubar)
 
-        self.actionOpen = QAction(main_window)
-        self.actionOpen.setObjectName("actionOpen")
-
-        self.actionClosePdf = QAction(main_window)
-        self.actionClosePdf.setObjectName("actionClosePdf")
-
-        self.actionSave = QAction(main_window)
-        self.actionSave.setObjectName("actionSave")
-
-        self.actionSaveAs = QAction(main_window)
-        self.actionSaveAs.setObjectName("actionSaveAs")
-
-        self.actionSave_Page_As_Image = QAction(main_window)
-        self.actionSave_Page_As_Image.setObjectName("actionSave_Page_As_Image")
-
-        self.actionQuit = QAction(main_window)
-        self.actionQuit.setObjectName("actionQuit")
-
-        self.actionAbout = QAction(main_window)
-        self.actionAbout.setObjectName("actionAbout")
-
-        self.actionAboutPdf = QAction(main_window)
-        self.actionAboutPdf.setObjectName("actionAboutPdf")
-
-        self.actionCompress = QAction(main_window)
-        self.actionCompress.setObjectName("actionCompress")
-
-        self.actionAddFile = QAction(main_window)
-        self.actionAddFile.setObjectName("actionAddFile")
-
-        self.actionPasswordDoc = QAction(main_window)
-        self.actionPasswordDoc.setObjectName("actionPasswordDoc")
-
-        self.actionPrint = QAction(main_window)
-        self.actionPrint.setObjectName("actionPrint")
-
-        self.actionEmail = QAction(main_window)
-        self.actionEmail.setObjectName("actionEmail")
-
-        self.actionEnumeratePages = QAction(main_window)
-        self.actionEnumeratePages.setObjectName("actionEnumeratePages")
-
-        self.actionJumpToFirstPage = QAction(main_window)
-        self.actionJumpToFirstPage.setObjectName("actionJumpToFirstPage")
-
-        self.actionJumpToLastPage = QAction(main_window)
-        self.actionJumpToLastPage.setObjectName("actionJumpToLastPage")
-
-        # Page navigation menu items
-        self.actionPrevious_Page = QAction(main_window)
-        self.actionPrevious_Page.setObjectName("actionPrevious_Page")
-
-        self.actionNext_Page = QAction(main_window)
-        self.actionNext_Page.setObjectName("actionNext_Page")
-
-        self.actionZoom_In = QAction(main_window)
-        self.actionZoom_In.setObjectName("actionZoom_In")
-
-        self.actionZoom_Out = QAction(main_window)
-        self.actionZoom_Out.setObjectName("actionZoom_Out")
-
-        self.actionFitToWidth = QAction(main_window)
-        self.actionFitToWidth.setObjectName("actionFitToWidth")
-
-        self.actionFitToHeight = QAction(main_window)
-        self.actionFitToHeight.setObjectName("actionFitToHeight")
-
-        self.actionRotateViewClockwise = QAction(main_window)
-        self.actionRotateViewClockwise.setObjectName("actionRotateViewClockwise")
-
-        self.actionRotateViewCounterclockwise = QAction(main_window)
-        self.actionRotateViewCounterclockwise.setObjectName("actionRotateViewCounterclockwise")
-
-        self.actionDeletePage = QAction(main_window)
-        self.actionDeletePage.setObjectName("actionDeletePage")
-
-        self.actionDeleteSpecificPages = QAction(main_window)
-        self.actionDeleteSpecificPages.setObjectName("actionDeleteSpecificPages")
-
-        self.actionMovePageDown = QAction(main_window)
-        self.actionMovePageDown.setObjectName("actionMovePageDown")
-
-        self.actionMovePageUp = QAction(main_window)
-        self.actionMovePageUp.setObjectName("actionMovePageUp")
-
-        self.actionRotateCurrentPageClockwise = QAction(main_window)
-        self.actionRotateCurrentPageClockwise.setObjectName("actionRotateCurrentPageClockwise")
-
-        self.actionRotateCurrentPageCounterclockwise = QAction(main_window)
-        self.actionRotateCurrentPageCounterclockwise.setObjectName("actionRotateCurrentPageCounterclockwise")
-
-        self.actionRotateSpecificPages = QAction(main_window)
-        self.actionRotateSpecificPages.setObjectName("actionRotateSpecificPages")
-
-        self.actionDraw = QAction(main_window)
-        self.actionDraw.setObjectName("actionDraw")
-
-    def define_menus_ui(self, main_window):
-        self.menuBar = QMenuBar(main_window)
-        self.menuBar.setObjectName("menuBar")
-        self.menuBar.setGeometry(QRect(0, 0, 1200, 33))
-
-        self.menuFile = QMenu(self.menuBar)
+        # File Menu
+        self.menuFile = self.menubar.addMenu("File")
         self.menuFile.setObjectName("menuFile")
 
-        self.menuView = QMenu(self.menuBar)
-        self.menuView.setObjectName("menuView")
-
-        self.menuEdit = QMenu(self.menuBar)
-        self.menuEdit.setObjectName("menuEdit")
-
-        self.menuHelp = QMenu(self.menuBar)
-        self.menuHelp.setObjectName("menuHelp")
-
-        main_window.setMenuBar(self.menuBar)
-
-        self.menuBar.addAction(self.menuFile.menuAction())
-        self.menuBar.addAction(self.menuView.menuAction())
-        self.menuBar.addAction(self.menuEdit.menuAction())
-        self.menuBar.addAction(self.menuHelp.menuAction())
-
-        # Add submenus to the View menu
-        self.menuRotation = QMenu("rotationSubmenu", self.menuView)
-        self.menuView.addMenu(self.menuRotation)
-        self.menuNavigation = QMenu("navigationSubmenu", self.menuView)
-        self.menuView.addMenu(self.menuNavigation)
-        self.menuZoom = QMenu("zoomSubmenu", self.menuView)
-        self.menuView.addMenu(self.menuZoom)
-
-    def connect_menus_ui(self):
+        self.actionOpen = QAction("Open...", main_window)
+        self.actionOpen.setObjectName("actionOpen")
+        self.actionOpen.setShortcut(QKeySequence.Open)
+        self.actionOpen.setStatusTip("Open a PDF file")
         self.menuFile.addAction(self.actionOpen)
+
+        self.actionSave = QAction("Save", main_window)
+        self.actionSave.setObjectName("actionSave")
+        self.actionSave.setShortcut(QKeySequence.Save)
+        self.actionSave.setStatusTip("Save the current document")
+        self.actionSave.setEnabled(False)
         self.menuFile.addAction(self.actionSave)
+
+        self.actionSaveAs = QAction("Save As...", main_window)
+        self.actionSaveAs.setObjectName("actionSaveAs")
+        self.actionSaveAs.setShortcut(QKeySequence.SaveAs)
+        self.actionSaveAs.setStatusTip("Save the document with a new name")
+        self.actionSaveAs.setEnabled(False)
         self.menuFile.addAction(self.actionSaveAs)
+
+        self.menuFile.addSeparator()
+
+        self.actionClosePdf = QAction("Close", main_window)
+        self.actionClosePdf.setObjectName("actionClosePdf")
+        self.actionClosePdf.setShortcut(QKeySequence.Close)
+        self.actionClosePdf.setStatusTip("Close the current document")
+        self.actionClosePdf.setEnabled(False)
         self.menuFile.addAction(self.actionClosePdf)
+
         self.menuFile.addSeparator()
-        self.menuFile.addAction(self.actionPrint)
-        self.menuFile.addAction(self.actionEmail)
-        self.menuFile.addAction(self.actionCompress)
-        self.menuFile.addAction(self.actionAboutPdf)
-        self.menuFile.addSeparator()
+
+        self.actionQuit = QAction("Exit", main_window)
+        self.actionQuit.setObjectName("actionQuit")
+        self.actionQuit.setShortcut(QKeySequence.Quit)
+        self.actionQuit.setStatusTip("Exit the application")
         self.menuFile.addAction(self.actionQuit)
 
+        # Edit Menu
+        self.menuEdit = self.menubar.addMenu("Edit")
+        self.menuEdit.setObjectName("menuEdit")
+
+        self.actionDeletePage = QAction("Delete Current Page", main_window)
+        self.actionDeletePage.setObjectName("actionDeletePage")
+        self.actionDeletePage.setShortcut("Delete")
+        self.actionDeletePage.setStatusTip("Delete the current page")
+        self.actionDeletePage.setEnabled(False)
+        self.menuEdit.addAction(self.actionDeletePage)
+
+        self.menuEdit.addSeparator()
+
+        self.actionMovePageUp = QAction("Move Page Up", main_window)
+        self.actionMovePageUp.setObjectName("actionMovePageUp")
+        self.actionMovePageUp.setShortcut("Ctrl+Up")
+        self.actionMovePageUp.setStatusTip("Move the current page up")
+        self.actionMovePageUp.setEnabled(False)
+        self.menuEdit.addAction(self.actionMovePageUp)
+
+        self.actionMovePageDown = QAction("Move Page Down", main_window)
+        self.actionMovePageDown.setObjectName("actionMovePageDown")
+        self.actionMovePageDown.setShortcut("Ctrl+Down")
+        self.actionMovePageDown.setStatusTip("Move the current page down")
+        self.actionMovePageDown.setEnabled(False)
+        self.menuEdit.addAction(self.actionMovePageDown)
+
+        self.menuEdit.addSeparator()
+
+        self.actionRotateCurrentPageClockwise = QAction("Rotate Page Clockwise", main_window)
+        self.actionRotateCurrentPageClockwise.setObjectName("actionRotateCurrentPageClockwise")
+        self.actionRotateCurrentPageClockwise.setShortcut("Ctrl+R")
+        self.actionRotateCurrentPageClockwise.setStatusTip("Rotate the current page clockwise")
+        self.actionRotateCurrentPageClockwise.setEnabled(False)
+        self.menuEdit.addAction(self.actionRotateCurrentPageClockwise)
+
+        self.actionRotateCurrentPageCounterclockwise = QAction("Rotate Page Counterclockwise", main_window)
+        self.actionRotateCurrentPageCounterclockwise.setObjectName("actionRotateCurrentPageCounterclockwise")
+        self.actionRotateCurrentPageCounterclockwise.setShortcut("Ctrl+Shift+R")
+        self.actionRotateCurrentPageCounterclockwise.setStatusTip("Rotate the current page counterclockwise")
+        self.actionRotateCurrentPageCounterclockwise.setEnabled(False)
+        self.menuEdit.addAction(self.actionRotateCurrentPageCounterclockwise)
+
+        # View Menu
+        self.menuView = self.menubar.addMenu("View")
+        self.menuView.setObjectName("menuView")
+
+        self.actionZoom_In = QAction("Zoom In", main_window)
+        self.actionZoom_In.setObjectName("actionZoom_In")
+        self.actionZoom_In.setShortcut("Ctrl++")
+        self.actionZoom_In.setStatusTip("Zoom in")
+        self.actionZoom_In.setEnabled(False)
+        self.menuView.addAction(self.actionZoom_In)
+
+        self.actionZoom_Out = QAction("Zoom Out", main_window)
+        self.actionZoom_Out.setObjectName("actionZoom_Out")
+        self.actionZoom_Out.setShortcut("Ctrl+-")
+        self.actionZoom_Out.setStatusTip("Zoom out")
+        self.actionZoom_Out.setEnabled(False)
+        self.menuView.addAction(self.actionZoom_Out)
+
         self.menuView.addSeparator()
+
+        self.actionFitToWidth = QAction("Fit to Width", main_window)
+        self.actionFitToWidth.setObjectName("actionFitToWidth")
+        self.actionFitToWidth.setShortcut("Ctrl+1")
+        self.actionFitToWidth.setStatusTip("Fit document to window width")
+        self.actionFitToWidth.setEnabled(False)
+        self.menuView.addAction(self.actionFitToWidth)
+
+        self.actionFitToHeight = QAction("Fit to Height", main_window)
+        self.actionFitToHeight.setObjectName("actionFitToHeight")
+        self.actionFitToHeight.setShortcut("Ctrl+2")
+        self.actionFitToHeight.setStatusTip("Fit document to window height")
+        self.actionFitToHeight.setEnabled(False)
+        self.menuView.addAction(self.actionFitToHeight)
+
+        self.menuView.addSeparator()
+
+        self.actionRotateViewClockwise = QAction("Rotate View Clockwise", main_window)
+        self.actionRotateViewClockwise.setObjectName("actionRotateViewClockwise")
+        self.actionRotateViewClockwise.setShortcut("Ctrl+Shift+Right")
+        self.actionRotateViewClockwise.setStatusTip("Rotate the view clockwise")
+        self.actionRotateViewClockwise.setEnabled(False)
+        self.menuView.addAction(self.actionRotateViewClockwise)
+
+        self.actionRotateViewCounterclockwise = QAction("Rotate View Counterclockwise", main_window)
+        self.actionRotateViewCounterclockwise.setObjectName("actionRotateViewCounterclockwise")
+        self.actionRotateViewCounterclockwise.setShortcut("Ctrl+Shift+Left")
+        self.actionRotateViewCounterclockwise.setStatusTip("Rotate the view counterclockwise")
+        self.actionRotateViewCounterclockwise.setEnabled(False)
+        self.menuView.addAction(self.actionRotateViewCounterclockwise)
+
+        self.menuView.addSeparator()
+
+        self.actionToggle_Panel = QAction("Toggle Side Panel", main_window)
+        self.actionToggle_Panel.setObjectName("actionToggle_Panel")
+        self.actionToggle_Panel.setShortcut("F9")
+        self.actionToggle_Panel.setStatusTip("Toggle side panel visibility")
+        self.actionToggle_Panel.setCheckable(True)
+        self.actionToggle_Panel.setChecked(True)
         self.menuView.addAction(self.actionToggle_Panel)
 
-        # Add actions to submenus
-        self.menuRotation.addAction(self.actionRotateViewClockwise)
-        self.menuRotation.addAction(self.actionRotateViewCounterclockwise)
-        self.menuNavigation.addAction(self.actionJumpToFirstPage)
-        self.menuNavigation.addAction(self.actionJumpToLastPage)
-        self.menuNavigation.addAction(self.actionNext_Page)
-        self.menuNavigation.addAction(self.actionPrevious_Page)
-        self.menuZoom.addAction(self.actionZoom_In)
-        self.menuZoom.addAction(self.actionZoom_Out)
-        self.menuZoom.addAction(self.actionFitToHeight)
-        self.menuZoom.addAction(self.actionFitToWidth)
+        # Help Menu
+        self.menuHelp = self.menubar.addMenu("Help")
+        self.menuHelp.setObjectName("menuHelp")
 
-        self.menuEdit.addAction(self.actionAddFile)
-        self.menuEdit.addAction(self.actionDeletePage)
-        self.menuEdit.addAction(self.actionDeleteSpecificPages)
-        self.menuEdit.addAction(self.actionMovePageDown)
-        self.menuEdit.addAction(self.actionMovePageUp)
-        self.menuEdit.addAction(self.actionRotateSpecificPages)
-
+        self.actionAbout = QAction("About", main_window)
+        self.actionAbout.setObjectName("actionAbout")
+        self.actionAbout.setStatusTip("About this application")
         self.menuHelp.addAction(self.actionAbout)
 
-    def define_toolbar_elements(self, main_window):
-        self.mainToolBar = QToolBar(main_window)
-        self.mainToolBar.setObjectName("mainToolBar")
-        self.mainToolBar.setMovable(False)
-        self.mainToolBar.setFloatable(False)
-        main_window.addToolBar(Qt.ToolBarArea.TopToolBarArea, self.mainToolBar)
+    def setup_toolbar(self, main_window):
+        """Setup the toolbar"""
+        self.toolBar = QToolBar("Main Toolbar")
+        self.toolBar.setObjectName("mainToolBar")
+        self.toolBar.setMovable(False)
+        main_window.addToolBar(Qt.TopToolBarArea, self.toolBar)
 
-        # Use the integrated zoom selector
-        self.m_zoomSelector = ZoomSelector(main_window)
-        self.m_zoomSelector.set_pdf_viewer(self.pdfView)
-        self.m_zoomSelector.setMaximumWidth(150)
+        # File actions
+        self.toolBar.addAction(self.actionOpen)
+        self.toolBar.addAction(self.actionSave)
+        self.toolBar.addAction(self.actionSaveAs)
+        self.toolBar.addSeparator()
 
-        self.m_pageInput = QLineEdit(main_window)
-        self.m_pageLabel = QLabel(main_window)
-        page_layout = QHBoxLayout()
-        page_layout.addWidget(self.m_pageInput)
-        page_layout.addWidget(self.m_pageLabel)
-        self.page_widget = QWidget(main_window)
-        self.page_widget.setLayout(page_layout)
-        self.page_widget.setFixedWidth(100)
+        # Navigation controls
+        self.actionPrevious_Page = QAction("Previous Page", main_window)
+        self.actionPrevious_Page.setObjectName("actionPrevious_Page")
+        self.actionPrevious_Page.setShortcut("Left")
+        self.actionPrevious_Page.setStatusTip("Go to previous page")
+        self.actionPrevious_Page.setEnabled(False)
+        self.toolBar.addAction(self.actionPrevious_Page)
 
-        font_metrics = self.m_pageInput.fontMetrics()
-        character_width = font_metrics.horizontalAdvance("0")
-        self.m_pageInput.setFixedWidth(character_width * 6)
-        self.m_pageLabel.setFixedWidth(character_width * 6)
-        self.m_pageInput.setPlaceholderText("")
+        self.actionNext_Page = QAction("Next Page", main_window)
+        self.actionNext_Page.setObjectName("actionNext_Page")
+        self.actionNext_Page.setShortcut("Right")
+        self.actionNext_Page.setStatusTip("Go to next page")
+        self.actionNext_Page.setEnabled(False)
+        self.toolBar.addAction(self.actionNext_Page)
 
-        # Adding spacers for toolbar layout
-        self.spacerLeft = QWidget()
-        self.spacerLeft.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
-        self.spacerMiddle = QWidget()
-        self.spacerMiddle.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
+        self.toolBar.addSeparator()
 
-    def connect_toolbar_ui(self):
-        self.mainToolBar.addAction(self.actionOpen)
-        self.mainToolBar.addAction(self.actionSave)
-        self.mainToolBar.addAction(self.actionSaveAs)
-        self.mainToolBar.addAction(self.actionPrint)
-        self.mainToolBar.addAction(self.actionClosePdf)
+        # Page navigation
+        self.actionJumpToFirstPage = QAction("First Page", main_window)
+        self.actionJumpToFirstPage.setObjectName("actionJumpToFirstPage")
+        self.actionJumpToFirstPage.setShortcut("Home")
+        self.actionJumpToFirstPage.setStatusTip("Go to first page")
+        self.actionJumpToFirstPage.setEnabled(False)
+        self.toolBar.addAction(self.actionJumpToFirstPage)
 
-        self.mainToolBar.addWidget(self.spacerLeft)
+        # Page input
+        self.m_pageInput = QLineEdit()
+        self.m_pageInput.setObjectName("pageInput")
+        self.m_pageInput.setFixedWidth(60)
+        self.m_pageInput.setPlaceholderText("Page")
+        self.m_pageInput.setAlignment(Qt.AlignCenter)
+        self.toolBar.addWidget(self.m_pageInput)
 
-        self.mainToolBar.addAction(self.actionPrevious_Page)
-        self.mainToolBar.addAction(self.actionNext_Page)
-        self.mainToolBar.addAction(self.actionRotateViewCounterclockwise)
-        self.mainToolBar.addAction(self.actionRotateViewClockwise)
-        self.mainToolBar.addWidget(self.page_widget)
-        self.mainToolBar.addAction(self.actionZoom_In)
-        self.mainToolBar.addAction(self.actionZoom_Out)
-        self.mainToolBar.addWidget(self.m_zoomSelector)
-        self.mainToolBar.addAction(self.actionFitToHeight)
-        self.mainToolBar.addAction(self.actionFitToWidth)
+        self.m_pageLabel = QLabel("of 0")
+        self.m_pageLabel.setObjectName("pageLabel")
+        self.toolBar.addWidget(self.m_pageLabel)
 
-        self.mainToolBar.addWidget(self.spacerMiddle)
+        self.actionJumpToLastPage = QAction("Last Page", main_window)
+        self.actionJumpToLastPage.setObjectName("actionJumpToLastPage")
+        self.actionJumpToLastPage.setShortcut("End")
+        self.actionJumpToLastPage.setStatusTip("Go to last page")
+        self.actionJumpToLastPage.setEnabled(False)
+        self.toolBar.addAction(self.actionJumpToLastPage)
 
-        self.mainToolBar.addAction(self.actionDeletePage)
-        self.mainToolBar.addAction(self.actionMovePageDown)
-        self.mainToolBar.addAction(self.actionMovePageUp)
-        self.mainToolBar.addAction(self.actionRotateCurrentPageCounterclockwise)
-        self.mainToolBar.addAction(self.actionRotateCurrentPageClockwise)
-        self.mainToolBar.addAction(self.actionDraw)
+        self.toolBar.addSeparator()
 
-    def setup_action_icons(self, theme):
-        if 'resources' not in globals():
-            return  # Skip if resources not available
+        # Zoom controls
+        zoom_out_btn = QPushButton("-")
+        zoom_out_btn.setObjectName("zoomOutBtn")
+        zoom_out_btn.setFixedSize(30, 30)
+        zoom_out_btn.setStatusTip("Zoom out")
+        self.toolBar.addWidget(zoom_out_btn)
 
-        self.menuRotation.setIcon(QIcon(f":/{theme}/rotate_temp_clockwise.png"))
-        self.menuNavigation.setIcon(QIcon(f":/{theme}/jump_to_first.png"))
-        self.menuZoom.setIcon(QIcon(f":/{theme}/zoom_in.png"))
+        self.m_zoomSelector = ZoomSelector()
+        self.m_zoomSelector.setObjectName("zoomSelector")
+        self.toolBar.addWidget(self.m_zoomSelector)
 
-        icon_mapping = {
-            self.actionToggle_Panel: "pages.png",
-            self.actionOpen: "open_file.png",
-            self.actionClosePdf: "close.png",
-            self.actionSave: "save.png",
-            self.actionSaveAs: "save_as.png",
-            self.actionSave_Page_As_Image: "image_download.png",
-            self.actionQuit: "exit.png",
-            self.actionAbout: "help.png",
-            self.actionAboutPdf: "information.png",
-            self.actionCompress: "compress.png",
-            self.actionAddFile: "add_file.png",
-            self.actionPasswordDoc: "password_doc.png",
-            self.actionPrint: "print.png",
-            self.actionEmail: "email.png",
-            self.actionEnumeratePages: "enumerate_pages.png",
-            self.actionJumpToFirstPage: "jump_to_first.png",
-            self.actionJumpToLastPage: "jump_to_last.png",
-            self.actionPrevious_Page: "page_up.png",
-            self.actionNext_Page: "page_down.png",
-            self.actionZoom_In: "zoom_in.png",
-            self.actionZoom_Out: "zoom_out.png",
-            self.actionFitToWidth: "fit_to_width.png",
-            self.actionFitToHeight: "fit_to_height.png",
-            self.actionRotateViewCounterclockwise: "rotate_temp_counterclockwise.png",
-            self.actionRotateViewClockwise: "rotate_temp_clockwise.png",
-            self.actionDeletePage: "delete_pages.png",
-            self.actionDeleteSpecificPages: "delete_pages.png",
-            self.actionMovePageDown: "move_page_down.png",
-            self.actionMovePageUp: "move_page_up.png",
-            self.actionRotateCurrentPageCounterclockwise: "rotate_pages_counterclockwise.png",
-            self.actionRotateCurrentPageClockwise: "rotate_pages_clockwise.png",
-            self.actionRotateSpecificPages: "rotate_pages_180_degrees.png",
-            self.actionDraw: "drawing.png",
-        }
+        zoom_in_btn = QPushButton("+")
+        zoom_in_btn.setObjectName("zoomInBtn")
+        zoom_in_btn.setFixedSize(30, 30)
+        zoom_in_btn.setStatusTip("Zoom in")
+        self.toolBar.addWidget(zoom_in_btn)
 
-        for action, icon_name in icon_mapping.items():
-            icon_name = f":/{theme}/{icon_name}"
-            action.setIcon(QIcon(icon_name))
+        # Connect zoom buttons to actions
+        zoom_out_btn.clicked.connect(lambda: self.actionZoom_Out.trigger())
+        zoom_in_btn.clicked.connect(lambda: self.actionZoom_In.trigger())
 
-    def add_statusbar_ui(self, main_window):
-        self.statusBar = QStatusBar(main_window)
-        self.statusBar.setObjectName("statusBar")
-        main_window.setStatusBar(self.statusBar)
+        self.toolBar.addSeparator()
 
+        # Page manipulation
+        self.toolBar.addAction(self.actionDeletePage)
+        self.toolBar.addAction(self.actionMovePageUp)
+        self.toolBar.addAction(self.actionMovePageDown)
+        self.toolBar.addAction(self.actionRotateCurrentPageClockwise)
+        self.toolBar.addAction(self.actionRotateCurrentPageCounterclockwise)
 
-class VerticalButton(QToolButton):
-    def __init__(self, text, parent=None):
-        super().__init__(parent)
-        self.setText(text)
-        self.setCheckable(True)
-        self.setSizePolicy(QSizePolicy.Fixed, QSizePolicy.Minimum)
+        # Add spacer to push remaining items to the right
+        spacer = QWidget()
+        spacer.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Preferred)
+        self.toolBar.addWidget(spacer)
 
-    def sizeHint(self):
-        size = super().sizeHint()
-        font_metrics = self.fontMetrics()
-        text_width = font_metrics.horizontalAdvance(self.text())
-        return QSize(25, text_width + 30)
+        # View controls
+        self.toolBar.addAction(self.actionFitToWidth)
+        self.toolBar.addAction(self.actionFitToHeight)
 
-    def paintEvent(self, event):
-        painter = QPainter(self)
-        painter.setRenderHint(QPainter.Antialiasing)
+    def setup_status_bar(self, main_window):
+        """Setup the status bar"""
+        self.statusbar = QStatusBar(main_window)
+        self.statusbar.setObjectName("statusbar")
+        main_window.setStatusBar(self.statusbar)
 
-        option = QStyleOptionToolButton()
-        self.initStyleOption(option)
+        # Add permanent widgets to status bar
+        self.statusLabel = QLabel("Ready")
+        self.statusLabel.setObjectName("statusLabel")
+        self.statusbar.addWidget(self.statusLabel)
 
-        painter.setClipRect(self.rect())
-        self.style().drawPrimitive(QStyle.PE_PanelButtonTool, option, painter, self)
+        # Add stretch
+        self.statusbar.addPermanentWidget(QLabel(""))
 
-        painter.save()
-
-        # Calculate text rectangle
-        font_metrics = painter.fontMetrics()
-        text_width = font_metrics.horizontalAdvance(self.text())
-        text_height = font_metrics.height()
-
-        # Calculate the rotation point (center of the button)
-        center_x = self.width() / 2
-        center_y = self.height() / 2
-
-        # Translate to the center, rotate, then translate back
-        painter.translate(center_x, center_y)
-        painter.rotate(-90)
-        painter.translate(-center_y, -center_x)
-
-        # Calculate text position
-        text_x = (self.height() - text_width) / 2
-        text_y = (self.width() - text_height) / 2 + font_metrics.ascent()
-
-        # Draw the text
-        painter.drawText(QPointF(text_x, text_y), self.text())
-
-        painter.restore()
+    def retranslate_ui(self, main_window, language="en"):
+        """Set UI text based on language"""
+        # This method can be extended for internationalization
+        # For now, we keep English text as set above
+        pass
