@@ -1,6 +1,7 @@
 """
 Actions Handler - Handles all UI actions and connects them to functionality
 """
+import os
 
 from PySide6.QtWidgets import QFileDialog, QMessageBox
 from PySide6.QtCore import QPointF
