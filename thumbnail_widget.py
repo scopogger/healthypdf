@@ -8,10 +8,10 @@ from collections import OrderedDict
 
 from PySide6.QtWidgets import (
     QListWidget, QListWidgetItem, QWidget, QVBoxLayout, QSlider, QLabel,
-    QFrame, QInputDialog, QMessageBox
+    QFrame, QInputDialog, QMessageBox, QScrollBar
 )
 from PySide6.QtCore import Qt, Signal, QSize, QTimer, QRunnable, QThreadPool
-from PySide6.QtGui import QPixmap, QIcon
+from PySide6.QtGui import QPixmap, QIcon, QPainter, QColor, QFont
 
 import fitz  # PyMuPDF
 
@@ -147,8 +147,9 @@ class ThumbnailWidget(QWidget):
         self.page_rotations = {}
         self.deleted_pages = set()
 
-        # Thumbnail size (can be controlled by slider)
+        # Thumbnail size (can be controlled by slider) and font
         self.thumbnail_size = 150  # Larger default size
+        self.page_number_font_size = 10
 
         # Setup UI
         self.setup_ui()
@@ -168,20 +169,13 @@ class ThumbnailWidget(QWidget):
         layout.setContentsMargins(2, 2, 2, 2)
         layout.setSpacing(2)
 
-        # Title label
-        title_label = QLabel("Page Thumbnails")
-        title_label.setFrameStyle(QFrame.Panel | QFrame.Sunken)
-        title_label.setAlignment(Qt.AlignCenter)
-        title_label.setMaximumHeight(25)
-        layout.addWidget(title_label)
-
         # List widget for thumbnails
         self.thumbnail_list = QListWidget()
         self.thumbnail_list.setViewMode(QListWidget.IconMode)
         self.thumbnail_list.setResizeMode(QListWidget.Adjust)
         self.thumbnail_list.setWrapping(True)
         self.thumbnail_list.setUniformItemSizes(True)
-        self.thumbnail_list.setSpacing(5)
+        self.thumbnail_list.setSpacing(2)
         self.thumbnail_list.setMovement(QListWidget.Static)
         self.thumbnail_list.setSelectionMode(QListWidget.SingleSelection)
         self.thumbnail_list.setStyleSheet("""
@@ -192,9 +186,9 @@ class ThumbnailWidget(QWidget):
             }
             QListWidget::item {
                 border: 2px solid transparent;
-                border-radius: 5px;
-                padding: 3px;
-                margin: 2px;
+                border-radius: 6px;
+                padding: 0px;
+                margin: 1px;
             }
             QListWidget::item:selected {
                 border: 2px solid #0078d4;
@@ -205,12 +199,11 @@ class ThumbnailWidget(QWidget):
                 background-color: #f0f8ff;
             }
         """)
+        # make the icon (pixmap) actually occupy the cell
+        self.thumbnail_list.setIconSize(QSize(self.thumbnail_size, self.thumbnail_size))
+        # trigger visible-only load on scroll
+        self.thumbnail_list.verticalScrollBar().valueChanged.connect(lambda _: self.load_timer.start(50))
         layout.addWidget(self.thumbnail_list)
-
-        # Size control slider
-        size_label = QLabel("Thumbnail Size")
-        size_label.setAlignment(Qt.AlignCenter)
-        layout.addWidget(size_label)
 
         self.size_slider = QSlider(Qt.Horizontal)
         self.size_slider.setRange(100, 300)  # 100px to 300px
@@ -220,9 +213,8 @@ class ThumbnailWidget(QWidget):
         self.size_slider.valueChanged.connect(self.on_size_changed)
         layout.addWidget(self.size_slider)
 
-        # Connect signals
-        self.thumbnail_list.itemClicked.connect(self._on_item_clicked)
-        self.thumbnail_list.itemSelectionChanged.connect(self._on_selection_changed)
+        # Connect signals (use currentItemChanged—less jank)
+        self.thumbnail_list.currentItemChanged.connect(self._on_current_item_changed)
 
         # Set minimum width
         self.setMinimumWidth(180)
@@ -285,13 +277,13 @@ class ThumbnailWidget(QWidget):
             return
 
         for page_num in range(len(self.document)):
-            item = QListWidgetItem(f"Page {page_num + 1}")
+            # no text: we draw page number onto the image to avoid extra text spacing
+            item = QListWidgetItem("")
             item.setData(Qt.UserRole, page_num)
 
-            # Set larger size hint for thumbnails
-            size_hint = QSize(self.thumbnail_size + 20, self.thumbnail_size + 40)
-            item.setSizeHint(size_hint)
-            item.setTextAlignment(Qt.AlignCenter)
+            # tight cell around the image
+            item.setSizeHint(QSize(self.thumbnail_size + 12, self.thumbnail_size + 12))
+            item.setFlags(Qt.ItemIsSelectable | Qt.ItemIsEnabled)
 
             # Add placeholder icon
             placeholder = QPixmap(self.thumbnail_size, self.thumbnail_size)
@@ -308,10 +300,11 @@ class ThumbnailWidget(QWidget):
         if self.thumbnail_list.count() == 0:
             return
 
-        item_width = self.thumbnail_size + 30  # padding
-        item_height = self.thumbnail_size + 50  # padding + text
+        item_width = self.thumbnail_size + 12  # tight padding
+        item_height = self.thumbnail_size + 12
 
         self.thumbnail_list.setGridSize(QSize(item_width, item_height))
+        self.thumbnail_list.setIconSize(QSize(self.thumbnail_size, self.thumbnail_size))
 
         # Update all item size hints
         for i in range(self.thumbnail_list.count()):
@@ -325,6 +318,7 @@ class ThumbnailWidget(QWidget):
             return
 
         self.thumbnail_size = value
+        self.thumbnail_list.setIconSize(QSize(self.thumbnail_size, self.thumbnail_size))
 
         # Cancel current renders
         with self.render_lock:
@@ -355,8 +349,8 @@ class ThumbnailWidget(QWidget):
             return
 
         # Get visible range with buffer
-        first_visible = 0
-        last_visible = self.thumbnail_list.count() - 1
+        first_visible = None
+        last_visible = None
 
         # Try to get actual visible range
         try:
@@ -366,11 +360,15 @@ class ThumbnailWidget(QWidget):
                 if item:
                     item_rect = self.thumbnail_list.visualItemRect(item)
                     if item_rect.intersects(viewport_rect):
-                        if first_visible == 0:
+                        if first_visible is None:
                             first_visible = i
                         last_visible = i
         except:
             pass
+
+        if first_visible is None or last_visible is None:
+            first_visible = 0
+            last_visible = self.thumbnail_list.count() - 1
 
         # Add buffer
         buffer_size = 5
@@ -427,24 +425,23 @@ class ThumbnailWidget(QWidget):
                 del self.active_workers[render_id]
 
         if page_num < self.thumbnail_list.count():
-            self.thumbnail_cache.put(page_num, size, pixmap)
+            # paint page number onto the image itself (no extra label space)
+            composed = self._overlay_page_number(pixmap, page_num)
+            self.thumbnail_cache.put(page_num, size, composed)
             item = self.thumbnail_list.item(page_num)
             if item:
-                item.setIcon(QIcon(pixmap))
+                item.setIcon(QIcon(composed))
 
-    def _on_item_clicked(self, item):
-        """Handle item click"""
-        page_num = item.data(Qt.UserRole)
-        if page_num is not None and page_num not in self.deleted_pages:
+    def _on_current_item_changed(self, current, previous):
+        """Stable selection handler -> fixes 'always selects first' jank"""
+        if not current:
+            return
+        page_num = current.data(Qt.UserRole)
+        # Fallback to row index if user data missing
+        if page_num is None:
+            page_num = self.thumbnail_list.row(current)
+        if page_num not in self.deleted_pages:
             self.page_clicked.emit(page_num)
-
-    def _on_selection_changed(self):
-        """Handle selection change"""
-        current_item = self.thumbnail_list.currentItem()
-        if current_item:
-            page_num = current_item.data(Qt.UserRole)
-            if page_num is not None and page_num not in self.deleted_pages:
-                self.page_clicked.emit(page_num)
 
     def set_current_page(self, page_num: int):
         """Highlight the current page thumbnail"""
@@ -504,3 +501,23 @@ class ThumbnailWidget(QWidget):
         """Handle wheel events to trigger thumbnail loading"""
         super().wheelEvent(event)
         self.load_timer.start(300)
+
+    # --- helpers ---
+    def _overlay_page_number(self, pixmap: QPixmap, page_index: int) -> QPixmap:
+        """Draw a small dark bar with page number at the bottom of the thumbnail"""
+        out = QPixmap(pixmap.size())
+        out.fill(Qt.transparent)
+        painter = QPainter(out)
+        painter.setRenderHint(QPainter.Antialiasing)
+        painter.drawPixmap(0, 0, pixmap)
+        h = pixmap.height()
+        bar_h = max(18, int(h * 0.14))
+        painter.fillRect(0, h - bar_h, pixmap.width(), bar_h, QColor(0, 0, 0, 150))
+        f = painter.font()
+        f.setBold(True)
+        f.setPointSize(self.page_number_font_size)  # Use class variable
+        painter.setFont(f)
+        painter.setPen(Qt.white)
+        painter.drawText(pixmap.rect().adjusted(0, 0, 0, -2), Qt.AlignHCenter | Qt.AlignBottom, f"{page_index + 1}")
+        painter.end()
+        return out

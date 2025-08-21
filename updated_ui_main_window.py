@@ -6,6 +6,7 @@ from PySide6.QtWidgets import (QMenu, QMenuBar, QSizePolicy, QSplitter, QStatusB
                                QStyleOptionToolButton, QStyle, QScrollArea)
 import sys
 import os
+from thumbnail_widget import ThumbnailWidget
 
 # Try to import resources, but don't fail if it's not available
 try:
@@ -222,26 +223,14 @@ class UiMainWindow(object):
         self.pagesTabLayout.setContentsMargins(0, 0, 0, 0)
         self.pagesTabLayout.setSpacing(0)
 
-        # Pages label
-        thumbnail_label = QLabel("Page Thumbnails")
-        thumbnail_label.setFrameStyle(QFrame.Panel | QFrame.Sunken)
-        thumbnail_label.setAlignment(Qt.AlignCenter)
-        self.pagesTabLayout.addWidget(thumbnail_label)
+        # mount the custom thumbnail widget (it contains the single bottom slider)
+        self.thumbnailWidget = ThumbnailWidget(self.pagesTab)
+        self.pagesTabLayout.addWidget(self.thumbnailWidget)
 
-        # Thumbnail list (will be replaced by our custom widget)
-        self.thumbnailList = QListWidget()
-        self.thumbnailList.setObjectName("thumbnailList")
-        self.thumbnailList.setStyleSheet("background-color: rgb(190, 190, 190);")
-        self.thumbnailList.setMinimumWidth(150)
-        self.pagesTabLayout.addWidget(self.thumbnailList)
+        # expose inner controls under old names, so other code keeps working
+        self.thumbnailList = self.thumbnailWidget.thumbnail_list
+        self.thumbnail_size_slider = self.thumbnailWidget.size_slider
 
-        # Thumbnail size slider
-        self.thumbnail_size_slider = QSlider(Qt.Horizontal)
-        self.thumbnail_size_slider.setRange(0, 19)
-        self.thumbnail_size_slider.setValue(1)
-        self.thumbnail_size_slider.setTickPosition(QSlider.TicksBelow)
-        self.thumbnail_size_slider.setTickInterval(1)
-        self.pagesTabLayout.addWidget(self.thumbnail_size_slider)
 
     def setup_pdf_view(self):
         """Setup PDF viewer widget"""

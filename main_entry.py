@@ -41,7 +41,7 @@ def get_system_language():
     locale = QLocale.system()
     language = locale.name()
 
-    language = 'ru'  # Overwritten
+    language = 'ru'  # Overwritten for personal purposes
 
     # Map system locales to our supported languages
     if language.startswith('ru'):
@@ -49,7 +49,7 @@ def get_system_language():
     elif language.startswith('en'):
         return 'en-US'
     else:
-        return 'en-US'  # Default to English
+        return 'ru-RU'  # Default to English
 
 
 def main():
