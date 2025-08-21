@@ -357,16 +357,30 @@ class ActionsHandler:
                     Qt.SmoothTransformation
                 )
 
-                # Center the image on the page
-                x = (paint_rect.width() - scaled_image.width()) // 2
-                y = (paint_rect.height() - scaled_image.height()) // 2
+                # # Center the image on the page
+                # x = (paint_rect.width() - scaled_image.width()) // 2
+                # y = (paint_rect.height() - scaled_image.height()) // 2
+                #
+                # painter.drawImage(
+                #     paint_rect.toRect().adjusted(x, y, x, y).adjusted(0, 0,
+                #     scaled_image.width() - paint_rect.width() + x,
+                #     scaled_image.height() - paint_rect.height() + y),
+                #     scaled_image
+                # )
 
-                painter.drawImage(
-                    paint_rect.toRect().adjusted(x, y, x, y).adjusted(0, 0,
-                    scaled_image.width() - paint_rect.width() + x,
-                    scaled_image.height() - paint_rect.height() + y),
-                    scaled_image
+                target_size = scaled_image.size()
+
+                x = paint_rect.x() + (paint_rect.width() - target_size.width()) // 2
+                y = paint_rect.y() + (paint_rect.height() - target_size.height()) // 2
+
+                target_rect = paint_rect.adjusted(
+                    x - paint_rect.x(),
+                    y - paint_rect.y(),
+                    -(paint_rect.width() - (x - paint_rect.x()) - target_size.width()),
+                    -(paint_rect.height() - (y - paint_rect.y()) - target_size.height())
                 )
+
+                painter.drawImage(target_rect, scaled_image)
 
                 printed_pages += 1
 
