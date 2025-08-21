@@ -1,10 +1,13 @@
+"""
+Updated Main Window with settings integration and password handling
+"""
 import os
 import sys
 from typing import Optional
 
 from PySide6.QtWidgets import (
-    QMainWindow, QApplication, QFileDialog, QMessageBox, QSplitter, 
-    QWidget, QVBoxLayout, QLabel, QFrame
+    QMainWindow, QApplication, QFileDialog, QMessageBox, QSplitter,
+    QWidget, QVBoxLayout, QLabel, QFrame, QInputDialog
 )
 from PySide6.QtCore import Qt, QTimer
 from PySide6.QtGui import QKeySequence, QDragEnterEvent, QDropEvent
@@ -13,6 +16,7 @@ from updated_ui_main_window import UiMainWindow
 from pdf_viewer import PDFViewer
 from thumbnail_widget import ThumbnailWidget
 from actions_handler import ActionsHandler
+from settings_manager import settings_manager
 
 
 class MainWindow(QMainWindow):
@@ -33,22 +37,22 @@ class MainWindow(QMainWindow):
 
         # Create PDF viewer and thumbnail widget
         self.setup_pdf_components()
-        
+
         # Setup actions handler
         self.actions_handler = ActionsHandler(self)
-        
+
         # Connect UI signals
         self.connect_signals()
 
         # Enable drag and drop
         self.setAcceptDrops(True)
 
-        # Update initial UI state
+        # Load settings and update UI state
+        self.load_window_settings()
         self.update_ui_state()
 
         # Window settings
         self.setWindowTitle("PDF Editor")
-        self.resize(1400, 800)
 
     def setup_pdf_components(self):
         """Setup PDF viewer and thumbnail components"""
@@ -57,16 +61,16 @@ class MainWindow(QMainWindow):
             # Remove the placeholder
             old_pdf_view = self.ui.pdfView
             parent = old_pdf_view.parent()
-            
+
             # Create new PDF viewer
             self.pdf_viewer = PDFViewer()
-            
+
             # Replace in the UI
             if parent and hasattr(parent, 'layout') and parent.layout():
                 layout = parent.layout()
                 layout.replaceWidget(old_pdf_view, self.pdf_viewer)
                 old_pdf_view.deleteLater()
-            
+
             # Update reference
             self.ui.pdfView = self.pdf_viewer
 
@@ -74,22 +78,89 @@ class MainWindow(QMainWindow):
         if hasattr(self.ui, 'thumbnailList'):
             old_thumbnail = self.ui.thumbnailList
             parent = old_thumbnail.parent()
-            
+
             # Create new thumbnail widget
             self.thumbnail_widget = ThumbnailWidget()
-            
+
             # Replace in the UI
             if parent and hasattr(parent, 'layout') and parent.layout():
                 layout = parent.layout()
                 layout.replaceWidget(old_thumbnail, self.thumbnail_widget)
                 old_thumbnail.deleteLater()
-            
+
             # Update reference
             self.ui.thumbnailList = self.thumbnail_widget
 
+    def load_window_settings(self):
+        """Load window settings from settings manager"""
+        size, position, maximized = settings_manager.load_window_state()
+
+        self.resize(size)
+        self.move(position)
+
+        if maximized:
+            self.showMaximized()
+
+        # Load panel state
+        panel_visible, panel_width, active_tab = settings_manager.load_panel_state()
+
+        # Set panel visibility and size
+        if hasattr(self.ui, 'sidePanelContent'):
+            self.ui.sidePanelContent.setVisible(panel_visible)
+            if panel_visible:
+                # Set panel width
+                splitter_sizes = [25, panel_width, self.width() - panel_width - 25]
+                if hasattr(self.ui, 'splitter'):
+                    self.ui.splitter.setSizes(splitter_sizes)
+
+        # Set active tab
+        if hasattr(self.ui.thumbnailList, 'pages_button') and hasattr(self.ui.thumbnailList, 'bookmarks_button'):
+            if active_tab == "bookmarks":
+                self.ui.thumbnailList.bookmarks_button.setChecked(True)
+                self.ui.thumbnailList.show_bookmarks()
+            else:
+                self.ui.thumbnailList.pages_button.setChecked(True)
+                self.ui.thumbnailList.show_pages()
+
+        # Load thumbnail size
+        thumbnail_size = settings_manager.get_thumbnail_size()
+        if hasattr(self.ui.thumbnailList, 'size_slider'):
+            self.ui.thumbnailList.size_slider.setValue(thumbnail_size)
+            self.ui.thumbnailList.thumbnail_size = thumbnail_size
+
+    def save_window_settings(self):
+        """Save window settings"""
+        settings_manager.save_window_state(
+            self.size(),
+            self.pos(),
+            self.isMaximized()
+        )
+
+        # Save panel state
+        panel_visible = True
+        panel_width = 250
+        active_tab = "pages"
+
+        if hasattr(self.ui, 'sidePanelContent'):
+            panel_visible = self.ui.sidePanelContent.isVisible()
+            if hasattr(self.ui, 'splitter'):
+                sizes = self.ui.splitter.sizes()
+                if len(sizes) >= 2:
+                    panel_width = sizes[1]
+
+        if hasattr(self.ui.thumbnailList, 'bookmarks_button'):
+            if self.ui.thumbnailList.bookmarks_button.isChecked():
+                active_tab = "bookmarks"
+
+        settings_manager.save_panel_state(panel_visible, panel_width, active_tab)
+
+        # Save thumbnail size
+        if hasattr(self.ui.thumbnailList, 'thumbnail_size'):
+            settings_manager.save_thumbnail_size(self.ui.thumbnailList.thumbnail_size)
+
     def connect_signals(self):
         """Connect UI signals to their respective handlers"""
-        
+
         # PDF viewer signals
         if hasattr(self.ui.pdfView, 'page_changed'):
             self.ui.pdfView.page_changed.connect(self.on_page_changed)
@@ -111,7 +182,7 @@ class MainWindow(QMainWindow):
         # All action connections are now handled by ActionsHandler
 
     def load_document(self, file_path: str):
-        """Load a PDF document"""
+        """Load a PDF document with password handling"""
         if self.is_document_modified:
             reply = self.ask_save_changes()
             if reply == QMessageBox.Cancel:
@@ -120,9 +191,32 @@ class MainWindow(QMainWindow):
                 if not self.actions_handler.save_file():
                     return
 
+        # Check if we have a stored password for this file
+        stored_password = settings_manager.get_encryption_password(file_path)
+
         # Use the PDF viewer's optimized loading
         if hasattr(self.ui.pdfView, 'open_document'):
             success = self.ui.pdfView.open_document(file_path)
+
+            # If loading failed due to encryption, try with stored password
+            if not success and stored_password:
+                # Try to authenticate with stored password
+                try:
+                    import fitz
+                    test_doc = fitz.open(file_path)
+                    if test_doc.is_encrypted and test_doc.authenticate(stored_password):
+                        test_doc.close()
+                        success = self.ui.pdfView.open_document(file_path)
+                    else:
+                        test_doc.close()
+                        # Remove invalid stored password
+                        settings_manager.remove_encryption_password(file_path)
+                except:
+                    pass
+
+            # If still failed and document is encrypted, ask for password
+            if not success:
+                success = self.handle_encrypted_document(file_path)
         else:
             success = False
 
@@ -141,12 +235,75 @@ class MainWindow(QMainWindow):
             self.is_document_modified = False
             self.update_ui_state()
             self.update_page_info()
+
+            # Add to recent files
+            settings_manager.add_recent_file(file_path)
+            if hasattr(self.actions_handler, 'update_recent_files_menu'):
+                self.actions_handler.update_recent_files_menu()
         else:
             QMessageBox.critical(
                 self,
                 "Error",
                 f"Failed to open PDF file: {file_path}"
             )
+
+    def handle_encrypted_document(self, file_path: str) -> bool:
+        """Handle encrypted PDF documents"""
+        try:
+            import fitz
+            test_doc = fitz.open(file_path)
+
+            if not test_doc.is_encrypted:
+                test_doc.close()
+                return False
+
+            # Ask for password
+            password, ok = QInputDialog.getText(
+                self,
+                "PDF Password Required",
+                f"Enter password for:\n{os.path.basename(file_path)}",
+                QInputDialog.Password
+            )
+
+            if not ok or not password:
+                test_doc.close()
+                return False
+
+            # Test password
+            if test_doc.authenticate(password):
+                test_doc.close()
+
+                # Ask if user wants to remember password
+                remember = QMessageBox.question(
+                    self,
+                    "Remember Password",
+                    "Would you like to remember this password for future sessions?\n"
+                    "(Password will be stored in application settings)",
+                    QMessageBox.Yes | QMessageBox.No,
+                    QMessageBox.No
+                )
+
+                if remember == QMessageBox.Yes:
+                    settings_manager.save_encryption_passwords(file_path, password)
+
+                # Try opening again
+                return self.ui.pdfView.open_document(file_path)
+            else:
+                test_doc.close()
+                QMessageBox.warning(
+                    self,
+                    "Invalid Password",
+                    "The password you entered is incorrect."
+                )
+                return False
+
+        except Exception as e:
+            QMessageBox.critical(
+                self,
+                "Error",
+                f"Error handling encrypted document: {str(e)}"
+            )
+            return False
 
     def update_ui_state(self):
         """Update UI state based on document availability"""
@@ -159,10 +316,12 @@ class MainWindow(QMainWindow):
             self.ui.actionSaveAs.setEnabled(has_document)
         if hasattr(self.ui, 'actionClosePdf'):
             self.ui.actionClosePdf.setEnabled(has_document)
+        if hasattr(self.ui, 'actionPrint'):
+            self.ui.actionPrint.setEnabled(has_document)
 
         # Update navigation actions
         nav_actions = [
-            'actionPrevious_Page', 'actionNext_Page', 
+            'actionPrevious_Page', 'actionNext_Page',
             'actionJumpToFirstPage', 'actionJumpToLastPage'
         ]
         for action_name in nav_actions:
@@ -180,7 +339,7 @@ class MainWindow(QMainWindow):
 
         # Update view actions
         view_actions = [
-            'actionZoom_In', 'actionZoom_Out', 
+            'actionZoom_In', 'actionZoom_Out',
             'actionFitToWidth', 'actionFitToHeight'
         ]
         for action_name in view_actions:
@@ -283,6 +442,9 @@ class MainWindow(QMainWindow):
         if hasattr(self.ui.pdfView, 'set_zoom'):
             self.ui.pdfView.set_zoom(zoom_factor)
 
+        # Save zoom level
+        settings_manager.save_zoom_level(zoom_factor)
+
     # Drag and drop support
     def dragEnterEvent(self, event: QDragEnterEvent):
         """Handle drag enter events"""
@@ -314,5 +476,12 @@ class MainWindow(QMainWindow):
                 if not self.actions_handler.save_file():
                     event.ignore()
                     return
+
+        # Save window settings before closing
+        self.save_window_settings()
+
+        # Clean up PDF viewer
+        if hasattr(self.ui.pdfView, 'close_document'):
+            self.ui.pdfView.close_document()
 
         event.accept()

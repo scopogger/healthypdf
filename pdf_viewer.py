@@ -1,5 +1,6 @@
 """
 Optimized PDF Viewer - Only loads visible pages to prevent memory issues
+Fixed display issues and improved performance
 """
 
 import os
@@ -10,7 +11,7 @@ from dataclasses import dataclass
 from collections import OrderedDict
 
 from PySide6.QtWidgets import (
-    QScrollArea, QVBoxLayout, QWidget, QLabel, QMessageBox
+    QScrollArea, QVBoxLayout, QWidget, QLabel, QMessageBox, QInputDialog
 )
 from PySide6.QtCore import (
     Qt, QThread, QObject, Signal, QTimer, QSize, QRect,
@@ -62,7 +63,7 @@ class PageCache:
 class PageRenderWorker(QRunnable):
     """Lightweight worker for rendering pages"""
 
-    def __init__(self, doc_path: str, page_num: int, zoom: float, callback, render_id: str, rotation: int = 0):
+    def __init__(self, doc_path: str, page_num: int, zoom: float, callback, render_id: str, rotation: int = 0, password: str = ""):
         super().__init__()
         self.doc_path = doc_path
         self.page_num = page_num
@@ -71,6 +72,7 @@ class PageRenderWorker(QRunnable):
         self.render_id = render_id
         self.rotation = rotation
         self.cancelled = False
+        self.password = password
 
     def cancel(self):
         self.cancelled = True
@@ -82,6 +84,13 @@ class PageRenderWorker(QRunnable):
         try:
             # Open document briefly
             doc = fitz.open(self.doc_path)
+
+            # Handle password protection
+            if doc.needs_pass and self.password:
+                if not doc.authenticate(self.password):
+                    doc.close()
+                    return
+
             if self.cancelled:
                 doc.close()
                 return
@@ -97,7 +106,7 @@ class PageRenderWorker(QRunnable):
 
             # Use moderate quality to balance memory and appearance
             matrix = fitz.Matrix(self.zoom, self.zoom)
-            
+
             # Render with memory-conscious settings
             pix = page.get_pixmap(
                 matrix=matrix,
@@ -138,6 +147,7 @@ class PDFViewer(QScrollArea):
         # Core properties
         self.document = None
         self.doc_path = ""
+        self.document_password = ""
         self.pages_info = []
         self.page_widgets = []
         self.zoom_level = 1.0
@@ -173,6 +183,12 @@ class PDFViewer(QScrollArea):
         """Setup the scrollable area"""
         self.setWidgetResizable(True)
         self.setAlignment(Qt.AlignCenter)
+        self.setStyleSheet("""
+            QScrollArea {
+                background-color: #f0f0f0;
+                border: none;
+            }
+        """)
 
         # Container widget for pages
         self.pages_container = QWidget()
@@ -182,6 +198,33 @@ class PDFViewer(QScrollArea):
 
         self.setWidget(self.pages_container)
 
+    def authenticate_document(self, file_path: str) -> Optional[str]:
+        """Handle password authentication for encrypted PDFs"""
+        temp_doc = fitz.open(file_path)
+
+        if temp_doc.needs_pass:
+            password, ok = QInputDialog.getText(
+                self,
+                "Password Required",
+                f"File {os.path.basename(file_path)} is password protected.\nEnter password:",
+                QInputDialog.Password
+            )
+
+            if ok and password:
+                if temp_doc.authenticate(password):
+                    temp_doc.close()
+                    return password
+                else:
+                    QMessageBox.warning(self, "Authentication Failed", "Invalid password!")
+                    temp_doc.close()
+                    return None
+            else:
+                temp_doc.close()
+                return None
+        else:
+            temp_doc.close()
+            return ""
+
     def open_document(self, file_path: str) -> bool:
         """Open PDF document with immediate optimization"""
         try:
@@ -189,13 +232,23 @@ class PDFViewer(QScrollArea):
             self.close_document()
             self.zoom_level = 1.0
 
+            # Handle password authentication
+            password = self.authenticate_document(file_path)
+            if password is None and fitz.open(file_path).needs_pass:
+                return False
+
+            self.document_password = password or ""
+
             # Quick document info extraction WITHOUT loading pages
             temp_doc = fitz.open(file_path)
+            if temp_doc.needs_pass:
+                temp_doc.authenticate(self.document_password)
+
             page_count = len(temp_doc)
-            
+
             self.doc_path = file_path
             self.pages_info = []
-            
+
             # Extract page info quickly without rendering
             for page_num in range(page_count):
                 page = temp_doc[page_num]
@@ -206,12 +259,14 @@ class PDFViewer(QScrollArea):
                     height=int(rect.height)
                 )
                 self.pages_info.append(page_info)
-            
+
             # Close immediately after info extraction
             temp_doc.close()
-            
+
             # Re-open for actual use (PyMuPDF requirement)
             self.document = fitz.open(file_path)
+            if self.document.needs_pass:
+                self.document.authenticate(self.document_password)
 
             # Reset modification tracking
             self.is_modified = False
@@ -221,7 +276,7 @@ class PDFViewer(QScrollArea):
 
             # Create lightweight placeholder widgets
             self.create_placeholder_widgets()
-            
+
             # Scroll to top
             self.verticalScrollBar().setValue(0)
 
@@ -245,6 +300,7 @@ class PDFViewer(QScrollArea):
             self.document = None
 
         self.doc_path = ""
+        self.document_password = ""
         self.pages_info.clear()
         self.page_cache.clear()
         self.last_visible_pages.clear()
@@ -277,17 +333,22 @@ class PDFViewer(QScrollArea):
             display_width = int(page_info.width * self.zoom_level)
             display_height = int(page_info.height * self.zoom_level)
 
+            # Ensure minimum readable size
+            display_width = max(display_width, 200)
+            display_height = max(display_height, 200)
+
             # Simple placeholder label
-            page_widget = QLabel(f"Page {page_info.page_num + 1}")
+            page_widget = QLabel(f"Page {page_info.page_num + 1}\nLoading...")
             page_widget.setMinimumSize(display_width, display_height)
             page_widget.setFixedSize(display_width, display_height)
             page_widget.setAlignment(Qt.AlignCenter)
             page_widget.setStyleSheet("""
                 QLabel {
-                    border: 1px solid #ccc;
-                    background-color: #f9f9f9;
-                    color: #888;
+                    border: 2px solid #ddd;
+                    background-color: white;
+                    color: #666;
                     font-size: 14px;
+                    margin: 5px;
                 }
             """)
 
@@ -325,18 +386,18 @@ class PDFViewer(QScrollArea):
         for i, widget in enumerate(self.page_widgets):
             if widget.isHidden():
                 continue
-                
+
             widget_y = widget.y() - scroll_y
             widget_bottom = widget_y + widget.height()
 
-            # Only consider truly visible pages
-            if widget_bottom >= -50 and widget_y <= viewport_rect.height() + 50:
+            # Only consider truly visible pages with small buffer
+            if widget_bottom >= -100 and widget_y <= viewport_rect.height() + 100:
                 visible_pages.add(i)
-                
+
                 # Find center page
                 widget_center_y = widget.y() + widget.height() // 2
                 if current_center_page is None or abs(widget_center_y - viewport_center_y) < abs(
-                        self.page_widgets[current_center_page].y() + 
+                        self.page_widgets[current_center_page].y() +
                         self.page_widgets[current_center_page].height() // 2 - viewport_center_y):
                     current_center_page = i
 
@@ -346,9 +407,9 @@ class PDFViewer(QScrollArea):
             if current_center_page is not None:
                 visible_pages = {current_center_page}
                 # Add one adjacent page
-                if current_center_page > 0:
+                if current_center_page > 0 and current_center_page - 1 not in self.deleted_pages:
                     visible_pages.add(current_center_page - 1)
-                elif current_center_page < len(self.page_widgets) - 1:
+                elif current_center_page < len(self.page_widgets) - 1 and current_center_page + 1 not in self.deleted_pages:
                     visible_pages.add(current_center_page + 1)
 
         # Clear non-visible pages immediately
@@ -373,19 +434,24 @@ class PDFViewer(QScrollArea):
         """Clear a page widget and reset to placeholder"""
         widget = self.page_widgets[page_num]
         page_info = self.pages_info[page_num]
-        
+
         display_width = int(page_info.width * self.zoom_level)
         display_height = int(page_info.height * self.zoom_level)
-        
+
+        # Ensure minimum readable size
+        display_width = max(display_width, 200)
+        display_height = max(display_height, 200)
+
         widget.setFixedSize(display_width, display_height)
         widget.clear()
-        widget.setText(f"Page {page_num + 1}")
+        widget.setText(f"Page {page_num + 1}\nLoading...")
         widget.setStyleSheet("""
             QLabel {
-                border: 1px solid #ccc;
-                background-color: #f9f9f9;
-                color: #888;
+                border: 2px solid #ddd;
+                background-color: white;
+                color: #666;
                 font-size: 14px;
+                margin: 5px;
             }
         """)
 
@@ -402,7 +468,7 @@ class PDFViewer(QScrollArea):
         if cached_pixmap:
             widget.setPixmap(cached_pixmap)
             widget.setFixedSize(cached_pixmap.size())
-            widget.setStyleSheet("")
+            widget.setStyleSheet("border: 2px solid #ccc; margin: 5px;")
             return
 
         # Start rendering
@@ -422,7 +488,8 @@ class PDFViewer(QScrollArea):
             self.zoom_level,
             self.on_page_rendered,
             render_id,
-            rotation
+            rotation,
+            self.document_password
         )
 
         with self.render_lock:
@@ -440,10 +507,10 @@ class PDFViewer(QScrollArea):
         if page_num in self.last_visible_pages and page_num < len(self.page_widgets):
             self.page_cache.put(page_num, pixmap)
             widget = self.page_widgets[page_num]
-            
+
             widget.setPixmap(pixmap)
             widget.setFixedSize(pixmap.size())
-            widget.setStyleSheet("")
+            widget.setStyleSheet("border: 2px solid #ccc; margin: 5px;")
 
     def set_zoom(self, zoom: float):
         """Set zoom level and refresh"""
@@ -460,16 +527,21 @@ class PDFViewer(QScrollArea):
             page_info = self.pages_info[i]
             display_width = int(page_info.width * self.zoom_level)
             display_height = int(page_info.height * self.zoom_level)
-            
+
+            # Ensure minimum readable size
+            display_width = max(display_width, 200)
+            display_height = max(display_height, 200)
+
             widget.setFixedSize(display_width, display_height)
             widget.clear()
-            widget.setText(f"Page {i + 1}")
+            widget.setText(f"Page {i + 1}\nLoading...")
             widget.setStyleSheet("""
                 QLabel {
-                    border: 1px solid #ccc;
-                    background-color: #f9f9f9;
-                    color: #888;
+                    border: 2px solid #ddd;
+                    background-color: white;
+                    color: #666;
                     font-size: 14px;
+                    margin: 5px;
                 }
             """)
 
@@ -505,7 +577,7 @@ class PDFViewer(QScrollArea):
         """Get count of visible (non-deleted) pages"""
         if not self.page_widgets:
             return 0
-        
+
         count = 0
         for widget in self.page_widgets:
             if not widget.isHidden():
@@ -518,7 +590,8 @@ class PDFViewer(QScrollArea):
             self.cancel_all_renders()
             widget = self.page_widgets[page_num]
             if not widget.isHidden():
-                self.ensureWidgetVisible(widget)
+                self.ensureWidgetVisible(widget, 50, 50)
+                QTimer.singleShot(100, self.update_visible_pages)
 
     # Page manipulation methods
     def rotate_page_clockwise(self):
@@ -545,7 +618,7 @@ class PDFViewer(QScrollArea):
         # Force re-render
         if current_page in self.page_cache.cache:
             del self.page_cache.cache[current_page]
-        
+
         self.clear_page_widget(current_page)
         QTimer.singleShot(50, self.update_visible_pages)
         return True
@@ -557,7 +630,7 @@ class PDFViewer(QScrollArea):
 
         current_page = self.get_current_page()
         remaining_pages = self.get_visible_page_count()
-        
+
         if remaining_pages <= 1:
             QMessageBox.warning(None, "Cannot Delete", "Cannot delete the last remaining page.")
             return False
@@ -575,12 +648,10 @@ class PDFViewer(QScrollArea):
 
     def move_page_up(self):
         """Move current page up"""
-        # Implementation for page reordering
         return self._move_page(-1)
 
     def move_page_down(self):
         """Move current page down"""
-        # Implementation for page reordering
         return self._move_page(1)
 
     def _move_page(self, direction: int):
@@ -589,30 +660,33 @@ class PDFViewer(QScrollArea):
             return False
 
         current_page = self.get_current_page()
-        
+
         # Find current position in layout
         current_widget = self.page_widgets[current_page]
         current_layout_pos = -1
-        
+
         for i in range(self.pages_layout.count()):
             item = self.pages_layout.itemAt(i)
             if item and item.widget() == current_widget:
                 current_layout_pos = i
                 break
-        
+
         if current_layout_pos == -1:
             return False
 
-        # Find target position
-        target_pos = current_layout_pos + direction
-        if target_pos < 0 or target_pos >= self.pages_layout.count():
-            return False
+        # Find target position (skip hidden widgets)
+        target_pos = current_layout_pos
+        step = 1 if direction > 0 else -1
 
-        # Find target widget
-        target_item = self.pages_layout.itemAt(target_pos)
-        if not target_item or not target_item.widget():
-            return False
-        
+        while True:
+            target_pos += step
+            if target_pos < 0 or target_pos >= self.pages_layout.count():
+                return False
+
+            target_item = self.pages_layout.itemAt(target_pos)
+            if target_item and target_item.widget() and not target_item.widget().isHidden():
+                break
+
         target_widget = target_item.widget()
 
         # Swap widgets
@@ -679,6 +753,8 @@ class PDFViewer(QScrollArea):
                 self.document.close()
                 shutil.move(temp_path, self.doc_path)
                 self.document = fitz.open(self.doc_path)
+                if self.document.needs_pass:
+                    self.document.authenticate(self.document_password)
             else:
                 new_doc.save(save_path)
                 new_doc.close()
@@ -703,7 +779,7 @@ class PDFViewer(QScrollArea):
         """Fit document to width"""
         if not self.document or not self.page_widgets:
             return
-            
+
         # Calculate zoom to fit page width to viewport width
         viewport_width = self.viewport().width() - 50  # Some margin
         if self.pages_info:
@@ -715,7 +791,7 @@ class PDFViewer(QScrollArea):
         """Fit document to height"""
         if not self.document or not self.page_widgets:
             return
-            
+
         # Calculate zoom to fit page height to viewport height
         viewport_height = self.viewport().height() - 50  # Some margin
         if self.pages_info:

@@ -1,21 +1,30 @@
 """
-Actions Handler - Handles all UI actions and connects them to functionality
+Enhanced Actions Handler - Handles all UI actions with recent files and printing
 """
 import os
+import fitz
+from PySide6.QtWidgets import (
+    QFileDialog, QMessageBox, QInputDialog, QProgressDialog, QApplication
+)
+from PySide6.QtCore import QPointF, Qt
+from PySide6.QtPrintSupport import QPrinter, QPrintDialog
+from PySide6.QtGui import QPainter, QImage, QPageLayout, QAction
+from settings_manager import settings_manager
 
-from PySide6.QtWidgets import QFileDialog, QMessageBox
-from PySide6.QtCore import QPointF
-from PySide6.QtGui import QKeySequence
+
+def messagebox_info(parent, title, message):
+    """Show info message box"""
+    QMessageBox.information(parent, title, message)
 
 
 class ActionsHandler:
     """Handles all UI actions for the PDF editor"""
-    
+
     def __init__(self, main_window):
         self.main_window = main_window
         self.ui = main_window.ui
         self.connect_all_actions()
-    
+
     def connect_all_actions(self):
         """Connect all UI actions to their handlers"""
         self.connect_file_actions()
@@ -23,7 +32,9 @@ class ActionsHandler:
         self.connect_page_actions()
         self.connect_view_actions()
         self.connect_panel_actions()
-    
+        self.connect_recent_files()
+        self.connect_print_actions()
+
     def connect_file_actions(self):
         """Connect file menu actions"""
         if hasattr(self.ui, 'actionOpen'):
@@ -36,7 +47,7 @@ class ActionsHandler:
             self.ui.actionClosePdf.triggered.connect(self.close_file)
         if hasattr(self.ui, 'actionQuit'):
             self.ui.actionQuit.triggered.connect(self.main_window.close)
-    
+
     def connect_navigation_actions(self):
         """Connect navigation actions"""
         if hasattr(self.ui, 'actionPrevious_Page'):
@@ -47,7 +58,7 @@ class ActionsHandler:
             self.ui.actionJumpToFirstPage.triggered.connect(self.jump_to_first_page)
         if hasattr(self.ui, 'actionJumpToLastPage'):
             self.ui.actionJumpToLastPage.triggered.connect(self.jump_to_last_page)
-    
+
     def connect_page_actions(self):
         """Connect page manipulation actions"""
         if hasattr(self.ui, 'actionDeletePage'):
@@ -60,7 +71,7 @@ class ActionsHandler:
             self.ui.actionRotateCurrentPageClockwise.triggered.connect(self.rotate_page_clockwise)
         if hasattr(self.ui, 'actionRotateCurrentPageCounterclockwise'):
             self.ui.actionRotateCurrentPageCounterclockwise.triggered.connect(self.rotate_page_counterclockwise)
-    
+
     def connect_view_actions(self):
         """Connect view actions"""
         if hasattr(self.ui, 'actionZoom_In'):
@@ -75,12 +86,89 @@ class ActionsHandler:
             self.ui.actionRotateViewClockwise.triggered.connect(self.rotate_view_clockwise)
         if hasattr(self.ui, 'actionRotateViewCounterclockwise'):
             self.ui.actionRotateViewCounterclockwise.triggered.connect(self.rotate_view_counterclockwise)
-    
+
     def connect_panel_actions(self):
         """Connect panel actions"""
         if hasattr(self.ui, 'actionToggle_Panel'):
             self.ui.actionToggle_Panel.triggered.connect(self.toggle_side_panel)
-    
+
+    def connect_recent_files(self):
+        """Connect recent files actions"""
+        # if hasattr(self.ui, 'actionClearRecents'):  # May be unnecessary if it's created dynamically
+        #     self.ui.actionClearRecents.triggered.connect(self.clear_recent_files)
+
+        # Update recent files menu
+        self.update_recent_files_menu()
+
+    def connect_print_actions(self):
+        """Connect printing actions"""
+        if hasattr(self.ui, 'actionPrint'):
+            self.ui.actionPrint.triggered.connect(self.print_document)
+
+    def update_recent_files_menu(self):
+        """Update recent files in menu"""
+        if not hasattr(self.ui, 'menuFile'):
+            return
+
+        # --- remove previous recent-file actions, separator, and clear action
+        to_remove = []
+        for act in self.ui.menuFile.actions():
+            name = act.objectName() or ""
+            if name.startswith('recent_file_') or name in ('recent_files_separator', 'actionClearRecents'):
+                to_remove.append(act)
+        for act in to_remove:
+            self.ui.menuFile.removeAction(act)
+            act.deleteLater()
+
+        # --- add fresh recent files
+        recent_files = settings_manager.get_recent_files()
+        if not recent_files:
+            return
+
+        # insert after "Open" (if it exists)
+        open_action = getattr(self.ui, 'actionOpen', None)
+        if not open_action:
+            return
+
+        # insert a separator after Open
+        separator = self.ui.menuFile.insertSeparator(open_action)
+        separator.setObjectName('recent_files_separator')
+
+        # insert recent items BEFORE the separator so they appear just after Open
+        # (Qt inserts the new action *before* the 'before' action)
+        for i, file_path in enumerate(recent_files[:10]):
+            text = f"&{i + 1} {os.path.basename(file_path)}"
+            act = QAction(text, self.ui.menuFile)
+            act.setObjectName(f'recent_file_{i}')
+            act.setToolTip(file_path)
+            # capture path at definition time
+            act.triggered.connect(lambda checked=False, p=file_path: self.open_recent_file(p))
+            self.ui.menuFile.insertAction(separator, act)
+
+        # add "Clear Recent Files" right after the recent list (still before the same separator)
+        clear_action = QAction("Clear Recent Files", self.ui.menuFile)
+        clear_action.setObjectName('actionClearRecents')
+        clear_action.triggered.connect(self.clear_recent_files)
+        self.ui.menuFile.insertAction(separator, clear_action)
+
+    def open_recent_file(self, file_path):
+        """Open a recent file"""
+        if os.path.exists(file_path):
+            self.main_window.load_document(file_path)
+        else:
+            QMessageBox.warning(
+                self.main_window,
+                "File Not Found",
+                f"The file '{file_path}' no longer exists."
+            )
+            settings_manager.remove_recent_file(file_path)
+            self.update_recent_files_menu()
+
+    def clear_recent_files(self):
+        """Clear recent files list"""
+        settings_manager.clear_recent_files()
+        self.update_recent_files_menu()
+
     # File operations
     def open_file(self):
         """Open PDF file dialog"""
@@ -92,14 +180,18 @@ class ActionsHandler:
                 if not self.save_file():
                     return
 
+        last_dir = settings_manager.get_last_directory()
         file_path, _ = QFileDialog.getOpenFileName(
             self.main_window,
             "Open PDF",
-            "",
+            last_dir,
             "PDF Files (*.pdf)"
         )
 
         if file_path:
+            settings_manager.save_last_directory(os.path.dirname(file_path))
+            settings_manager.add_recent_file(file_path)
+            self.update_recent_files_menu()
             self.main_window.load_document(file_path)
 
     def save_file(self) -> bool:
@@ -115,19 +207,22 @@ class ActionsHandler:
                 self.main_window.update_window_title()
             return success
 
-        return True  # Fallback for read-only viewer
+        return True
 
     def save_file_as(self) -> bool:
         """Save changes to a new file"""
+        last_dir = settings_manager.get_last_directory()
         file_path, _ = QFileDialog.getSaveFileName(
             self.main_window,
             "Save PDF As",
-            "",
+            last_dir,
             "PDF Files (*.pdf)"
         )
 
         if not file_path:
             return False
+
+        settings_manager.save_last_directory(os.path.dirname(file_path))
 
         if hasattr(self.ui.pdfView, 'save_changes'):
             success = self.ui.pdfView.save_changes(file_path)
@@ -137,6 +232,8 @@ class ActionsHandler:
                 self.main_window.setWindowTitle(f"PDF Editor - {filename}")
                 self.main_window.is_document_modified = False
                 self.main_window.update_ui_state()
+                settings_manager.add_recent_file(file_path)
+                self.update_recent_files_menu()
             return success
 
         return True
@@ -163,32 +260,173 @@ class ActionsHandler:
         self.main_window.update_ui_state()
         self.main_window.update_page_info()
 
+    def print_document(self):
+        """Print the current PDF document"""
+        # Check if there is an open PDF file
+        if not hasattr(self.ui.pdfView, 'document') or not self.ui.pdfView.document:
+            QMessageBox.information(
+                self.main_window,
+                "Warning",
+                "Please open a PDF file first."
+            )
+            return
+
+        try:
+            # Set up printer in high resolution
+            printer = QPrinter(QPrinter.HighResolution)
+            dialog = QPrintDialog(printer, self.main_window)
+
+            # Show print dialog and exit if user cancels
+            if dialog.exec() != QPrintDialog.Accepted:
+                return
+
+            # Get document
+            pdf_document = self.ui.pdfView.document
+            painter = QPainter()
+
+            # Start the painter with the printer
+            if not painter.begin(printer):
+                QMessageBox.critical(
+                    self.main_window,
+                    "Print Error",
+                    "Cannot open print device."
+                )
+                return
+
+            # Create progress dialog
+            progress = QProgressDialog("Printing...", "Cancel", 0, len(pdf_document), self.main_window)
+            progress.setWindowModality(Qt.WindowModal)
+            progress.show()
+
+            # Iterate through pages of the document
+            printed_pages = 0
+            for page_num in range(len(pdf_document)):
+                # Skip deleted pages
+                if hasattr(self.ui.pdfView, 'deleted_pages') and page_num in self.ui.pdfView.deleted_pages:
+                    continue
+
+                # Update progress
+                progress.setValue(page_num)
+                QApplication.processEvents()
+
+                if progress.wasCanceled():
+                    break
+
+                if printed_pages > 0:
+                    printer.newPage()
+
+                page = pdf_document[page_num]
+
+                # Apply any rotations
+                rotation = 0
+                if hasattr(self.ui.pdfView, 'page_rotations'):
+                    rotation = self.ui.pdfView.page_rotations.get(page_num, 0)
+
+                if rotation != 0:
+                    page.set_rotation(rotation)
+
+                # Determine page orientation
+                pdf_rect = page.rect
+                is_landscape = pdf_rect.width > pdf_rect.height
+
+                # Set printer page layout if needed
+                page_layout = printer.pageLayout()
+                if is_landscape and (page_layout.orientation() == QPageLayout.Portrait):
+                    new_layout = QPageLayout(
+                        page_layout.pageSize(),
+                        QPageLayout.Landscape,
+                        page_layout.margins()
+                    )
+                    printer.setPageLayout(new_layout)
+
+                # Render page at high resolution
+                zoom_factor = 2  # Adjust for print quality
+                matrix = fitz.Matrix(zoom_factor, zoom_factor)
+                pix = page.get_pixmap(matrix=matrix)
+
+                image = QImage(pix.samples, pix.width, pix.height,
+                              pix.stride, QImage.Format_RGB888)
+
+                # Get the page rect from printer in device pixels
+                paint_rect = printer.pageRect(QPrinter.DevicePixel)
+
+                # Scale image to fit the page while maintaining aspect ratio
+                scaled_image = image.scaled(
+                    paint_rect.size().toSize(),
+                    Qt.KeepAspectRatio,
+                    Qt.SmoothTransformation
+                )
+
+                # Center the image on the page
+                x = (paint_rect.width() - scaled_image.width()) // 2
+                y = (paint_rect.height() - scaled_image.height()) // 2
+
+                painter.drawImage(
+                    paint_rect.toRect().adjusted(x, y, x, y).adjusted(0, 0,
+                    scaled_image.width() - paint_rect.width() + x,
+                    scaled_image.height() - paint_rect.height() + y),
+                    scaled_image
+                )
+
+                printed_pages += 1
+
+            # End the painter
+            painter.end()
+            progress.close()
+
+            QMessageBox.information(
+                self.main_window,
+                "Print Complete",
+                f"Successfully printed {printed_pages} pages."
+            )
+
+        except Exception as e:
+            QMessageBox.critical(
+                self.main_window,
+                "Print Error",
+                f"Error occurred while printing: {str(e)}"
+            )
+
     # Navigation operations
     def previous_page(self):
         """Go to previous page"""
         if hasattr(self.ui.pdfView, 'get_current_page'):
             current = self.ui.pdfView.get_current_page()
             if current > 0:
-                self.ui.pdfView.go_to_page(current - 1)
+                # Find previous non-deleted page
+                for i in range(current - 1, -1, -1):
+                    if not hasattr(self.ui.pdfView, 'deleted_pages') or i not in self.ui.pdfView.deleted_pages:
+                        self.ui.pdfView.go_to_page(i)
+                        break
 
     def next_page(self):
         """Go to next page"""
         if hasattr(self.ui.pdfView, 'get_current_page'):
             current = self.ui.pdfView.get_current_page()
-            max_page = self.ui.pdfView.get_visible_page_count() - 1
+            max_page = len(self.ui.pdfView.document) - 1 if self.ui.pdfView.document else 0
+
             if current < max_page:
-                self.ui.pdfView.go_to_page(current + 1)
+                # Find next non-deleted page
+                for i in range(current + 1, max_page + 1):
+                    if not hasattr(self.ui.pdfView, 'deleted_pages') or i not in self.ui.pdfView.deleted_pages:
+                        self.ui.pdfView.go_to_page(i)
+                        break
 
     def jump_to_first_page(self):
-        """Jump to first page"""
-        if hasattr(self.ui.pdfView, 'go_to_page'):
-            self.ui.pdfView.go_to_page(0)
+        """Jump to first non-deleted page"""
+        if hasattr(self.ui.pdfView, 'go_to_page') and self.ui.pdfView.document:
+            for i in range(len(self.ui.pdfView.document)):
+                if not hasattr(self.ui.pdfView, 'deleted_pages') or i not in self.ui.pdfView.deleted_pages:
+                    self.ui.pdfView.go_to_page(i)
+                    break
 
     def jump_to_last_page(self):
-        """Jump to last page"""
-        if hasattr(self.ui.pdfView, 'go_to_page'):
-            last_page = self.ui.pdfView.get_visible_page_count() - 1
-            self.ui.pdfView.go_to_page(last_page)
+        """Jump to last non-deleted page"""
+        if hasattr(self.ui.pdfView, 'go_to_page') and self.ui.pdfView.document:
+            for i in range(len(self.ui.pdfView.document) - 1, -1, -1):
+                if not hasattr(self.ui.pdfView, 'deleted_pages') or i not in self.ui.pdfView.deleted_pages:
+                    self.ui.pdfView.go_to_page(i)
+                    break
 
     # Page manipulation operations
     def delete_current_page(self):
@@ -198,7 +436,7 @@ class ActionsHandler:
             if success:
                 self.main_window.on_document_modified(True)
                 self.main_window.update_page_info()
-                
+
                 # Update thumbnail
                 current_page = self.ui.pdfView.get_current_page()
                 if hasattr(self.ui.thumbnailList, 'hide_page_thumbnail'):
@@ -226,7 +464,7 @@ class ActionsHandler:
             success = self.ui.pdfView.rotate_page_clockwise()
             if success:
                 self.main_window.on_document_modified(True)
-                
+
                 # Update thumbnail
                 current_page = self.ui.pdfView.get_current_page()
                 if hasattr(self.ui.thumbnailList, 'rotate_page_thumbnail'):
@@ -238,7 +476,7 @@ class ActionsHandler:
             success = self.ui.pdfView.rotate_page_counterclockwise()
             if success:
                 self.main_window.on_document_modified(True)
-                
+
                 # Update thumbnail
                 current_page = self.ui.pdfView.get_current_page()
                 if hasattr(self.ui.thumbnailList, 'rotate_page_thumbnail'):
@@ -251,7 +489,7 @@ class ActionsHandler:
             current_zoom = getattr(self.ui.pdfView, 'zoom_level', 1.0)
             new_zoom = min(5.0, current_zoom * 1.25)
             self.ui.pdfView.set_zoom(new_zoom)
-            
+
             # Update zoom selector
             if hasattr(self.ui, 'm_zoomSelector') and hasattr(self.ui.m_zoomSelector, 'set_zoom_value'):
                 self.ui.m_zoomSelector.set_zoom_value(new_zoom)
@@ -262,7 +500,7 @@ class ActionsHandler:
             current_zoom = getattr(self.ui.pdfView, 'zoom_level', 1.0)
             new_zoom = max(0.1, current_zoom * 0.8)
             self.ui.pdfView.set_zoom(new_zoom)
-            
+
             # Update zoom selector
             if hasattr(self.ui, 'm_zoomSelector') and hasattr(self.ui.m_zoomSelector, 'set_zoom_value'):
                 self.ui.m_zoomSelector.set_zoom_value(new_zoom)
