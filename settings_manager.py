@@ -1,9 +1,14 @@
 from PySide6.QtCore import QSettings, QSize, QPoint, QStandardPaths
+import os
+import json
 
 
 class SettingsManager:
     DEFAULT_SIZE = QSize(1400, 800)
     DEFAULT_POSITION = QPoint(200, 200)
+    DEFAULT_PANEL_WIDTH = 150  # Narrower default width
+    MIN_PANEL_WIDTH = 150  # Minimum allowed width
+    MAX_PANEL_WIDTH = 300  # Maximum reasonable width
     MAX_RECENT_FILES = 10
 
     def __init__(self):
@@ -51,8 +56,19 @@ class SettingsManager:
         self.settings.setValue("recent_files", recent_files)
 
     def get_recent_files(self):
-        """Get list of recent files"""
-        return self.settings.value("recent_files", [], type=list)
+        """Get list of recent files, filtering out non-existent files"""
+        recent_files = self.settings.value("recent_files", [], type=list)
+        # Filter out files that no longer exist
+        existing_files = []
+        for file_path in recent_files:
+            if os.path.exists(file_path):
+                existing_files.append(file_path)
+
+        # Update settings if files were removed
+        if len(existing_files) != len(recent_files):
+            self.settings.setValue("recent_files", existing_files)
+
+        return existing_files
 
     def remove_recent_file(self, file_path: str):
         """Remove file from recent files list"""
@@ -66,7 +82,10 @@ class SettingsManager:
         self.settings.setValue("recent_files", [])
 
     def save_panel_state(self, panel_visible: bool, panel_width: int, active_tab: str):
-        """Save side panel state"""
+        """Save side panel state with width validation"""
+        # Enforce minimum and maximum width
+        panel_width = max(self.MIN_PANEL_WIDTH, min(panel_width, self.MAX_PANEL_WIDTH))
+
         self.settings.setValue("panel/visible", panel_visible)
         self.settings.setValue("panel/width", panel_width)
         self.settings.setValue("panel/active_tab", active_tab)
@@ -74,8 +93,12 @@ class SettingsManager:
     def load_panel_state(self):
         """Load side panel state"""
         visible = self.settings.value("panel/visible", True, type=bool)
-        width = self.settings.value("panel/width", 250, type=int)
+        width = self.settings.value("panel/width", self.DEFAULT_PANEL_WIDTH, type=int)
         active_tab = self.settings.value("panel/active_tab", "pages", type=str)
+
+        # Enforce width limits
+        width = max(self.MIN_PANEL_WIDTH, min(width, self.MAX_PANEL_WIDTH))
+
         return visible, width, active_tab
 
     def save_thumbnail_size(self, size: int):
@@ -94,7 +117,7 @@ class SettingsManager:
         """Get last zoom level"""
         return self.settings.value("view/zoom", 1.0, type=float)
 
-    def save_encryption_passwords(self, file_path: str, password: str):
+    def save_encryption_password(self, file_path: str, password: str):
         """Save password for encrypted PDF (use with caution!)"""
         # Note: This stores passwords in plaintext - consider encryption in production
         self.settings.setValue(f"passwords/{file_path}", password)

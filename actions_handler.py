@@ -1,5 +1,5 @@
 """
-Enhanced Actions Handler - Handles all UI actions with recent files and printing
+Enhanced Actions Handler - Handles all UI actions with proper page numbering
 """
 import os
 import fitz
@@ -94,9 +94,6 @@ class ActionsHandler:
 
     def connect_recent_files(self):
         """Connect recent files actions"""
-        # if hasattr(self.ui, 'actionClearRecents'):  # May be unnecessary if it's created dynamically
-        #     self.ui.actionClearRecents.triggered.connect(self.clear_recent_files)
-
         # Update recent files menu
         self.update_recent_files_menu()
 
@@ -104,6 +101,21 @@ class ActionsHandler:
         """Connect printing actions"""
         if hasattr(self.ui, 'actionPrint'):
             self.ui.actionPrint.triggered.connect(self.print_document)
+
+    def get_visible_pages_in_order(self):
+        """Get list of visible page indices in their current layout order"""
+        visible_pages = []
+        if hasattr(self.ui.pdfView, 'pages_layout') and hasattr(self.ui.pdfView, 'page_widgets'):
+            for i in range(self.ui.pdfView.pages_layout.count()):
+                item = self.ui.pdfView.pages_layout.itemAt(i)
+                if item and item.widget() and not item.widget().isHidden():
+                    # Find which page widget this is
+                    widget = item.widget()
+                    for j, page_widget in enumerate(self.ui.pdfView.page_widgets):
+                        if page_widget == widget:
+                            visible_pages.append(j)
+                            break
+        return visible_pages
 
     def update_recent_files_menu(self):
         """Update recent files in menu"""
@@ -261,7 +273,7 @@ class ActionsHandler:
         self.main_window.update_page_info()
 
     def print_document(self):
-        """Print the current PDF document"""
+        """Print the current PDF document using visible pages only"""
         # Check if there is an open PDF file
         if not hasattr(self.ui.pdfView, 'document') or not self.ui.pdfView.document:
             QMessageBox.information(
@@ -280,6 +292,16 @@ class ActionsHandler:
             if dialog.exec() != QPrintDialog.Accepted:
                 return
 
+            # Get visible pages in order
+            visible_pages = self.get_visible_pages_in_order()
+            if not visible_pages:
+                QMessageBox.warning(
+                    self.main_window,
+                    "No Pages to Print",
+                    "No visible pages to print."
+                )
+                return
+
             # Get document
             pdf_document = self.ui.pdfView.document
             painter = QPainter()
@@ -294,25 +316,20 @@ class ActionsHandler:
                 return
 
             # Create progress dialog
-            progress = QProgressDialog("Printing...", "Cancel", 0, len(pdf_document), self.main_window)
+            progress = QProgressDialog("Printing...", "Cancel", 0, len(visible_pages), self.main_window)
             progress.setWindowModality(Qt.WindowModal)
             progress.show()
 
-            # Iterate through pages of the document
-            printed_pages = 0
-            for page_num in range(len(pdf_document)):
-                # Skip deleted pages
-                if hasattr(self.ui.pdfView, 'deleted_pages') and page_num in self.ui.pdfView.deleted_pages:
-                    continue
-
+            # Print only visible pages in their current order
+            for idx, page_num in enumerate(visible_pages):
                 # Update progress
-                progress.setValue(page_num)
+                progress.setValue(idx)
                 QApplication.processEvents()
 
                 if progress.wasCanceled():
                     break
 
-                if printed_pages > 0:
+                if idx > 0:
                     printer.newPage()
 
                 page = pdf_document[page_num]
@@ -357,19 +374,8 @@ class ActionsHandler:
                     Qt.SmoothTransformation
                 )
 
-                # # Center the image on the page
-                # x = (paint_rect.width() - scaled_image.width()) // 2
-                # y = (paint_rect.height() - scaled_image.height()) // 2
-                #
-                # painter.drawImage(
-                #     paint_rect.toRect().adjusted(x, y, x, y).adjusted(0, 0,
-                #     scaled_image.width() - paint_rect.width() + x,
-                #     scaled_image.height() - paint_rect.height() + y),
-                #     scaled_image
-                # )
-
+                # Center the image on the page
                 target_size = scaled_image.size()
-
                 x = paint_rect.x() + (paint_rect.width() - target_size.width()) // 2
                 y = paint_rect.y() + (paint_rect.height() - target_size.height()) // 2
 
@@ -382,8 +388,6 @@ class ActionsHandler:
 
                 painter.drawImage(target_rect, scaled_image)
 
-                printed_pages += 1
-
             # End the painter
             painter.end()
             progress.close()
@@ -391,7 +395,7 @@ class ActionsHandler:
             QMessageBox.information(
                 self.main_window,
                 "Print Complete",
-                f"Successfully printed {printed_pages} pages."
+                f"Successfully printed {len(visible_pages)} pages."
             )
 
         except Exception as e:
@@ -401,50 +405,54 @@ class ActionsHandler:
                 f"Error occurred while printing: {str(e)}"
             )
 
-    # Navigation operations
+    # Navigation operations with proper page numbering
     def previous_page(self):
-        """Go to previous page"""
-        if hasattr(self.ui.pdfView, 'get_current_page'):
-            current = self.ui.pdfView.get_current_page()
-            if current > 0:
-                # Find previous non-deleted page
-                for i in range(current - 1, -1, -1):
-                    if not hasattr(self.ui.pdfView, 'deleted_pages') or i not in self.ui.pdfView.deleted_pages:
-                        self.ui.pdfView.go_to_page(i)
-                        break
+        """Go to previous visible page"""
+        if not hasattr(self.ui.pdfView, 'get_current_page'):
+            return
+
+        current_actual_page = self.ui.pdfView.get_current_page()
+        visible_pages = self.get_visible_pages_in_order()
+
+        if not visible_pages or current_actual_page not in visible_pages:
+            return
+
+        current_idx = visible_pages.index(current_actual_page)
+        if current_idx > 0:
+            prev_page = visible_pages[current_idx - 1]
+            self.ui.pdfView.go_to_page(prev_page)
 
     def next_page(self):
-        """Go to next page"""
-        if hasattr(self.ui.pdfView, 'get_current_page'):
-            current = self.ui.pdfView.get_current_page()
-            max_page = len(self.ui.pdfView.document) - 1 if self.ui.pdfView.document else 0
+        """Go to next visible page"""
+        if not hasattr(self.ui.pdfView, 'get_current_page'):
+            return
 
-            if current < max_page:
-                # Find next non-deleted page
-                for i in range(current + 1, max_page + 1):
-                    if not hasattr(self.ui.pdfView, 'deleted_pages') or i not in self.ui.pdfView.deleted_pages:
-                        self.ui.pdfView.go_to_page(i)
-                        break
+        current_actual_page = self.ui.pdfView.get_current_page()
+        visible_pages = self.get_visible_pages_in_order()
+
+        if not visible_pages or current_actual_page not in visible_pages:
+            return
+
+        current_idx = visible_pages.index(current_actual_page)
+        if current_idx < len(visible_pages) - 1:
+            next_page = visible_pages[current_idx + 1]
+            self.ui.pdfView.go_to_page(next_page)
 
     def jump_to_first_page(self):
-        """Jump to first non-deleted page"""
-        if hasattr(self.ui.pdfView, 'go_to_page') and self.ui.pdfView.document:
-            for i in range(len(self.ui.pdfView.document)):
-                if not hasattr(self.ui.pdfView, 'deleted_pages') or i not in self.ui.pdfView.deleted_pages:
-                    self.ui.pdfView.go_to_page(i)
-                    break
+        """Jump to first visible page"""
+        visible_pages = self.get_visible_pages_in_order()
+        if visible_pages and hasattr(self.ui.pdfView, 'go_to_page'):
+            self.ui.pdfView.go_to_page(visible_pages[0])
 
     def jump_to_last_page(self):
-        """Jump to last non-deleted page"""
-        if hasattr(self.ui.pdfView, 'go_to_page') and self.ui.pdfView.document:
-            for i in range(len(self.ui.pdfView.document) - 1, -1, -1):
-                if not hasattr(self.ui.pdfView, 'deleted_pages') or i not in self.ui.pdfView.deleted_pages:
-                    self.ui.pdfView.go_to_page(i)
-                    break
+        """Jump to last visible page"""
+        visible_pages = self.get_visible_pages_in_order()
+        if visible_pages and hasattr(self.ui.pdfView, 'go_to_page'):
+            self.ui.pdfView.go_to_page(visible_pages[-1])
 
     # Page manipulation operations
     def delete_current_page(self):
-        """Delete the current page"""
+        """Delete the current page with proper numbering update"""
         if hasattr(self.ui.pdfView, 'delete_current_page'):
             success = self.ui.pdfView.delete_current_page()
             if success:
@@ -457,23 +465,31 @@ class ActionsHandler:
                     self.ui.thumbnailList.hide_page_thumbnail(current_page)
 
     def move_page_up(self):
-        """Move current page up"""
+        """Move current page up with proper numbering update"""
         if hasattr(self.ui.pdfView, 'move_page_up'):
             success = self.ui.pdfView.move_page_up()
             if success:
                 self.main_window.on_document_modified(True)
                 self.main_window.update_page_info()
 
+                # Update thumbnail order
+                if hasattr(self.ui.thumbnailList, 'update_thumbnails_order'):
+                    self.ui.thumbnailList.update_thumbnails_order()
+
     def move_page_down(self):
-        """Move current page down"""
+        """Move current page down with proper numbering update"""
         if hasattr(self.ui.pdfView, 'move_page_down'):
             success = self.ui.pdfView.move_page_down()
             if success:
                 self.main_window.on_document_modified(True)
                 self.main_window.update_page_info()
 
+                # Update thumbnail order
+                if hasattr(self.ui.thumbnailList, 'update_thumbnails_order'):
+                    self.ui.thumbnailList.update_thumbnails_order()
+
     def rotate_page_clockwise(self):
-        """Rotate current page clockwise"""
+        """Rotate current page clockwise with thumbnail update"""
         if hasattr(self.ui.pdfView, 'rotate_page_clockwise'):
             success = self.ui.pdfView.rotate_page_clockwise()
             if success:
@@ -485,7 +501,7 @@ class ActionsHandler:
                     self.ui.thumbnailList.rotate_page_thumbnail(current_page, 90)
 
     def rotate_page_counterclockwise(self):
-        """Rotate current page counterclockwise"""
+        """Rotate current page counterclockwise with thumbnail update"""
         if hasattr(self.ui.pdfView, 'rotate_page_counterclockwise'):
             success = self.ui.pdfView.rotate_page_counterclockwise()
             if success:

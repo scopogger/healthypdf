@@ -368,8 +368,9 @@ class PDFViewer(QScrollArea):
             display_width = max(display_width, 200)
             display_height = max(display_height, 200)
 
-            # Simple placeholder label
-            page_widget = QLabel(f"Page {page_info.page_num + 1}\nLoading...")
+            # Simple placeholder label - use display page number
+            display_page_num = page_info.page_num + 1  # Initially matches actual page number
+            page_widget = QLabel(f"Page {display_page_num}\nLoading...")
             page_widget.setMinimumSize(display_width, display_height)
             page_widget.setFixedSize(display_width, display_height)
             page_widget.setAlignment(Qt.AlignCenter)
@@ -404,6 +405,22 @@ class PDFViewer(QScrollArea):
         self.cancel_all_renders()
         # Longer delay to prevent excessive rendering during scrolling
         self.scroll_timer.start(200)
+
+    def update_page_labels(self):
+        """Update page labels to reflect current order"""
+        if not self.page_widgets:
+            return
+
+        display_page_num = 1
+        for i, widget in enumerate(self.page_widgets):
+            if widget.isHidden():
+                continue
+
+            # Update the widget's display text if it's showing placeholder text
+            if hasattr(widget, 'pixmap') and (not widget.pixmap() or widget.pixmap().isNull()):
+                widget.setText(f"Page {display_page_num}\nLoading...")
+
+            display_page_num += 1
 
     def update_visible_pages(self):
         """Ultra-conservative visible page management"""
@@ -488,7 +505,11 @@ class PDFViewer(QScrollArea):
 
         widget.setFixedSize(display_width, display_height)
         widget.clear()
-        widget.setText(f"Page {page_num + 1}\nLoading...")
+
+        # Calculate display page number based on position in visible order
+        display_page_num = self.get_display_page_number(page_num)
+        widget.setText(f"Page {display_page_num}\nLoading...")
+
         widget.setStyleSheet("""
             QLabel {
                 border: 2px solid #ddd;
@@ -498,6 +519,17 @@ class PDFViewer(QScrollArea):
                 margin: 5px;
             }
         """)
+
+    def get_display_page_number(self, actual_page_num: int) -> int:
+        """Get the display page number for a given actual page number"""
+        display_num = 1
+        for i, widget in enumerate(self.page_widgets):
+            if widget.isHidden():
+                continue
+            if i == actual_page_num:
+                return display_num
+            display_num += 1
+        return 1  # fallback
 
     def load_page_if_needed(self, page_num: int):
         """Load page only if not already loaded"""
@@ -590,7 +622,11 @@ class PDFViewer(QScrollArea):
 
             widget.setFixedSize(display_width, display_height)
             widget.clear()
-            widget.setText(f"Page {i + 1}\nLoading...")
+
+            # Use correct display page number
+            display_page_num = self.get_display_page_number(i)
+            widget.setText(f"Page {display_page_num}\nLoading...")
+
             widget.setStyleSheet("""
                 QLabel {
                     border: 2px solid #ddd;
@@ -676,6 +712,10 @@ class PDFViewer(QScrollArea):
             del self.page_cache.cache[current_page]
 
         self.clear_page_widget(current_page)
+
+        # Update page labels to ensure correct numbering
+        self.update_page_labels()
+
         QTimer.singleShot(50, self.update_visible_pages)
         return True
 
@@ -698,6 +738,9 @@ class PDFViewer(QScrollArea):
         # Hide the widget
         widget = self.page_widgets[current_page]
         widget.hide()
+
+        # Update page labels for remaining pages
+        self.update_page_labels()
 
         self.page_changed.emit(self.get_current_page())
         return True
@@ -758,6 +801,10 @@ class PDFViewer(QScrollArea):
 
         self.is_modified = True
         self.document_modified.emit(True)
+
+        # Update page labels to reflect new order
+        self.update_page_labels()
+
         return True
 
     def save_changes(self, file_path: str = None) -> bool:
