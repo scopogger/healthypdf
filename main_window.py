@@ -32,7 +32,7 @@ class MainWindow(QMainWindow):
         self.current_document_path = ""
         self.is_document_modified = False
 
-        # Create PDF viewer and thumbnail widget
+        # Setup PDF components - the UI already creates PDFViewer instances
         self.setup_pdf_components()
 
         # Setup actions handler
@@ -53,39 +53,29 @@ class MainWindow(QMainWindow):
 
     def setup_pdf_components(self):
         """Setup PDF viewer and thumbnail components"""
-        # Replace the placeholder PDF view with our custom viewer
-        if hasattr(self.ui, 'pdfView'):
-            # Remove the placeholder
-            old_pdf_view = self.ui.pdfView
-            parent = old_pdf_view.parent()
+        # The UI already creates PDFViewer and ThumbnailWidget instances
+        # We just need to get references to them
 
-            # Create new PDF viewer
+        # PDF viewer should already be created by updated_ui_main_window.py
+        if hasattr(self.ui, 'pdfView') and isinstance(self.ui.pdfView, PDFViewer):
+            self.pdf_viewer = self.ui.pdfView
+        else:
+            # Fallback: create new PDF viewer if not found
+            print("Warning: PDFViewer not found in UI, creating new one")
             self.pdf_viewer = PDFViewer()
-
-            # Replace in the UI
-            if parent and hasattr(parent, 'layout') and parent.layout():
-                layout = parent.layout()
-                layout.replaceWidget(old_pdf_view, self.pdf_viewer)
-                old_pdf_view.deleteLater()
-
-            # Update reference
             self.ui.pdfView = self.pdf_viewer
 
-        # Replace thumbnail widget if it exists
-        if hasattr(self.ui, 'thumbnailList'):
-            old_thumbnail = self.ui.thumbnailList
-            parent = old_thumbnail.parent()
+            # Try to add it to the splitter if it exists
+            if hasattr(self.ui, 'splitter'):
+                self.ui.splitter.addWidget(self.pdf_viewer)
 
-            # Create new thumbnail widget
+        # Thumbnail widget should already be created by updated_ui_main_window.py
+        if hasattr(self.ui, 'thumbnailList') and isinstance(self.ui.thumbnailList, ThumbnailWidget):
+            self.thumbnail_widget = self.ui.thumbnailList
+        else:
+            # Fallback: create new thumbnail widget if not found
+            print("Warning: ThumbnailWidget not found in UI, creating new one")
             self.thumbnail_widget = ThumbnailWidget()
-
-            # Replace in the UI
-            if parent and hasattr(parent, 'layout') and parent.layout():
-                layout = parent.layout()
-                layout.replaceWidget(old_thumbnail, self.thumbnail_widget)
-                old_thumbnail.deleteLater()
-
-            # Update reference
             self.ui.thumbnailList = self.thumbnail_widget
 
     def load_window_settings(self):
@@ -106,7 +96,7 @@ class MainWindow(QMainWindow):
             self.ui.sidePanelContent.setVisible(panel_visible)
             if panel_visible:
                 # Set panel width
-                splitter_sizes = [25, panel_width, self.width() - panel_width - 25]
+                splitter_sizes = [panel_width, self.width() - panel_width - 25]
                 if hasattr(self.ui, 'splitter'):
                     self.ui.splitter.setSizes(splitter_sizes)
 
@@ -121,8 +111,9 @@ class MainWindow(QMainWindow):
 
         # Load thumbnail size
         thumbnail_size = settings_manager.get_thumbnail_size()
-        if hasattr(self.ui.thumbnailList, 'size_slider'):
-            settings_manager.save_thumbnail_size(self.ui.thumbnailList.thumbnail_size)  # self.ui.thumbnailList.size_slider.setValue(thumbnail_size)
+        if hasattr(self.ui.thumbnailList, 'set_thumbnail_size'):
+            self.ui.thumbnailList.set_thumbnail_size(thumbnail_size)
+        elif hasattr(self.ui.thumbnailList, 'thumbnail_size'):
             self.ui.thumbnailList.thumbnail_size = thumbnail_size
 
     def save_window_settings(self):
@@ -143,7 +134,7 @@ class MainWindow(QMainWindow):
             if hasattr(self.ui, 'splitter'):
                 sizes = self.ui.splitter.sizes()
                 if len(sizes) >= 2:
-                    panel_width = sizes[1]
+                    panel_width = sizes[0]  # First panel is sidebar
 
         if hasattr(self.ui.thumbnailList, 'bookmarks_button'):
             if self.ui.thumbnailList.bookmarks_button.isChecked():
@@ -173,7 +164,7 @@ class MainWindow(QMainWindow):
             self.ui.m_pageInput.editingFinished.connect(self.go_to_page_input)
 
         # Zoom selector
-        if hasattr(self.ui.m_zoomSelector, 'zoom_changed'):
+        if hasattr(self.ui, 'm_zoomSelector') and hasattr(self.ui.m_zoomSelector, 'zoom_changed'):
             self.ui.m_zoomSelector.zoom_changed.connect(self.on_zoom_changed)
 
         # All action connections are now handled by ActionsHandler
@@ -188,15 +179,21 @@ class MainWindow(QMainWindow):
                 if not self.actions_handler.save_file():
                     return
 
+        print(f"Loading document: {file_path}")
+
         # Check if we have a stored password for this file
         stored_password = settings_manager.get_encryption_password(file_path)
 
         # Use the PDF viewer's optimized loading
+        success = False
         if hasattr(self.ui.pdfView, 'open_document'):
+            print("Attempting to open document with PDF viewer")
             success = self.ui.pdfView.open_document(file_path)
+            print(f"PDF viewer open result: {success}")
 
             # If loading failed due to encryption, try with stored password
             if not success and stored_password:
+                print("Retrying with stored password")
                 # Try to authenticate with stored password
                 try:
                     import fitz
@@ -208,22 +205,26 @@ class MainWindow(QMainWindow):
                         test_doc.close()
                         # Remove invalid stored password
                         settings_manager.remove_encryption_password(file_path)
-                except:
-                    pass
+                except Exception as e:
+                    print(f"Password retry failed: {e}")
 
             # If still failed and document is encrypted, ask for password
             if not success:
+                print("Document loading failed, checking if encrypted")
                 success = self.handle_encrypted_document(file_path)
         else:
+            print("Error: PDF viewer does not have open_document method")
             success = False
 
         if success:
+            print("Document loaded successfully")
             self.current_document_path = file_path
             filename = os.path.basename(file_path)
             self.setWindowTitle(f"PDF Editor - {filename}")
 
             # Update thumbnail widget
             if hasattr(self.ui.thumbnailList, 'set_document'):
+                print("Setting document on thumbnail widget")
                 self.ui.thumbnailList.set_document(
                     getattr(self.ui.pdfView, 'document', None),
                     file_path
@@ -238,6 +239,7 @@ class MainWindow(QMainWindow):
             if hasattr(self.actions_handler, 'update_recent_files_menu'):
                 self.actions_handler.update_recent_files_menu()
         else:
+            print(f"Failed to load document: {file_path}")
             QMessageBox.critical(
                 self,
                 "Error",
@@ -281,7 +283,7 @@ class MainWindow(QMainWindow):
                 )
 
                 if remember == QMessageBox.Yes:
-                    settings_manager.save_encryption_passwords(file_path, password)
+                    settings_manager.save_encryption_password(file_path, password)
 
                 # Try opening again
                 return self.ui.pdfView.open_document(file_path)
@@ -305,6 +307,8 @@ class MainWindow(QMainWindow):
     def update_ui_state(self):
         """Update UI state based on document availability"""
         has_document = hasattr(self.ui.pdfView, 'document') and self.ui.pdfView.document is not None
+
+        print(f"Updating UI state, has_document: {has_document}")
 
         # Update file actions
         if hasattr(self.ui, 'actionSave'):
@@ -354,6 +358,8 @@ class MainWindow(QMainWindow):
                 total_pages = self.ui.pdfView.get_visible_page_count()
             else:
                 total_pages = len(self.ui.pdfView.document)
+
+            print(f"Page info: {current_page} of {total_pages}")
 
             # Update page input and label
             if hasattr(self.ui, 'm_pageInput'):

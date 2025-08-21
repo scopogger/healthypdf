@@ -58,7 +58,8 @@ class PageCache:
 class PageRenderWorker(QRunnable):
     """Lightweight worker for rendering pages"""
 
-    def __init__(self, doc_path: str, page_num: int, zoom: float, callback, render_id: str, rotation: int = 0, password: str = ""):
+    def __init__(self, doc_path: str, page_num: int, zoom: float, callback, render_id: str, rotation: int = 0,
+                 password: str = ""):
         super().__init__()
         self.doc_path = doc_path
         self.page_num = page_num
@@ -77,6 +78,8 @@ class PageRenderWorker(QRunnable):
             return
 
         try:
+            print(f"Rendering page {self.page_num} with zoom {self.zoom}")
+
             # Open document briefly
             doc = fitz.open(self.doc_path)
 
@@ -87,6 +90,11 @@ class PageRenderWorker(QRunnable):
                     return
 
             if self.cancelled:
+                doc.close()
+                return
+
+            if self.page_num >= len(doc):
+                print(f"Page {self.page_num} out of range (doc has {len(doc)} pages)")
                 doc.close()
                 return
 
@@ -117,13 +125,16 @@ class PageRenderWorker(QRunnable):
             # Convert to QPixmap
             img_data = pix.tobytes("ppm")
             pixmap = QPixmap()
-            pixmap.loadFromData(img_data)
+            success = pixmap.loadFromData(img_data)
 
             # Close immediately to free memory
             doc.close()
 
-            if not self.cancelled:
+            if not self.cancelled and success:
+                print(f"Successfully rendered page {self.page_num} ({pixmap.width()}x{pixmap.height()})")
                 self.callback(self.page_num, pixmap, self.render_id)
+            else:
+                print(f"Failed to render page {self.page_num} or was cancelled")
 
         except Exception as e:
             if not self.cancelled:
@@ -138,6 +149,8 @@ class PDFViewer(QScrollArea):
 
     def __init__(self, parent=None):
         super().__init__(parent)
+
+        print("Initializing PDFViewer")
 
         # Core properties
         self.document = None
@@ -174,8 +187,12 @@ class PDFViewer(QScrollArea):
         self.verticalScrollBar().valueChanged.connect(self.on_scroll)
         self.last_visible_pages = set()
 
+        print("PDFViewer initialization complete")
+
     def setup_ui(self):
         """Setup the scrollable area"""
+        print("Setting up PDFViewer UI")
+
         self.setWidgetResizable(True)
         self.setAlignment(Qt.AlignCenter)
         self.setStyleSheet("""
@@ -192,45 +209,55 @@ class PDFViewer(QScrollArea):
         self.pages_layout.setAlignment(Qt.AlignTop | Qt.AlignHCenter)
 
         self.setWidget(self.pages_container)
+        print("PDFViewer UI setup complete")
 
     def authenticate_document(self, file_path: str) -> Optional[str]:
         """Handle password authentication for encrypted PDFs"""
-        temp_doc = fitz.open(file_path)
+        try:
+            temp_doc = fitz.open(file_path)
 
-        if temp_doc.needs_pass:
-            password, ok = QInputDialog.getText(
-                self,
-                "Password Required",
-                f"File {os.path.basename(file_path)} is password protected.\nEnter password:",
-                QInputDialog.Password
-            )
+            if temp_doc.needs_pass:
+                password, ok = QInputDialog.getText(
+                    self,
+                    "Password Required",
+                    f"File {os.path.basename(file_path)} is password protected.\nEnter password:",
+                    QInputDialog.Password
+                )
 
-            if ok and password:
-                if temp_doc.authenticate(password):
-                    temp_doc.close()
-                    return password
+                if ok and password:
+                    if temp_doc.authenticate(password):
+                        temp_doc.close()
+                        return password
+                    else:
+                        QMessageBox.warning(self, "Authentication Failed", "Invalid password!")
+                        temp_doc.close()
+                        return None
                 else:
-                    QMessageBox.warning(self, "Authentication Failed", "Invalid password!")
                     temp_doc.close()
                     return None
             else:
                 temp_doc.close()
-                return None
-        else:
-            temp_doc.close()
-            return ""
+                return ""
+        except Exception as e:
+            print(f"Error during authentication: {e}")
+            return None
 
     def open_document(self, file_path: str) -> bool:
         """Open PDF document with immediate optimization"""
         try:
-            print(f"Opening document: {file_path}")
+            print(f"PDFViewer: Opening document: {file_path}")
             self.close_document()
             self.zoom_level = 1.0
 
             # Handle password authentication
             password = self.authenticate_document(file_path)
-            if password is None and fitz.open(file_path).needs_pass:
-                return False
+            if password is None:
+                temp_doc = fitz.open(file_path)
+                if temp_doc.needs_pass:
+                    temp_doc.close()
+                    print("Password required but not provided")
+                    return False
+                temp_doc.close()
 
             self.document_password = password or ""
 
@@ -240,6 +267,7 @@ class PDFViewer(QScrollArea):
                 temp_doc.authenticate(self.document_password)
 
             page_count = len(temp_doc)
+            print(f"Document has {page_count} pages")
 
             self.doc_path = file_path
             self.pages_info = []
@@ -275,6 +303,10 @@ class PDFViewer(QScrollArea):
             # Scroll to top
             self.verticalScrollBar().setValue(0)
 
+            # Force an immediate update to show the document
+            self.update()
+            self.repaint()
+
             # Delay initial page loading to prevent freeze
             QTimer.singleShot(100, self.update_visible_pages)
 
@@ -288,6 +320,8 @@ class PDFViewer(QScrollArea):
 
     def close_document(self):
         """Close document and aggressively free resources"""
+        print("Closing document")
+
         self.cancel_all_renders()
 
         if self.document:
@@ -319,9 +353,11 @@ class PDFViewer(QScrollArea):
 
         # Force garbage collection
         gc.collect()
+        print("Document closed")
 
     def create_placeholder_widgets(self):
         """Create lightweight placeholder widgets - NO RENDERING"""
+        print(f"Creating {len(self.pages_info)} placeholder widgets")
         self.page_widgets = []
 
         for page_info in self.pages_info:
@@ -352,6 +388,10 @@ class PDFViewer(QScrollArea):
 
         print(f"Created {len(self.page_widgets)} placeholder widgets")
 
+        # Force layout update
+        self.pages_container.updateGeometry()
+        self.update()
+
     def cancel_all_renders(self):
         """Cancel all active rendering tasks"""
         with self.render_lock:
@@ -368,7 +408,10 @@ class PDFViewer(QScrollArea):
     def update_visible_pages(self):
         """Ultra-conservative visible page management"""
         if not self.document:
+            print("No document loaded, skipping visible page update")
             return
+
+        print("Updating visible pages")
 
         viewport_rect = self.viewport().rect()
         scroll_y = self.verticalScrollBar().value()
@@ -396,6 +439,8 @@ class PDFViewer(QScrollArea):
                         self.page_widgets[current_center_page].height() // 2 - viewport_center_y):
                     current_center_page = i
 
+        print(f"Visible pages: {visible_pages}, center page: {current_center_page}")
+
         # Only load 1-2 pages at most
         if len(visible_pages) > 2:
             # Keep only center page and one adjacent
@@ -404,7 +449,8 @@ class PDFViewer(QScrollArea):
                 # Add one adjacent page
                 if current_center_page > 0 and current_center_page - 1 not in self.deleted_pages:
                     visible_pages.add(current_center_page - 1)
-                elif current_center_page < len(self.page_widgets) - 1 and current_center_page + 1 not in self.deleted_pages:
+                elif current_center_page < len(
+                        self.page_widgets) - 1 and current_center_page + 1 not in self.deleted_pages:
                     visible_pages.add(current_center_page + 1)
 
         # Clear non-visible pages immediately
@@ -427,6 +473,9 @@ class PDFViewer(QScrollArea):
 
     def clear_page_widget(self, page_num: int):
         """Clear a page widget and reset to placeholder"""
+        if page_num >= len(self.page_widgets) or page_num >= len(self.pages_info):
+            return
+
         widget = self.page_widgets[page_num]
         page_info = self.pages_info[page_num]
 
@@ -452,21 +501,27 @@ class PDFViewer(QScrollArea):
 
     def load_page_if_needed(self, page_num: int):
         """Load page only if not already loaded"""
+        if page_num >= len(self.page_widgets):
+            return
+
         widget = self.page_widgets[page_num]
 
         # Check if already loaded (has pixmap)
         if hasattr(widget, 'pixmap') and widget.pixmap() and not widget.pixmap().isNull():
+            print(f"Page {page_num} already loaded")
             return
 
         # Check cache
         cached_pixmap = self.page_cache.get(page_num)
         if cached_pixmap:
+            print(f"Using cached pixmap for page {page_num}")
             widget.setPixmap(cached_pixmap)
             widget.setFixedSize(cached_pixmap.size())
             widget.setStyleSheet("border: 2px solid #ccc; margin: 5px;")
             return
 
         # Start rendering
+        print(f"Starting render for page {page_num}")
         self.start_page_render(page_num)
 
     def start_page_render(self, page_num: int):
@@ -498,6 +553,8 @@ class PDFViewer(QScrollArea):
             if render_id in self.active_workers:
                 del self.active_workers[render_id]
 
+        print(f"Page {page_num} rendered successfully")
+
         # Only update if page is still visible
         if page_num in self.last_visible_pages and page_num < len(self.page_widgets):
             self.page_cache.put(page_num, pixmap)
@@ -506,6 +563,7 @@ class PDFViewer(QScrollArea):
             widget.setPixmap(pixmap)
             widget.setFixedSize(pixmap.size())
             widget.setStyleSheet("border: 2px solid #ccc; margin: 5px;")
+            widget.update()
 
     def set_zoom(self, zoom: float):
         """Set zoom level and refresh"""
@@ -519,6 +577,9 @@ class PDFViewer(QScrollArea):
 
         # Update all widget sizes without rendering
         for i, widget in enumerate(self.page_widgets):
+            if i >= len(self.pages_info):
+                continue
+
             page_info = self.pages_info[i]
             display_width = int(page_info.width * self.zoom_level)
             display_height = int(page_info.height * self.zoom_level)
