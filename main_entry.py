@@ -1,11 +1,7 @@
-#!/usr/bin/env python3
-"""
-PDF Editor - Optimized PDF viewer and editor
-Main application entry point
-"""
-
 import sys
 import os
+from argparse import ArgumentParser, RawTextHelpFormatter
+
 from PySide6.QtWidgets import QApplication
 from PySide6.QtCore import Qt, QLocale
 from PySide6.QtGui import QIcon
@@ -18,6 +14,15 @@ from main_window import MainWindow
 
 def setup_application():
     """Setup application properties and style"""
+    argument_parser = ArgumentParser(description="AltPDF",
+                                     formatter_class=RawTextHelpFormatter)
+    argument_parser.add_argument("file", help="The file to open",
+                                 nargs='?', type=str)
+    options = argument_parser.parse_args()
+
+    # Default theme should be Light (this is an exception for Windows 10 and 11 PySide6 GUIs)
+    sys.argv += ['-platform', 'windows:darkmode=1']
+
     app = QApplication(sys.argv)
 
     # Set application properties

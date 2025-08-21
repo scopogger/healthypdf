@@ -1,6 +1,3 @@
-"""
-Updated Main Window with settings integration and password handling
-"""
 import os
 import sys
 from typing import Optional

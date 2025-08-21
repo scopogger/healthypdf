@@ -1,6 +1,3 @@
-"""
-Thumbnail Widget - Displays page thumbnails in sidebar with proper resizing and larger thumbnails
-"""
 import os
 import threading
 from typing import Optional, Dict
@@ -178,6 +175,12 @@ class ThumbnailWidget(QWidget):
         self.thumbnail_list.setSpacing(2)
         self.thumbnail_list.setMovement(QListWidget.Static)
         self.thumbnail_list.setSelectionMode(QListWidget.SingleSelection)
+
+        # Remove text label (only show icon)
+        self.thumbnail_list.setWordWrap(True)
+        self.thumbnail_list.setFlow(QListWidget.LeftToRight)
+        self.thumbnail_list.setLayoutMode(QListWidget.Batched)
+
         self.thumbnail_list.setStyleSheet("""
             QListWidget {
                 background-color: #f8f8f8;
@@ -199,24 +202,32 @@ class ThumbnailWidget(QWidget):
                 background-color: #f0f8ff;
             }
         """)
-        # make the icon (pixmap) actually occupy the cell
+
+        # Set initial icon size
         self.thumbnail_list.setIconSize(QSize(self.thumbnail_size, self.thumbnail_size))
-        # trigger visible-only load on scroll
+
+        # Connect scroll to lazy load
         self.thumbnail_list.verticalScrollBar().valueChanged.connect(lambda _: self.load_timer.start(50))
+
         layout.addWidget(self.thumbnail_list)
 
+        # Thumbnail size slider (only one)
         self.size_slider = QSlider(Qt.Horizontal)
-        self.size_slider.setRange(100, 300)  # 100px to 300px
+        self.size_slider.setObjectName("thumbnailSizeSlider")  # Unique identifier
+        self.size_slider.setRange(100, 300)
         self.size_slider.setValue(self.thumbnail_size)
         self.size_slider.setTickPosition(QSlider.TicksBelow)
         self.size_slider.setTickInterval(50)
         self.size_slider.valueChanged.connect(self.on_size_changed)
+
         layout.addWidget(self.size_slider)
 
-        # Connect signals (use currentItemChanged—less jank)
+        # No other sliders added — this is the only one
+
+        # Connect item click and selection change
+        self.thumbnail_list.itemClicked.connect(self._on_item_clicked)
         self.thumbnail_list.currentItemChanged.connect(self._on_current_item_changed)
 
-        # Set minimum width
         self.setMinimumWidth(180)
 
     def authenticate_document(self, file_path: str) -> Optional[str]:
@@ -277,18 +288,19 @@ class ThumbnailWidget(QWidget):
             return
 
         for page_num in range(len(self.document)):
-            # no text: we draw page number onto the image to avoid extra text spacing
-            item = QListWidgetItem("")
-            item.setData(Qt.UserRole, page_num)
-
-            # tight cell around the image
+            item = QListWidgetItem(f"")  # Page {page_num + 1}
+            item.setData(Qt.UserRole, page_num)  # Store page number
             item.setSizeHint(QSize(self.thumbnail_size + 12, self.thumbnail_size + 12))
             item.setFlags(Qt.ItemIsSelectable | Qt.ItemIsEnabled)
 
-            # Add placeholder icon
+            # Placeholder pixmap (white background)
             placeholder = QPixmap(self.thumbnail_size, self.thumbnail_size)
             placeholder.fill(Qt.white)
-            item.setIcon(QIcon(placeholder))
+
+            # Overlay page number on placeholder
+            placeholder_with_number = self._overlay_page_number(placeholder, page_num)
+
+            item.setIcon(QIcon(placeholder_with_number))
 
             self.thumbnail_list.addItem(item)
 
@@ -432,15 +444,24 @@ class ThumbnailWidget(QWidget):
             if item:
                 item.setIcon(QIcon(composed))
 
+    def _on_item_clicked(self, item):
+        if not item:
+            return
+
+        # Get the page number from the item's user data
+        page_num = item.data(Qt.UserRole)
+        if page_num is not None and page_num not in self.deleted_pages:
+            print(f"Thumbnail clicked: page {page_num}")  # Debug
+            self.page_clicked.emit(page_num)
+
     def _on_current_item_changed(self, current, previous):
-        """Stable selection handler -> fixes 'always selects first' jank"""
         if not current:
             return
+
+        # Get the page number from the item's user data
         page_num = current.data(Qt.UserRole)
-        # Fallback to row index if user data missing
-        if page_num is None:
-            page_num = self.thumbnail_list.row(current)
-        if page_num not in self.deleted_pages:
+        if page_num is not None and page_num not in self.deleted_pages:
+            print(f"Thumbnail selected: page {page_num}")  # Debug
             self.page_clicked.emit(page_num)
 
     def set_current_page(self, page_num: int):
@@ -448,8 +469,16 @@ class ThumbnailWidget(QWidget):
         if page_num < self.thumbnail_list.count():
             item = self.thumbnail_list.item(page_num)
             if item and not item.isHidden():
+                # Temporarily disconnect to prevent recursive signals
+                self.thumbnail_list.itemClicked.disconnect()
+                self.thumbnail_list.currentItemChanged.disconnect()
+
                 self.thumbnail_list.setCurrentItem(item)
                 self.thumbnail_list.scrollToItem(item)
+
+                # Reconnect signals
+                self.thumbnail_list.itemClicked.connect(self._on_item_clicked)
+                self.thumbnail_list.currentItemChanged.connect(self._on_current_item_changed)
 
     def hide_page_thumbnail(self, page_num: int):
         """Hide thumbnail for deleted page"""

@@ -1,12 +1,13 @@
 from PySide6.QtCore import (QMetaObject, QRect, QSize, Qt, QTimer, QPointF)
 from PySide6.QtGui import (QAction, QIcon, QPainter, QKeySequence)
-from PySide6.QtWidgets import (QMenu, QMenuBar, QSizePolicy, QSplitter, QStatusBar, 
-                               QToolBar, QVBoxLayout, QWidget, QListWidget, QHBoxLayout, 
-                               QLineEdit, QLabel, QFrame, QSlider, QTreeView, QToolButton, 
+from PySide6.QtWidgets import (QMenu, QMenuBar, QSizePolicy, QSplitter, QStatusBar,
+                               QToolBar, QVBoxLayout, QWidget, QListWidget, QHBoxLayout,
+                               QLineEdit, QLabel, QFrame, QTreeView, QToolButton,
                                QStyleOptionToolButton, QStyle, QScrollArea)
 import sys
 import os
 from thumbnail_widget import ThumbnailWidget
+from pdf_viewer import PDFViewer
 
 # Try to import resources, but don't fail if it's not available
 try:
@@ -18,23 +19,24 @@ except ImportError:
 class ZoomSelector(QWidget):
     """Simple zoom selector widget"""
     from PySide6.QtCore import Signal
-    
+
     zoom_changed = Signal(float)
-    
+
     def __init__(self, parent=None):
         super().__init__(parent)
+        self.zoom_input = None
         self.setup_ui()
-    
+
     def setup_ui(self):
         layout = QHBoxLayout(self)
         layout.setContentsMargins(0, 0, 0, 0)
-        
+
         self.zoom_input = QLineEdit()
         self.zoom_input.setMaximumWidth(80)
         self.zoom_input.setText("100%")
         self.zoom_input.returnPressed.connect(self.on_zoom_input)
         layout.addWidget(self.zoom_input)
-    
+
     def on_zoom_input(self):
         try:
             text = self.zoom_input.text().replace('%', '')
@@ -42,7 +44,7 @@ class ZoomSelector(QWidget):
             self.zoom_changed.emit(zoom)
         except ValueError:
             pass
-    
+
     def set_zoom_value(self, zoom):
         self.zoom_input.setText(f"{int(zoom * 100)}%")
 
@@ -50,6 +52,7 @@ class ZoomSelector(QWidget):
 class UiMainWindow(object):
     def __init__(self):
         # Initialize all UI components to None
+        self.thumbnailWidget = None
         self.menuEdit = None
         self.m_pageLabel = None
         self.menuHelp = None
@@ -66,13 +69,12 @@ class UiMainWindow(object):
         self.mainToolBar = None
         self.m_zoomSelector = None
         self.statusBar = None
-        self.thumbnail_size_slider = None
         self.thumbnailList = None
         self.pagesTabLayout = None
         self.verticalLayout = None
         self.verticalLayout_2 = None
         self.verticalLayout_3 = None
-        self.pdfView = None
+        self.pdfView = None  # This will be the actual PDFViewer now
         self.pagesTab = None
         self.bookmarkView = None
         self.bookmarkTab = None
@@ -223,19 +225,17 @@ class UiMainWindow(object):
         self.pagesTabLayout.setContentsMargins(0, 0, 0, 0)
         self.pagesTabLayout.setSpacing(0)
 
-        # mount the custom thumbnail widget (it contains the single bottom slider)
+        # Mount the custom thumbnail widget (it contains its own slider)
         self.thumbnailWidget = ThumbnailWidget(self.pagesTab)
         self.pagesTabLayout.addWidget(self.thumbnailWidget)
 
-        # expose inner controls under old names, so other code keeps working
+        # Expose inner controls under old names, so other code keeps working
         self.thumbnailList = self.thumbnailWidget.thumbnail_list
-        self.thumbnail_size_slider = self.thumbnailWidget.size_slider
-
+        # No separate thumbnail_size_slider - it's inside thumbnailWidget
 
     def setup_pdf_view(self):
         """Setup PDF viewer widget"""
-        # Create a placeholder scroll area (will be replaced by PDFViewer)
-        self.pdfView = QScrollArea(self.splitter)
+        self.pdfView = PDFViewer(self.splitter)
         self.pdfView.setObjectName("pdfView")
         size_policy = QSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
         size_policy.setHorizontalStretch(10)
@@ -379,10 +379,10 @@ class UiMainWindow(object):
         # Add submenus to View menu
         self.menuRotation = QMenu("Rotation", self.menuView)
         self.menuView.addMenu(self.menuRotation)
-        
+
         self.menuNavigation = QMenu("Navigation", self.menuView)
         self.menuView.addMenu(self.menuNavigation)
-        
+
         self.menuZoom = QMenu("Zoom", self.menuView)
         self.menuView.addMenu(self.menuZoom)
 
@@ -411,12 +411,12 @@ class UiMainWindow(object):
         # View submenus
         self.menuRotation.addAction(self.actionRotateViewClockwise)
         self.menuRotation.addAction(self.actionRotateViewCounterclockwise)
-        
+
         self.menuNavigation.addAction(self.actionJumpToFirstPage)
         self.menuNavigation.addAction(self.actionJumpToLastPage)
         self.menuNavigation.addAction(self.actionPrevious_Page)
         self.menuNavigation.addAction(self.actionNext_Page)
-        
+
         self.menuZoom.addAction(self.actionZoom_In)
         self.menuZoom.addAction(self.actionZoom_Out)
         self.menuZoom.addAction(self.actionFitToWidth)
@@ -587,6 +587,7 @@ class UiMainWindow(object):
 
 class VerticalButton(QToolButton):
     """Custom vertical button for tab switching"""
+
     def __init__(self, text, parent=None):
         super().__init__(parent)
         self.setText(text)

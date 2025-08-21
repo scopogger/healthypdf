@@ -1,6 +1,3 @@
-"""
-Enhanced Settings Manager with recent files support
-"""
 from PySide6.QtCore import QSettings, QSize, QPoint, QStandardPaths
 
 

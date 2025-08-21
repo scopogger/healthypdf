@@ -1,8 +1,3 @@
-"""
-Optimized PDF Viewer - Only loads visible pages to prevent memory issues
-Fixed display issues and improved performance
-"""
-
 import os
 import gc
 import threading
