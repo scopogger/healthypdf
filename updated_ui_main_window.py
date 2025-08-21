@@ -230,7 +230,7 @@ class UiMainWindow(object):
         self.pagesTabLayout.addWidget(self.thumbnailWidget)
 
         # Expose inner controls under old names, so other code keeps working
-        self.thumbnailList = self.thumbnailWidget.thumbnail_list
+        self.thumbnailList = self.thumbnailWidget
         # No separate thumbnail_size_slider - it's inside thumbnailWidget
 
     def setup_pdf_view(self):

@@ -122,7 +122,7 @@ class MainWindow(QMainWindow):
         # Load thumbnail size
         thumbnail_size = settings_manager.get_thumbnail_size()
         if hasattr(self.ui.thumbnailList, 'size_slider'):
-            self.ui.thumbnailList.size_slider.setValue(thumbnail_size)
+            settings_manager.save_thumbnail_size(self.ui.thumbnailList.thumbnail_size)  # self.ui.thumbnailList.size_slider.setValue(thumbnail_size)
             self.ui.thumbnailList.thumbnail_size = thumbnail_size
 
     def save_window_settings(self):

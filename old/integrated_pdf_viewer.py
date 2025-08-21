@@ -1061,6 +1061,7 @@ class IntegratedMainWindow(QMainWindow):
         super().__init__()
 
         # Core components
+        self.thumbnail_size_slider = None
         self.pdf_viewer = None
         self.thumbnail_widget = None
         self.zoom_selector = None

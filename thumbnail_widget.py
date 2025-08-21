@@ -128,6 +128,7 @@ class ThumbnailWidget(QWidget):
         super().__init__(parent)
 
         # Document and caching
+        self.size_slider = None
         self.document = None
         self.doc_path = ""
         self.document_password = ""
@@ -324,10 +325,17 @@ class ThumbnailWidget(QWidget):
             if item:
                 item.setSizeHint(QSize(item_width, item_height))
 
+    def set_slider_value(self, value):
+        self.size_slider.setValue(value)
+
     def on_size_changed(self, value):
         """Handle thumbnail size slider change"""
         if value == self.thumbnail_size:
             return
+
+        # # Guard: Check if thumbnail_list still exists
+        # if not hasattr(self, 'thumbnail_list') or self.thumbnail_list.isAncestorOf(self) is False:
+        #     return  # Widget is likely being destroyed
 
         self.thumbnail_size = value
         self.thumbnail_list.setIconSize(QSize(self.thumbnail_size, self.thumbnail_size))
