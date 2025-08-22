@@ -91,25 +91,39 @@ class MainWindow(QMainWindow):
         # Load panel state
         panel_visible, panel_width, active_tab = settings_manager.load_panel_state()
 
-        # Set panel visibility and size - make sidebar narrower by default
-        if hasattr(self.ui, 'sidePanelContent'):
+        # Set panel visibility and enforce size constraints
+        if hasattr(self.ui, 'sidePanelContent') and hasattr(self.ui, 'splitter'):
             self.ui.sidePanelContent.setVisible(panel_visible)
+
             if panel_visible:
-                # Set panel width - use minimum allowed or saved width
+                # Enforce minimum/maximum panel width constraints
                 min_panel_width = 150
-                panel_width = max(min_panel_width, min(panel_width, 200))  # Cap at 200px for better UX
-                splitter_sizes = [panel_width, self.width() - panel_width - 25]
-                if hasattr(self.ui, 'splitter'):
-                    self.ui.splitter.setSizes(splitter_sizes)
+                max_panel_width = 300  # Maximum allowed width
+                constrained_width = max(min_panel_width, min(panel_width, max_panel_width))
+
+                # Set the splitter sizes - tab buttons (25px) + content width + remaining for PDF view
+                tab_buttons_width = 25
+                total_sidebar_width = tab_buttons_width + constrained_width
+                pdf_view_width = max(400, self.width() - total_sidebar_width - 25)  # Minimum 400px for PDF view
+
+                splitter_sizes = [tab_buttons_width, constrained_width, pdf_view_width]
+                self.ui.splitter.setSizes(splitter_sizes)
+
+                # Set minimum and maximum sizes for the side panel content
+                self.ui.sidePanelContent.setMinimumWidth(min_panel_width)
+                self.ui.sidePanelContent.setMaximumWidth(max_panel_width)
+            else:
+                # When panel is hidden, give all space to PDF view
+                self.ui.splitter.setSizes([25, 0, self.width() - 25])
 
         # Set active tab
-        if hasattr(self.ui.thumbnailList, 'pages_button') and hasattr(self.ui.thumbnailList, 'bookmarks_button'):
+        if hasattr(self.ui, 'pagesButton') and hasattr(self.ui, 'bookmarksButton'):
             if active_tab == "bookmarks":
-                self.ui.thumbnailList.bookmarks_button.setChecked(True)
-                self.ui.thumbnailList.show_bookmarks()
+                self.ui.bookmarksButton.setChecked(True)
+                self.ui.toggle_bookmark_tab()
             else:
-                self.ui.thumbnailList.pages_button.setChecked(True)
-                self.ui.thumbnailList.show_pages()
+                self.ui.pagesButton.setChecked(True)
+                self.ui.toggle_pages_tab()
 
         # Load thumbnail size
         thumbnail_size = settings_manager.get_thumbnail_size()
@@ -128,18 +142,18 @@ class MainWindow(QMainWindow):
 
         # Save panel state
         panel_visible = True
-        panel_width = 250
+        panel_width = 150  # Default fallback
         active_tab = "pages"
 
         if hasattr(self.ui, 'sidePanelContent'):
             panel_visible = self.ui.sidePanelContent.isVisible()
-            if hasattr(self.ui, 'splitter'):
+            if hasattr(self.ui, 'splitter') and panel_visible:
                 sizes = self.ui.splitter.sizes()
-                if len(sizes) >= 2:
-                    panel_width = sizes[0]  # First panel is sidebar
+                if len(sizes) >= 3:
+                    panel_width = sizes[1]  # Second element is sidebar content width
 
-        if hasattr(self.ui.thumbnailList, 'bookmarks_button'):
-            if self.ui.thumbnailList.bookmarks_button.isChecked():
+        if hasattr(self.ui, 'bookmarksButton'):
+            if self.ui.bookmarksButton.isChecked():
                 active_tab = "bookmarks"
 
         settings_manager.save_panel_state(panel_visible, panel_width, active_tab)
@@ -349,36 +363,66 @@ class MainWindow(QMainWindow):
             if hasattr(self.ui, action_name):
                 getattr(self.ui, action_name).setEnabled(has_document)
 
+    def get_current_display_page_number(self) -> int:
+        """Get the current page's display number (1-based, considering deleted pages)"""
+        if not hasattr(self.ui.pdfView, 'page_widgets'):
+            return 1
+
+        current_actual_page = self.ui.pdfView.get_current_page()
+        display_number = 1
+
+        for i, widget in enumerate(self.ui.pdfView.page_widgets):
+            if widget.isHidden():  # Skip deleted pages
+                continue
+            if i == current_actual_page:
+                return display_number
+            display_number += 1
+
+        return 1
+
+    def get_total_display_pages(self) -> int:
+        """Get total number of visible (non-deleted) pages"""
+        if not hasattr(self.ui.pdfView, 'page_widgets'):
+            return 0
+
+        count = 0
+        for widget in self.ui.pdfView.page_widgets:
+            if not widget.isHidden():
+                count += 1
+        return count
+
+    def get_actual_page_from_display_number(self, display_number: int) -> int:
+        """Convert display page number to actual page index"""
+        if not hasattr(self.ui.pdfView, 'page_widgets'):
+            return 0
+
+        current_display = 1
+        for i, widget in enumerate(self.ui.pdfView.page_widgets):
+            if widget.isHidden():  # Skip deleted pages
+                continue
+            if current_display == display_number:
+                return i
+            current_display += 1
+
+        return 0
+
     def update_page_info(self):
-        """Update page information in UI"""
+        """Update page information in UI with proper numbering"""
         if hasattr(self.ui.pdfView, 'document') and self.ui.pdfView.document:
-            current_page = self.ui.pdfView.get_current_page() + 1
+            current_display_page = self.get_current_display_page_number()
+            total_display_pages = self.get_total_display_pages()
 
-            # Count visible pages (non-deleted) and get current visible position
-            visible_pages = []
-            for i, widget in enumerate(self.ui.pdfView.page_widgets):
-                if not widget.isHidden():
-                    visible_pages.append(i)
-
-            total_pages = len(visible_pages)
-
-            # Find current page's position in visible list
-            current_display_page = 1  # Default to 1
-            current_actual_page = self.ui.pdfView.get_current_page()
-            if current_actual_page in visible_pages:
-                current_display_page = visible_pages.index(current_actual_page) + 1
-
-            print(f"Page info: {current_display_page} of {total_pages} (actual page {current_actual_page})")
+            print(f"Page info: {current_display_page} of {total_display_pages}")
 
             # Update page input and label
             if hasattr(self.ui, 'm_pageInput'):
                 self.ui.m_pageInput.setText(str(current_display_page))
             if hasattr(self.ui, 'm_pageLabel'):
-                self.ui.m_pageLabel.setText(f"of {total_pages}")
+                self.ui.m_pageLabel.setText(f"of {total_display_pages}")
 
             # Update status bar
             if hasattr(self, 'statusBar'):
-                self.statusBar().showMessage(f"Page {current_display_page} of {total_pages}")
+                self.statusBar().showMessage(f"Page {current_display_page} of {total_display_pages}")
         else:
             # Clear page info when no document
             if hasattr(self.ui, 'm_pageInput'):
@@ -395,37 +439,22 @@ class MainWindow(QMainWindow):
                 page_text = self.ui.m_pageInput.text()
                 display_page_num = int(page_text)  # 1-based display number
 
-                if hasattr(self.ui.pdfView, 'go_to_page'):
-                    # Get list of visible pages
-                    visible_pages = []
-                    for i, widget in enumerate(self.ui.pdfView.page_widgets):
-                        if not widget.isHidden():
-                            visible_pages.append(i)
+                # Convert display number to actual page index
+                actual_page_index = self.get_actual_page_from_display_number(display_page_num)
 
-                    # Convert display page number to actual page index
-                    if 1 <= display_page_num <= len(visible_pages):
-                        actual_page_index = visible_pages[display_page_num - 1]
+                if hasattr(self.ui.pdfView, 'go_to_page'):
+                    total_pages = self.get_total_display_pages()
+                    if 1 <= display_page_num <= total_pages:
                         self.ui.pdfView.go_to_page(actual_page_index)
                     else:
                         # Reset to current page if out of range
-                        current_actual_page = self.ui.pdfView.get_current_page()
-                        if current_actual_page in visible_pages:
-                            current_display_page = visible_pages.index(current_actual_page) + 1
-                            self.ui.m_pageInput.setText(str(current_display_page))
+                        current_display_page = self.get_current_display_page_number()
+                        self.ui.m_pageInput.setText(str(current_display_page))
         except ValueError:
             # Reset to current page if invalid input
-            if hasattr(self.ui.pdfView, 'get_current_page'):
-                current_actual_page = self.ui.pdfView.get_current_page()
-                if hasattr(self.ui, 'm_pageInput'):
-                    # Get visible pages to find display number
-                    visible_pages = []
-                    for i, widget in enumerate(self.ui.pdfView.page_widgets):
-                        if not widget.isHidden():
-                            visible_pages.append(i)
-
-                    if current_actual_page in visible_pages:
-                        current_display_page = visible_pages.index(current_actual_page) + 1
-                        self.ui.m_pageInput.setText(str(current_display_page))
+            current_display_page = self.get_current_display_page_number()
+            if hasattr(self.ui, 'm_pageInput'):
+                self.ui.m_pageInput.setText(str(current_display_page))
 
     def ask_save_changes(self) -> int:
         """Ask user if they want to save changes"""

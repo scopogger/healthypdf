@@ -163,7 +163,6 @@ class PDFViewer(QScrollArea):
         # Document modification tracking
         self.is_modified = False
         self.deleted_pages = set()
-        self.page_order = []
         self.page_rotations = {}
 
         # Ultra-conservative caching
@@ -294,7 +293,6 @@ class PDFViewer(QScrollArea):
             # Reset modification tracking
             self.is_modified = False
             self.deleted_pages = set()
-            self.page_order = list(range(len(self.document)))
             self.page_rotations = {}
 
             # Create lightweight placeholder widgets
@@ -337,7 +335,6 @@ class PDFViewer(QScrollArea):
         # Reset modification tracking
         self.is_modified = False
         self.deleted_pages = set()
-        self.page_order = []
         self.page_rotations = {}
 
         # Clear page widgets
@@ -355,6 +352,20 @@ class PDFViewer(QScrollArea):
         gc.collect()
         print("Document closed")
 
+    def get_display_page_number(self, actual_page_num: int) -> int:
+        """Get the display page number for a given actual page number"""
+        if actual_page_num >= len(self.page_widgets):
+            return 1
+
+        display_num = 1
+        for i in range(len(self.page_widgets)):
+            if self.page_widgets[i].isHidden():  # Skip deleted pages
+                continue
+            if i == actual_page_num:
+                return display_num
+            display_num += 1
+        return 1  # fallback
+
     def create_placeholder_widgets(self):
         """Create lightweight placeholder widgets - NO RENDERING"""
         print(f"Creating {len(self.pages_info)} placeholder widgets")
@@ -368,8 +379,8 @@ class PDFViewer(QScrollArea):
             display_width = max(display_width, 200)
             display_height = max(display_height, 200)
 
-            # Simple placeholder label - use display page number
-            display_page_num = page_info.page_num + 1  # Initially matches actual page number
+            # Simple placeholder label - use correct display page number
+            display_page_num = self.get_display_page_number(page_info.page_num)
             page_widget = QLabel(f"Page {display_page_num}\nLoading...")
             page_widget.setMinimumSize(display_width, display_height)
             page_widget.setFixedSize(display_width, display_height)
@@ -393,6 +404,23 @@ class PDFViewer(QScrollArea):
         self.pages_container.updateGeometry()
         self.update()
 
+    def update_all_page_labels(self):
+        """Update all page labels to reflect current order and visibility"""
+        if not self.page_widgets:
+            return
+
+        display_page_num = 1
+        for i, widget in enumerate(self.page_widgets):
+            if widget.isHidden():
+                continue
+
+            # Update the widget's display text if it's showing placeholder text
+            current_text = widget.text()
+            if "Page " in current_text and "Loading..." in current_text:
+                widget.setText(f"Page {display_page_num}\nLoading...")
+
+            display_page_num += 1
+
     def cancel_all_renders(self):
         """Cancel all active rendering tasks"""
         with self.render_lock:
@@ -405,22 +433,6 @@ class PDFViewer(QScrollArea):
         self.cancel_all_renders()
         # Longer delay to prevent excessive rendering during scrolling
         self.scroll_timer.start(200)
-
-    def update_page_labels(self):
-        """Update page labels to reflect current order"""
-        if not self.page_widgets:
-            return
-
-        display_page_num = 1
-        for i, widget in enumerate(self.page_widgets):
-            if widget.isHidden():
-                continue
-
-            # Update the widget's display text if it's showing placeholder text
-            if hasattr(widget, 'pixmap') and (not widget.pixmap() or widget.pixmap().isNull()):
-                widget.setText(f"Page {display_page_num}\nLoading...")
-
-            display_page_num += 1
 
     def update_visible_pages(self):
         """Ultra-conservative visible page management"""
@@ -519,17 +531,6 @@ class PDFViewer(QScrollArea):
                 margin: 5px;
             }
         """)
-
-    def get_display_page_number(self, actual_page_num: int) -> int:
-        """Get the display page number for a given actual page number"""
-        display_num = 1
-        for i, widget in enumerate(self.page_widgets):
-            if widget.isHidden():
-                continue
-            if i == actual_page_num:
-                return display_num
-            display_num += 1
-        return 1  # fallback
 
     def load_page_if_needed(self, page_num: int):
         """Load page only if not already loaded"""
@@ -713,8 +714,8 @@ class PDFViewer(QScrollArea):
 
         self.clear_page_widget(current_page)
 
-        # Update page labels to ensure correct numbering
-        self.update_page_labels()
+        # Update all page labels after rotation
+        self.update_all_page_labels()
 
         QTimer.singleShot(50, self.update_visible_pages)
         return True
@@ -739,8 +740,8 @@ class PDFViewer(QScrollArea):
         widget = self.page_widgets[current_page]
         widget.hide()
 
-        # Update page labels for remaining pages
-        self.update_page_labels()
+        # Update all page labels for remaining pages
+        self.update_all_page_labels()
 
         self.page_changed.emit(self.get_current_page())
         return True
@@ -802,8 +803,8 @@ class PDFViewer(QScrollArea):
         self.is_modified = True
         self.document_modified.emit(True)
 
-        # Update page labels to reflect new order
-        self.update_page_labels()
+        # Update all page labels to reflect new order
+        self.update_all_page_labels()
 
         return True
 

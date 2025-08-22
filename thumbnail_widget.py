@@ -229,7 +229,7 @@ class ThumbnailWidget(QWidget):
         self.thumbnail_list.itemClicked.connect(self._on_item_clicked)
         self.thumbnail_list.currentItemChanged.connect(self._on_current_item_changed)
 
-        self.setMinimumWidth(180)
+        self.setMinimumWidth(150)
 
     def authenticate_document(self, file_path: str) -> Optional[str]:
         """Handle password authentication for encrypted PDFs"""

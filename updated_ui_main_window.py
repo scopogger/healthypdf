@@ -112,6 +112,9 @@ class UiMainWindow(object):
 
         self.splitter.setChildrenCollapsible(False)
 
+        # Set initial sidebar width constraints
+        self.setup_initial_sidebar_size()
+
         # Import and apply localization
         try:
             import ui_localization
@@ -137,7 +140,7 @@ class UiMainWindow(object):
         self.verticalLayout.addWidget(self.splitter)
 
     def setup_sidepanel_tab_widget(self):
-        """Setup the side panel with tabs"""
+        """Setup the side panel with tabs and proper size constraints"""
         # Create tab buttons widget (vertical stripe)
         self.tabButtonsWidget = QWidget(self.splitter)
         self.tabButtonsLayout = QVBoxLayout(self.tabButtonsWidget)
@@ -166,6 +169,11 @@ class UiMainWindow(object):
         self.sidePanelContentLayout = QVBoxLayout(self.sidePanelContent)
         self.sidePanelContentLayout.setContentsMargins(0, 0, 0, 0)
 
+        # Set size constraints for the side panel content
+        self.sidePanelContent.setMinimumWidth(150)
+        self.sidePanelContent.setMaximumWidth(300)
+        self.sidePanelContent.setSizePolicy(QSizePolicy.Preferred, QSizePolicy.Expanding)
+
         # Setup tabs
         self.setup_bookmarks_tab()
         self.setup_pages_tab()
@@ -176,10 +184,27 @@ class UiMainWindow(object):
         self.bookmarkTab.hide()
         self.pagesTab.hide()
 
-        # Set stretch factors
-        self.splitter.setStretchFactor(0, 0)  # Tab buttons don't resize
-        self.splitter.setStretchFactor(1, 1)  # Content resizable
-        self.splitter.setStretchFactor(2, 3)  # PDF view gets most space
+        # Set stretch factors - these are critical for proper sizing
+        self.splitter.setStretchFactor(0, 0)  # Tab buttons don't resize (fixed 25px)
+        self.splitter.setStretchFactor(1, 0)  # Sidebar content limited resize (150-300px)
+        self.splitter.setStretchFactor(2, 1)  # PDF view gets all remaining space
+
+    def setup_initial_sidebar_size(self):
+        """Set up the initial sidebar size to be as narrow as allowed"""
+        if hasattr(self, 'splitter') and hasattr(self, 'sidePanelContent'):
+            # Set initial sizes: 25px for tab buttons, 150px for content, rest for PDF view
+            initial_total_width = 1400  # Default window width
+            tab_buttons_width = 25
+            sidebar_content_width = 150  # Minimum allowed width
+            pdf_view_width = initial_total_width - tab_buttons_width - sidebar_content_width
+
+            # Set the initial sizes
+            self.splitter.setSizes([tab_buttons_width, sidebar_content_width, pdf_view_width])
+
+            # Ensure the splitter respects our size constraints
+            self.splitter.setCollapsible(0, False)  # Tab buttons can't be collapsed
+            self.splitter.setCollapsible(1, False)  # Sidebar can't be collapsed (use toggle instead)
+            self.splitter.setCollapsible(2, False)  # PDF view can't be collapsed
 
     def toggle_bookmark_tab(self):
         """Toggle bookmark tab visibility"""
@@ -188,10 +213,24 @@ class UiMainWindow(object):
             self.pagesTab.hide()
             self.bookmarkTab.show()
             self.sidePanelContent.show()
+
+            # Restore sidebar size if it was hidden
+            if hasattr(self, 'splitter'):
+                current_sizes = self.splitter.sizes()
+                if current_sizes[1] == 0:  # Sidebar is hidden
+                    tab_buttons_width = 25
+                    sidebar_content_width = 150
+                    remaining_width = sum(current_sizes) - tab_buttons_width - sidebar_content_width
+                    self.splitter.setSizes([tab_buttons_width, sidebar_content_width, remaining_width])
         else:
             self.bookmarkTab.hide()
             if not self.pagesButton.isChecked():
                 self.sidePanelContent.hide()
+                # Collapse sidebar when both tabs are unchecked
+                if hasattr(self, 'splitter'):
+                    current_sizes = self.splitter.sizes()
+                    total_width = sum(current_sizes)
+                    self.splitter.setSizes([25, 0, total_width - 25])
 
     def toggle_pages_tab(self):
         """Toggle pages tab visibility"""
@@ -200,10 +239,24 @@ class UiMainWindow(object):
             self.bookmarkTab.hide()
             self.pagesTab.show()
             self.sidePanelContent.show()
+
+            # Restore sidebar size if it was hidden
+            if hasattr(self, 'splitter'):
+                current_sizes = self.splitter.sizes()
+                if current_sizes[1] == 0:  # Sidebar is hidden
+                    tab_buttons_width = 25
+                    sidebar_content_width = 150
+                    remaining_width = sum(current_sizes) - tab_buttons_width - sidebar_content_width
+                    self.splitter.setSizes([tab_buttons_width, sidebar_content_width, remaining_width])
         else:
             self.pagesTab.hide()
             if not self.bookmarksButton.isChecked():
                 self.sidePanelContent.hide()
+                # Collapse sidebar when both tabs are unchecked
+                if hasattr(self, 'splitter'):
+                    current_sizes = self.splitter.sizes()
+                    total_width = sum(current_sizes)
+                    self.splitter.setSizes([25, 0, total_width - 25])
 
     def setup_bookmarks_tab(self):
         """Setup bookmarks tab content"""
@@ -215,7 +268,7 @@ class UiMainWindow(object):
         self.bookmarkView = QTreeView(self.bookmarkTab)
         self.bookmarkView.setObjectName("bookmarkView")
         self.bookmarkView.setHeaderHidden(True)
-        self.bookmarkView.setMinimumWidth(150)
+        # Remove fixed width - let the parent container handle sizing
         self.verticalLayout_3.addWidget(self.bookmarkView)
 
     def setup_pages_tab(self):

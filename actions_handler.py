@@ -102,7 +102,7 @@ class ActionsHandler:
         if hasattr(self.ui, 'actionPrint'):
             self.ui.actionPrint.triggered.connect(self.print_document)
 
-    def get_visible_pages_in_order(self):
+    def get_visible_pages_in_layout_order(self):
         """Get list of visible page indices in their current layout order"""
         visible_pages = []
         if hasattr(self.ui.pdfView, 'pages_layout') and hasattr(self.ui.pdfView, 'page_widgets'):
@@ -115,6 +115,15 @@ class ActionsHandler:
                         if page_widget == widget:
                             visible_pages.append(j)
                             break
+        return visible_pages
+
+    def get_visible_pages_list(self):
+        """Get list of visible (non-deleted) page indices in original order"""
+        visible_pages = []
+        if hasattr(self.ui.pdfView, 'page_widgets'):
+            for i, widget in enumerate(self.ui.pdfView.page_widgets):
+                if not widget.isHidden():
+                    visible_pages.append(i)
         return visible_pages
 
     def update_recent_files_menu(self):
@@ -292,8 +301,8 @@ class ActionsHandler:
             if dialog.exec() != QPrintDialog.Accepted:
                 return
 
-            # Get visible pages in order
-            visible_pages = self.get_visible_pages_in_order()
+            # Get visible pages in their layout order
+            visible_pages = self.get_visible_pages_in_layout_order()
             if not visible_pages:
                 QMessageBox.warning(
                     self.main_window,
@@ -320,7 +329,7 @@ class ActionsHandler:
             progress.setWindowModality(Qt.WindowModal)
             progress.show()
 
-            # Print only visible pages in their current order
+            # Print only visible pages in their current layout order
             for idx, page_num in enumerate(visible_pages):
                 # Update progress
                 progress.setValue(idx)
@@ -407,12 +416,12 @@ class ActionsHandler:
 
     # Navigation operations with proper page numbering
     def previous_page(self):
-        """Go to previous visible page"""
+        """Go to previous visible page in layout order"""
         if not hasattr(self.ui.pdfView, 'get_current_page'):
             return
 
         current_actual_page = self.ui.pdfView.get_current_page()
-        visible_pages = self.get_visible_pages_in_order()
+        visible_pages = self.get_visible_pages_in_layout_order()
 
         if not visible_pages or current_actual_page not in visible_pages:
             return
@@ -423,12 +432,12 @@ class ActionsHandler:
             self.ui.pdfView.go_to_page(prev_page)
 
     def next_page(self):
-        """Go to next visible page"""
+        """Go to next visible page in layout order"""
         if not hasattr(self.ui.pdfView, 'get_current_page'):
             return
 
         current_actual_page = self.ui.pdfView.get_current_page()
-        visible_pages = self.get_visible_pages_in_order()
+        visible_pages = self.get_visible_pages_in_layout_order()
 
         if not visible_pages or current_actual_page not in visible_pages:
             return
@@ -439,14 +448,14 @@ class ActionsHandler:
             self.ui.pdfView.go_to_page(next_page)
 
     def jump_to_first_page(self):
-        """Jump to first visible page"""
-        visible_pages = self.get_visible_pages_in_order()
+        """Jump to first visible page in layout order"""
+        visible_pages = self.get_visible_pages_in_layout_order()
         if visible_pages and hasattr(self.ui.pdfView, 'go_to_page'):
             self.ui.pdfView.go_to_page(visible_pages[0])
 
     def jump_to_last_page(self):
-        """Jump to last visible page"""
-        visible_pages = self.get_visible_pages_in_order()
+        """Jump to last visible page in layout order"""
+        visible_pages = self.get_visible_pages_in_layout_order()
         if visible_pages and hasattr(self.ui.pdfView, 'go_to_page'):
             self.ui.pdfView.go_to_page(visible_pages[-1])
 
@@ -459,10 +468,14 @@ class ActionsHandler:
                 self.main_window.on_document_modified(True)
                 self.main_window.update_page_info()
 
-                # Update thumbnail
+                # Update thumbnail - hide the thumbnail for this page
                 current_page = self.ui.pdfView.get_current_page()
                 if hasattr(self.ui.thumbnailList, 'hide_page_thumbnail'):
                     self.ui.thumbnailList.hide_page_thumbnail(current_page)
+
+                # Update all thumbnail labels to reflect new display numbering
+                if hasattr(self.ui.thumbnailList, 'update_all_thumbnail_labels'):
+                    self.ui.thumbnailList.update_all_thumbnail_labels()
 
     def move_page_up(self):
         """Move current page up with proper numbering update"""
@@ -472,9 +485,11 @@ class ActionsHandler:
                 self.main_window.on_document_modified(True)
                 self.main_window.update_page_info()
 
-                # Update thumbnail order
+                # Update thumbnail order and labels
                 if hasattr(self.ui.thumbnailList, 'update_thumbnails_order'):
                     self.ui.thumbnailList.update_thumbnails_order()
+                if hasattr(self.ui.thumbnailList, 'update_all_thumbnail_labels'):
+                    self.ui.thumbnailList.update_all_thumbnail_labels()
 
     def move_page_down(self):
         """Move current page down with proper numbering update"""
@@ -484,9 +499,11 @@ class ActionsHandler:
                 self.main_window.on_document_modified(True)
                 self.main_window.update_page_info()
 
-                # Update thumbnail order
+                # Update thumbnail order and labels
                 if hasattr(self.ui.thumbnailList, 'update_thumbnails_order'):
                     self.ui.thumbnailList.update_thumbnails_order()
+                if hasattr(self.ui.thumbnailList, 'update_all_thumbnail_labels'):
+                    self.ui.thumbnailList.update_all_thumbnail_labels()
 
     def rotate_page_clockwise(self):
         """Rotate current page clockwise with thumbnail update"""
@@ -561,3 +578,20 @@ class ActionsHandler:
         if hasattr(self.ui, 'sidePanelContent'):
             is_visible = self.ui.sidePanelContent.isVisible()
             self.ui.sidePanelContent.setVisible(not is_visible)
+
+            # Update splitter sizes when toggling panel
+            if hasattr(self.ui, 'splitter'):
+                if not is_visible:  # Panel is being shown
+                    # Restore panel width from settings or use default
+                    _, panel_width, _ = settings_manager.load_panel_state()
+                    min_panel_width = 150
+                    max_panel_width = 300
+                    constrained_width = max(min_panel_width, min(panel_width, max_panel_width))
+
+                    tab_buttons_width = 25
+                    pdf_view_width = max(400, self.main_window.width() - tab_buttons_width - constrained_width - 25)
+
+                    self.ui.splitter.setSizes([tab_buttons_width, constrained_width, pdf_view_width])
+                else:  # Panel is being hidden
+                    # Give all space to PDF view
+                    self.ui.splitter.setSizes([25, 0, self.main_window.width() - 25])
