@@ -420,32 +420,37 @@ class ActionsHandler:
         if not hasattr(self.ui.pdfView, 'get_current_page'):
             return
 
-        current_actual_page = self.ui.pdfView.get_current_page()
+        current_original = self.ui.pdfView.get_current_page()
+        # convert original -> layout index
+        current_layout = self.ui.pdfView.layout_index_for_original(current_original)
         visible_pages = self.get_visible_pages_in_layout_order()
 
-        if not visible_pages or current_actual_page not in visible_pages:
+        if visible_pages is None or current_layout is None:
             return
 
-        current_idx = visible_pages.index(current_actual_page)
-        if current_idx > 0:
-            prev_page = visible_pages[current_idx - 1]
-            self.ui.pdfView.go_to_page(prev_page)
+        if current_layout in visible_pages:
+            idx = visible_pages.index(current_layout)
+            if idx > 0:
+                prev_layout = visible_pages[idx - 1]
+                self.ui.pdfView.go_to_page(prev_layout)
 
     def next_page(self):
         """Go to next visible page in layout order"""
         if not hasattr(self.ui.pdfView, 'get_current_page'):
             return
 
-        current_actual_page = self.ui.pdfView.get_current_page()
+        current_original = self.ui.pdfView.get_current_page()
+        current_layout = self.ui.pdfView.layout_index_for_original(current_original)
         visible_pages = self.get_visible_pages_in_layout_order()
 
-        if not visible_pages or current_actual_page not in visible_pages:
+        if visible_pages is None or current_layout is None:
             return
 
-        current_idx = visible_pages.index(current_actual_page)
-        if current_idx < len(visible_pages) - 1:
-            next_page = visible_pages[current_idx + 1]
-            self.ui.pdfView.go_to_page(next_page)
+        if current_layout in visible_pages:
+            idx = visible_pages.index(current_layout)
+            if idx < len(visible_pages) - 1:
+                next_layout = visible_pages[idx + 1]
+                self.ui.pdfView.go_to_page(next_layout)
 
     def jump_to_first_page(self):
         """Jump to first visible page in layout order"""

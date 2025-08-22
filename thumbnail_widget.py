@@ -365,7 +365,7 @@ class ThumbnailWidget(QWidget):
 
     def load_visible_thumbnails(self):
         """Load thumbnails for visible items only"""
-        if not self.document:
+        if not self.document or self.document.is_closed:
             return
 
         # Get visible range with buffer

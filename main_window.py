@@ -364,67 +364,59 @@ class MainWindow(QMainWindow):
                 getattr(self.ui, action_name).setEnabled(has_document)
 
     def get_current_display_page_number(self) -> int:
-        """Get the current page's display number (1-based, considering deleted pages)"""
-        if not hasattr(self.ui.pdfView, 'page_widgets'):
+        """Get the current page's display number (1-based) using pdfView.pages_info and deleted_pages"""
+        if not hasattr(self.ui.pdfView, 'pages_info') or not self.ui.pdfView.pages_info:
             return 1
 
-        current_actual_page = self.ui.pdfView.get_current_page()
+        # pdfView.get_current_page() now returns ORIGINAL page number
+        current_original = self.ui.pdfView.get_current_page()
         display_number = 1
-
-        for i, widget in enumerate(self.ui.pdfView.page_widgets):
-            if widget.isHidden():  # Skip deleted pages
+        for i, info in enumerate(self.ui.pdfView.pages_info):
+            if info.page_num in self.ui.pdfView.deleted_pages:
                 continue
-            if i == current_actual_page:
+            if info.page_num == current_original:
                 return display_number
             display_number += 1
-
         return 1
 
     def get_total_display_pages(self) -> int:
-        """Get total number of visible (non-deleted) pages"""
-        if not hasattr(self.ui.pdfView, 'page_widgets'):
+        """Total visible pages (non-deleted)"""
+        if not hasattr(self.ui.pdfView, 'pages_info') or not self.ui.pdfView.pages_info:
             return 0
-
         count = 0
-        for widget in self.ui.pdfView.page_widgets:
-            if not widget.isHidden():
+        for info in self.ui.pdfView.pages_info:
+            if info.page_num not in self.ui.pdfView.deleted_pages:
                 count += 1
         return count
 
     def get_actual_page_from_display_number(self, display_number: int) -> int:
-        """Convert display page number to actual page index"""
-        if not hasattr(self.ui.pdfView, 'page_widgets'):
+        """Convert a 1-based display number into a layout index (index into page_widgets/pages_info)"""
+        if not hasattr(self.ui.pdfView, 'pages_info') or not self.ui.pdfView.pages_info:
             return 0
 
         current_display = 1
-        for i, widget in enumerate(self.ui.pdfView.page_widgets):
-            if widget.isHidden():  # Skip deleted pages
+        for i, info in enumerate(self.ui.pdfView.pages_info):
+            if info.page_num in self.ui.pdfView.deleted_pages:
                 continue
             if current_display == display_number:
-                return i
+                return i  # return layout index
             current_display += 1
-
         return 0
 
     def update_page_info(self):
-        """Update page information in UI with proper numbering"""
+        """Update toolbar/status with display numbers"""
         if hasattr(self.ui.pdfView, 'document') and self.ui.pdfView.document:
             current_display_page = self.get_current_display_page_number()
             total_display_pages = self.get_total_display_pages()
 
-            print(f"Page info: {current_display_page} of {total_display_pages}")
-
-            # Update page input and label
             if hasattr(self.ui, 'm_pageInput'):
                 self.ui.m_pageInput.setText(str(current_display_page))
             if hasattr(self.ui, 'm_pageLabel'):
                 self.ui.m_pageLabel.setText(f"of {total_display_pages}")
 
-            # Update status bar
             if hasattr(self, 'statusBar'):
                 self.statusBar().showMessage(f"Page {current_display_page} of {total_display_pages}")
         else:
-            # Clear page info when no document
             if hasattr(self.ui, 'm_pageInput'):
                 self.ui.m_pageInput.setText("")
             if hasattr(self.ui, 'm_pageLabel'):
@@ -433,25 +425,20 @@ class MainWindow(QMainWindow):
                 self.statusBar().showMessage("No document")
 
     def go_to_page_input(self):
-        """Handle page input from toolbar"""
+        """User typed a page number: convert display number -> layout index -> go_to_page"""
         try:
             if hasattr(self.ui, 'm_pageInput'):
                 page_text = self.ui.m_pageInput.text()
                 display_page_num = int(page_text)  # 1-based display number
-
-                # Convert display number to actual page index
-                actual_page_index = self.get_actual_page_from_display_number(display_page_num)
-
-                if hasattr(self.ui.pdfView, 'go_to_page'):
-                    total_pages = self.get_total_display_pages()
-                    if 1 <= display_page_num <= total_pages:
-                        self.ui.pdfView.go_to_page(actual_page_index)
-                    else:
-                        # Reset to current page if out of range
-                        current_display_page = self.get_current_display_page_number()
-                        self.ui.m_pageInput.setText(str(current_display_page))
+                total_pages = self.get_total_display_pages()
+                if 1 <= display_page_num <= total_pages:
+                    layout_index = self.get_actual_page_from_display_number(display_page_num)
+                    if hasattr(self.ui.pdfView, 'go_to_page'):
+                        self.ui.pdfView.go_to_page(layout_index)
+                else:
+                    current_display_page = self.get_current_display_page_number()
+                    self.ui.m_pageInput.setText(str(current_display_page))
         except ValueError:
-            # Reset to current page if invalid input
             current_display_page = self.get_current_display_page_number()
             if hasattr(self.ui, 'm_pageInput'):
                 self.ui.m_pageInput.setText(str(current_display_page))
@@ -478,10 +465,17 @@ class MainWindow(QMainWindow):
             self.setWindowTitle("PDF Editor")
 
     # Event handlers
-    def on_page_changed(self, page_num: int):
-        """Handle page change in viewer"""
+    def on_page_changed(self, orig_page_num: int):
+        """pdfView now emits ORIGINAL page numbers; thumbnail widget likely expects original page ids"""
         if hasattr(self.ui.thumbnailList, 'set_current_page'):
-            self.ui.thumbnailList.set_current_page(page_num)
+            # thumbnailList probably expects original page number; if it expects layout index adjust accordingly
+            try:
+                self.ui.thumbnailList.set_current_page(orig_page_num)
+            except Exception:
+                # fallback: convert orig -> layout and call with layout index
+                layout_idx = self.ui.pdfView.layout_index_for_original(orig_page_num)
+                if layout_idx is not None and hasattr(self.ui.thumbnailList, 'set_current_page'):
+                    self.ui.thumbnailList.set_current_page(layout_idx)
         self.update_page_info()
 
     def on_document_modified(self, is_modified: bool):
@@ -491,9 +485,30 @@ class MainWindow(QMainWindow):
         self.update_window_title()
 
     def on_thumbnail_clicked(self, page_num: int):
-        """Handle thumbnail click"""
-        if hasattr(self.ui.pdfView, 'go_to_page'):
-            self.ui.pdfView.go_to_page(page_num)
+        """thumbnail clicked might send ORIGINAL page number or layout index; adapt"""
+        if not hasattr(self.ui.pdfView, 'go_to_page'):
+            return
+
+        # If thumbnail widget sends original id -> convert to layout index
+        layout_idx = None
+        if hasattr(self.ui.pdfView, 'pages_info'):
+            # try to interpret as original
+            for i, info in enumerate(self.ui.pdfView.pages_info):
+                if info.page_num == page_num:
+                    layout_idx = i
+                    break
+
+        # If not found as original, maybe page_num already is a layout index
+        if layout_idx is None:
+            # sanity-check bounds
+            try:
+                if 0 <= int(page_num) < len(self.ui.pdfView.page_widgets):
+                    layout_idx = int(page_num)
+            except Exception:
+                return
+
+        if layout_idx is not None:
+            self.ui.pdfView.go_to_page(layout_idx)
 
     def on_zoom_changed(self, zoom_factor: float):
         """Handle zoom change from zoom selector"""

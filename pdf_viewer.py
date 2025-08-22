@@ -9,8 +9,7 @@ from PySide6.QtWidgets import (
     QScrollArea, QVBoxLayout, QWidget, QLabel, QMessageBox, QInputDialog
 )
 from PySide6.QtCore import (
-    Qt, QThread, QObject, Signal, QTimer, QSize, QRect,
-    QRunnable, QThreadPool
+    Qt, QRunnable, QThreadPool, QTimer, Signal
 )
 from PySide6.QtGui import QPixmap
 
@@ -20,31 +19,29 @@ import fitz  # PyMuPDF
 @dataclass
 class PageInfo:
     """Information about a PDF page"""
-    page_num: int
+    page_num: int         # original document page index
     width: int
     height: int
     rotation: int = 0
 
 
 class PageCache:
-    """Ultra-aggressive LRU Cache - keeps only 3-4 pages maximum"""
-
+    """Ultra-aggressive LRU Cache - keys are original page numbers"""
     def __init__(self, max_size: int = 3):
         self.max_size = max_size
         self.cache: OrderedDict[int, QPixmap] = OrderedDict()
 
-    def get(self, page_num: int) -> Optional[QPixmap]:
-        if page_num in self.cache:
-            self.cache.move_to_end(page_num)
-            return self.cache[page_num]
+    def get(self, orig_page_num: int) -> Optional[QPixmap]:
+        if orig_page_num in self.cache:
+            self.cache.move_to_end(orig_page_num)
+            return self.cache[orig_page_num]
         return None
 
-    def put(self, page_num: int, pixmap: QPixmap):
-        if page_num in self.cache:
-            self.cache.move_to_end(page_num)
+    def put(self, orig_page_num: int, pixmap: QPixmap):
+        if orig_page_num in self.cache:
+            self.cache.move_to_end(orig_page_num)
         else:
-            self.cache[page_num] = pixmap
-            # Aggressively remove old pages
+            self.cache[orig_page_num] = pixmap
             while len(self.cache) > self.max_size:
                 oldest = next(iter(self.cache))
                 del self.cache[oldest]
@@ -56,13 +53,12 @@ class PageCache:
 
 
 class PageRenderWorker(QRunnable):
-    """Lightweight worker for rendering pages"""
-
+    """Lightweight worker for rendering pages (page_num here is ORIGINAL page number)"""
     def __init__(self, doc_path: str, page_num: int, zoom: float, callback, render_id: str, rotation: int = 0,
                  password: str = ""):
         super().__init__()
         self.doc_path = doc_path
-        self.page_num = page_num
+        self.page_num = page_num  # ORIGINAL document page index
         self.zoom = zoom
         self.callback = callback
         self.render_id = render_id
@@ -99,6 +95,7 @@ class PageRenderWorker(QRunnable):
                 return
 
             page = doc[self.page_num]
+
             if self.cancelled:
                 doc.close()
                 return
@@ -109,14 +106,7 @@ class PageRenderWorker(QRunnable):
 
             # Use moderate quality to balance memory and appearance
             matrix = fitz.Matrix(self.zoom, self.zoom)
-
-            # Render with memory-conscious settings
-            pix = page.get_pixmap(
-                matrix=matrix,
-                alpha=False,
-                colorspace=fitz.csRGB,
-                clip=None
-            )
+            pix = page.get_pixmap(matrix=matrix, alpha=False, colorspace=fitz.csRGB, clip=None)
 
             if self.cancelled:
                 doc.close()
@@ -131,7 +121,7 @@ class PageRenderWorker(QRunnable):
             doc.close()
 
             if not self.cancelled and success:
-                print(f"Successfully rendered page {self.page_num} ({pixmap.width()}x{pixmap.height()})")
+                # callback receives original page number, pixmap and render_id
                 self.callback(self.page_num, pixmap, self.render_id)
             else:
                 print(f"Failed to render page {self.page_num} or was cancelled")
@@ -142,9 +132,11 @@ class PageRenderWorker(QRunnable):
 
 
 class PDFViewer(QScrollArea):
-    """Memory-optimized PDF viewer that only loads visible pages"""
+    """Memory-optimized PDF viewer that keeps layout order in pages_info list,
+       but uses PageInfo.page_num as the stable original page identifier.
+    """
 
-    page_changed = Signal(int)
+    page_changed = Signal(int)         # emits ORIGINAL page number
     document_modified = Signal(bool)
 
     def __init__(self, parent=None):
@@ -156,16 +148,16 @@ class PDFViewer(QScrollArea):
         self.document = None
         self.doc_path = ""
         self.document_password = ""
-        self.pages_info = []
-        self.page_widgets = []
+        self.pages_info: list[PageInfo] = []   # layout order list; each entry has .page_num (original)
+        self.page_widgets: list[QLabel] = []   # same order as pages_info
         self.zoom_level = 1.0
 
         # Document modification tracking
         self.is_modified = False
-        self.deleted_pages = set()
-        self.page_rotations = {}
+        self.deleted_pages: Set[int] = set()  # set of ORIGINAL page numbers
+        self.page_rotations: Dict[int, int] = {}  # keyed by ORIGINAL page numbers
 
-        # Ultra-conservative caching
+        # Caching/rendering
         self.page_cache = PageCache(max_size=3)
         self.thread_pool = QThreadPool()
         self.thread_pool.setMaxThreadCount(1)  # Single thread to prevent memory spikes
@@ -175,18 +167,15 @@ class PDFViewer(QScrollArea):
         self.current_render_id = 0
         self.render_lock = threading.Lock()
 
-        # UI setup
+        # UI
         self.setup_ui()
 
-        # Conservative scroll handling
         self.scroll_timer = QTimer()
         self.scroll_timer.setSingleShot(True)
         self.scroll_timer.timeout.connect(self.update_visible_pages)
 
         self.verticalScrollBar().valueChanged.connect(self.on_scroll)
-        self.last_visible_pages = set()
-
-        print("PDFViewer initialization complete")
+        self.last_visible_layout_indices: Set[int] = set()
 
     def setup_ui(self):
         """Setup the scrollable area"""
@@ -194,35 +183,22 @@ class PDFViewer(QScrollArea):
 
         self.setWidgetResizable(True)
         self.setAlignment(Qt.AlignCenter)
-        self.setStyleSheet("""
-            QScrollArea {
-                background-color: #f0f0f0;
-                border: none;
-            }
-        """)
-
-        # Container widget for pages
+        self.setStyleSheet("QScrollArea { background-color: #f0f0f0; border: none; }")
         self.pages_container = QWidget()
         self.pages_layout = QVBoxLayout(self.pages_container)
         self.pages_layout.setSpacing(10)
         self.pages_layout.setAlignment(Qt.AlignTop | Qt.AlignHCenter)
-
         self.setWidget(self.pages_container)
         print("PDFViewer UI setup complete")
 
+    # ---------------- Document open/close ----------------
     def authenticate_document(self, file_path: str) -> Optional[str]:
         """Handle password authentication for encrypted PDFs"""
         try:
             temp_doc = fitz.open(file_path)
 
             if temp_doc.needs_pass:
-                password, ok = QInputDialog.getText(
-                    self,
-                    "Password Required",
-                    f"File {os.path.basename(file_path)} is password protected.\nEnter password:",
-                    QInputDialog.Password
-                )
-
+                password, ok = QInputDialog.getText(self, "Password Required", f"File {os.path.basename(file_path)} is password protected.\nEnter password:", QInputDialog.Password)
                 if ok and password:
                     if temp_doc.authenticate(password):
                         temp_doc.close()
@@ -273,24 +249,16 @@ class PDFViewer(QScrollArea):
 
             # Extract page info quickly without rendering
             for page_num in range(page_count):
-                page = temp_doc[page_num]
-                rect = page.rect
-                page_info = PageInfo(
-                    page_num=page_num,
-                    width=int(rect.width),
-                    height=int(rect.height)
-                )
-                self.pages_info.append(page_info)
-
-            # Close immediately after info extraction
+                rect = temp_doc[page_num].rect
+                self.pages_info.append(PageInfo(page_num=page_num, width=int(rect.width), height=int(rect.height)))
             temp_doc.close()
 
-            # Re-open for actual use (PyMuPDF requirement)
+            # keep a persistent document handle for operations
             self.document = fitz.open(file_path)
             if self.document.needs_pass:
                 self.document.authenticate(self.document_password)
 
-            # Reset modification tracking
+            # Reset state and build placeholders
             self.is_modified = False
             self.deleted_pages = set()
             self.page_rotations = {}
@@ -330,9 +298,7 @@ class PDFViewer(QScrollArea):
         self.document_password = ""
         self.pages_info.clear()
         self.page_cache.clear()
-        self.last_visible_pages.clear()
-
-        # Reset modification tracking
+        self.last_visible_layout_indices.clear()
         self.is_modified = False
         self.deleted_pages = set()
         self.page_rotations = {}
@@ -352,48 +318,53 @@ class PDFViewer(QScrollArea):
         gc.collect()
         print("Document closed")
 
-    def get_display_page_number(self, actual_page_num: int) -> int:
-        """Get the display page number for a given actual page number"""
-        if actual_page_num >= len(self.page_widgets):
-            return 1
+    # ---------------- Helpers ----------------
+    def layout_index_for_original(self, orig_page_num: int) -> Optional[int]:
+        for idx, info in enumerate(self.pages_info):
+            if info.page_num == orig_page_num:
+                return idx
+        return None
 
-        display_num = 1
-        for i in range(len(self.page_widgets)):
-            if self.page_widgets[i].isHidden():  # Skip deleted pages
+    def get_display_page_number(self, layout_index: int) -> int:
+        """1-based display number for a layout index (skips deleted original page ids)"""
+        if layout_index >= len(self.pages_info):
+            return 1
+        display = 1
+        for i, info in enumerate(self.pages_info):
+            if info.page_num in self.deleted_pages:
                 continue
-            if i == actual_page_num:
-                return display_num
-            display_num += 1
-        return 1  # fallback
+            if i == layout_index:
+                return display
+            display += 1
+        return display
 
     def create_placeholder_widgets(self):
         """Create lightweight placeholder widgets - NO RENDERING"""
         print(f"Creating {len(self.pages_info)} placeholder widgets")
         self.page_widgets = []
+        # clear existing layout
+        while self.pages_layout.count():
+            item = self.pages_layout.takeAt(0)
+            if item.widget():
+                item.widget().deleteLater()
 
-        for page_info in self.pages_info:
-            display_width = int(page_info.width * self.zoom_level)
-            display_height = int(page_info.height * self.zoom_level)
+        for i, page_info in enumerate(self.pages_info):
+            display_w = int(page_info.width * self.zoom_level)
+            display_h = int(page_info.height * self.zoom_level)
+            display_w = max(display_w, 200)
+            display_h = max(display_h, 200)
 
-            # Ensure minimum readable size
-            display_width = max(display_width, 200)
-            display_height = max(display_height, 200)
-
-            # Simple placeholder label - use correct display page number
-            display_page_num = self.get_display_page_number(page_info.page_num)
-            page_widget = QLabel(f"Page {display_page_num}\nLoading...")
-            page_widget.setMinimumSize(display_width, display_height)
-            page_widget.setFixedSize(display_width, display_height)
+            display_num = self.get_display_page_number(i)
+            page_widget = QLabel(f"Page {display_num}\nLoading...")
+            page_widget.setMinimumSize(display_w, display_h)
+            page_widget.setFixedSize(display_w, display_h)
             page_widget.setAlignment(Qt.AlignCenter)
             page_widget.setStyleSheet("""
-                QLabel {
-                    border: 2px solid #ddd;
-                    background-color: white;
-                    color: #666;
-                    font-size: 14px;
-                    margin: 5px;
-                }
+                QLabel { border: 2px solid #ddd; background-color: white; color: #666; font-size: 14px; margin: 5px; }
             """)
+
+            # store original id as property for easier debugging if needed
+            page_widget.setProperty("orig_page_num", page_info.page_num)
 
             self.page_widgets.append(page_widget)
             self.pages_layout.addWidget(page_widget)
@@ -408,18 +379,17 @@ class PDFViewer(QScrollArea):
         """Update all page labels to reflect current order and visibility"""
         if not self.page_widgets:
             return
-
-        display_page_num = 1
+        display = 1
         for i, widget in enumerate(self.page_widgets):
-            if widget.isHidden():
+            orig = self.pages_info[i].page_num
+            if orig in self.deleted_pages:
                 continue
 
             # Update the widget's display text if it's showing placeholder text
             current_text = widget.text()
-            if "Page " in current_text and "Loading..." in current_text:
-                widget.setText(f"Page {display_page_num}\nLoading...")
-
-            display_page_num += 1
+            if "Page " in current_text and "Loading" in current_text:
+                widget.setText(f"Page {display}\nLoading...")
+            display += 1
 
     def cancel_all_renders(self):
         """Cancel all active rendering tasks"""
@@ -428,6 +398,7 @@ class PDFViewer(QScrollArea):
                 worker.cancel()
             self.active_workers.clear()
 
+    # ---------------- Scrolling & visible pages ----------------
     def on_scroll(self):
         """Handle scroll events with delay"""
         self.cancel_all_renders()
@@ -444,14 +415,13 @@ class PDFViewer(QScrollArea):
 
         viewport_rect = self.viewport().rect()
         scroll_y = self.verticalScrollBar().value()
-
-        # Find currently visible pages with minimal buffer
-        visible_pages = set()
-        current_center_page = None
+        visible_layout_indices: Set[int] = set()
+        current_center_layout_index = None
         viewport_center_y = scroll_y + viewport_rect.height() // 2
 
         for i, widget in enumerate(self.page_widgets):
-            if widget.isHidden():
+            orig = self.pages_info[i].page_num
+            if orig in self.deleted_pages:
                 continue
 
             widget_y = widget.y() - scroll_y
@@ -459,115 +429,91 @@ class PDFViewer(QScrollArea):
 
             # Only consider truly visible pages with small buffer
             if widget_bottom >= -100 and widget_y <= viewport_rect.height() + 100:
-                visible_pages.add(i)
-
-                # Find center page
+                visible_layout_indices.add(i)
                 widget_center_y = widget.y() + widget.height() // 2
-                if current_center_page is None or abs(widget_center_y - viewport_center_y) < abs(
-                        self.page_widgets[current_center_page].y() +
-                        self.page_widgets[current_center_page].height() // 2 - viewport_center_y):
-                    current_center_page = i
+                if current_center_layout_index is None or abs(widget_center_y - viewport_center_y) < abs(
+                        self.page_widgets[current_center_layout_index].y() + self.page_widgets[current_center_layout_index].height() // 2 - viewport_center_y):
+                    current_center_layout_index = i
 
-        print(f"Visible pages: {visible_pages}, center page: {current_center_page}")
+        # limit to centre + one neighbor
+        if len(visible_layout_indices) > 2 and current_center_layout_index is not None:
+            visible_layout_indices = {current_center_layout_index}
+            if current_center_layout_index > 0:
+                left = current_center_layout_index - 1
+                if self.pages_info[left].page_num not in self.deleted_pages:
+                    visible_layout_indices.add(left)
+            if current_center_layout_index < len(self.page_widgets) - 1:
+                right = current_center_layout_index + 1
+                if self.pages_info[right].page_num not in self.deleted_pages:
+                    visible_layout_indices.add(right)
 
-        # Only load 1-2 pages at most
-        if len(visible_pages) > 2:
-            # Keep only center page and one adjacent
-            if current_center_page is not None:
-                visible_pages = {current_center_page}
-                # Add one adjacent page
-                if current_center_page > 0 and current_center_page - 1 not in self.deleted_pages:
-                    visible_pages.add(current_center_page - 1)
-                elif current_center_page < len(
-                        self.page_widgets) - 1 and current_center_page + 1 not in self.deleted_pages:
-                    visible_pages.add(current_center_page + 1)
+        # clear those that are no longer visible
+        for layout_idx in self.last_visible_layout_indices - visible_layout_indices:
+            if 0 <= layout_idx < len(self.page_widgets):
+                self.clear_page_widget(layout_idx)
 
-        # Clear non-visible pages immediately
-        for page_num in self.last_visible_pages - visible_pages:
-            if 0 <= page_num < len(self.page_widgets):
-                self.clear_page_widget(page_num)
+        # load visible
+        for layout_idx in visible_layout_indices:
+            if 0 <= layout_idx < len(self.page_widgets):
+                self.load_page_if_needed(layout_idx)
 
-        # Load only visible pages
-        for page_num in visible_pages:
-            if 0 <= page_num < len(self.page_widgets):
-                self.load_page_if_needed(page_num)
+        self.last_visible_layout_indices = visible_layout_indices.copy()
 
-        self.last_visible_pages = visible_pages.copy()
+        if current_center_layout_index is not None:
+            orig_center = self.pages_info[current_center_layout_index].page_num
+            self.page_changed.emit(orig_center)
 
-        if current_center_page is not None:
-            self.page_changed.emit(current_center_page)
-
-        # Force garbage collection after page updates
         gc.collect()
 
-    def clear_page_widget(self, page_num: int):
-        """Clear a page widget and reset to placeholder"""
-        if page_num >= len(self.page_widgets) or page_num >= len(self.pages_info):
+    def clear_page_widget(self, layout_index: int):
+        if layout_index >= len(self.page_widgets) or layout_index >= len(self.pages_info):
             return
 
-        widget = self.page_widgets[page_num]
-        page_info = self.pages_info[page_num]
-
-        display_width = int(page_info.width * self.zoom_level)
-        display_height = int(page_info.height * self.zoom_level)
-
-        # Ensure minimum readable size
-        display_width = max(display_width, 200)
-        display_height = max(display_height, 200)
-
-        widget.setFixedSize(display_width, display_height)
+        widget = self.page_widgets[layout_index]
+        page_info = self.pages_info[layout_index]
+        display_w = int(page_info.width * self.zoom_level)
+        display_h = int(page_info.height * self.zoom_level)
+        display_w = max(display_w, 200)
+        display_h = max(display_h, 200)
+        widget.setFixedSize(display_w, display_h)
         widget.clear()
-
-        # Calculate display page number based on position in visible order
-        display_page_num = self.get_display_page_number(page_num)
+        display_page_num = self.get_display_page_number(layout_index)
         widget.setText(f"Page {display_page_num}\nLoading...")
 
         widget.setStyleSheet("""
-            QLabel {
-                border: 2px solid #ddd;
-                background-color: white;
-                color: #666;
-                font-size: 14px;
-                margin: 5px;
-            }
+            QLabel { border: 2px solid #ddd; background-color: white; color: #666; font-size: 14px; margin: 5px; }
         """)
 
-    def load_page_if_needed(self, page_num: int):
-        """Load page only if not already loaded"""
-        if page_num >= len(self.page_widgets):
+    def load_page_if_needed(self, layout_index: int):
+        if layout_index >= len(self.page_widgets):
             return
 
-        widget = self.page_widgets[page_num]
-
-        # Check if already loaded (has pixmap)
+        widget = self.page_widgets[layout_index]
+        # if widget already has a pixmap, assume loaded
         if hasattr(widget, 'pixmap') and widget.pixmap() and not widget.pixmap().isNull():
-            print(f"Page {page_num} already loaded")
             return
 
-        # Check cache
-        cached_pixmap = self.page_cache.get(page_num)
-        if cached_pixmap:
-            print(f"Using cached pixmap for page {page_num}")
-            widget.setPixmap(cached_pixmap)
-            widget.setFixedSize(cached_pixmap.size())
+        orig_page = self.pages_info[layout_index].page_num
+        cached = self.page_cache.get(orig_page)
+        if cached:
+            widget.setPixmap(cached)
+            widget.setFixedSize(cached.size())
             widget.setStyleSheet("border: 2px solid #ccc; margin: 5px;")
             return
 
-        # Start rendering
-        print(f"Starting render for page {page_num}")
-        self.start_page_render(page_num)
+        self.start_page_render(layout_index)
 
-    def start_page_render(self, page_num: int):
-        """Start rendering a page"""
+    def start_page_render(self, layout_index: int):
         with self.render_lock:
             self.current_render_id += 1
-            render_id = f"render_{self.current_render_id}_{page_num}"
+            render_id = f"render_{self.current_render_id}_{layout_index}"
 
-        rotation = self.page_rotations.get(page_num, 0)
+        orig_page = self.pages_info[layout_index].page_num
+        rotation = self.page_rotations.get(orig_page, 0)
 
         worker = PageRenderWorker(
             self.doc_path,
-            page_num,
+            orig_page,             # pass ORIGINAL page number to worker
             self.zoom_level,
             self.on_page_rendered,
             render_id,
@@ -580,19 +526,22 @@ class PDFViewer(QScrollArea):
 
         self.thread_pool.start(worker)
 
-    def on_page_rendered(self, page_num: int, pixmap: QPixmap, render_id: str):
-        """Handle rendered page result"""
+    def on_page_rendered(self, orig_page_num: int, pixmap: QPixmap, render_id: str):
         with self.render_lock:
             if render_id in self.active_workers:
                 del self.active_workers[render_id]
 
-        print(f"Page {page_num} rendered successfully")
+        # put into cache keyed by original page number
+        self.page_cache.put(orig_page_num, pixmap)
 
-        # Only update if page is still visible
-        if page_num in self.last_visible_pages and page_num < len(self.page_widgets):
-            self.page_cache.put(page_num, pixmap)
-            widget = self.page_widgets[page_num]
+        # find current layout index for that original page
+        layout_index = self.layout_index_for_original(orig_page_num)
+        if layout_index is None:
+            return
 
+        # only set pixmap if still visible
+        if layout_index in self.last_visible_layout_indices and layout_index < len(self.page_widgets):
+            widget = self.page_widgets[layout_index]
             widget.setPixmap(pixmap)
             widget.setFixedSize(pixmap.size())
             widget.setStyleSheet("border: 2px solid #ccc; margin: 5px;")
@@ -614,14 +563,11 @@ class PDFViewer(QScrollArea):
                 continue
 
             page_info = self.pages_info[i]
-            display_width = int(page_info.width * self.zoom_level)
-            display_height = int(page_info.height * self.zoom_level)
-
-            # Ensure minimum readable size
-            display_width = max(display_width, 200)
-            display_height = max(display_height, 200)
-
-            widget.setFixedSize(display_width, display_height)
+            display_w = int(page_info.width * self.zoom_level)
+            display_h = int(page_info.height * self.zoom_level)
+            display_w = max(display_w, 200)
+            display_h = max(display_h, 200)
+            widget.setFixedSize(display_w, display_h)
             widget.clear()
 
             # Use correct display page number
@@ -629,32 +575,27 @@ class PDFViewer(QScrollArea):
             widget.setText(f"Page {display_page_num}\nLoading...")
 
             widget.setStyleSheet("""
-                QLabel {
-                    border: 2px solid #ddd;
-                    background-color: white;
-                    color: #666;
-                    font-size: 14px;
-                    margin: 5px;
-                }
+                QLabel { border: 2px solid #ddd; background-color: white; color: #666; font-size: 14px; margin: 5px; }
             """)
 
         gc.collect()
         QTimer.singleShot(150, self.update_visible_pages)
 
+    # ---------------- Navigation helpers ----------------
     def get_current_page(self) -> int:
-        """Get the currently centered page number"""
+        """Return ORIGINAL page number for the currently centered page (stable id)."""
         if not self.document or not self.page_widgets:
             return 0
 
         viewport_rect = self.viewport().rect()
         scroll_y = self.verticalScrollBar().value()
         viewport_center_y = scroll_y + viewport_rect.height() // 2
-
-        current_page = 0
+        current_layout_idx = 0
         min_distance = float('inf')
 
         for i, widget in enumerate(self.page_widgets):
-            if widget.isHidden():
+            orig = self.pages_info[i].page_num
+            if orig in self.deleted_pages:
                 continue
 
             widget_center_y = widget.y() + widget.height() // 2
@@ -662,198 +603,195 @@ class PDFViewer(QScrollArea):
 
             if distance < min_distance:
                 min_distance = distance
-                current_page = i
-
-        return current_page
+                current_layout_idx = i
+        return self.pages_info[current_layout_idx].page_num
 
     def get_visible_page_count(self) -> int:
-        """Get count of visible (non-deleted) pages"""
-        if not self.page_widgets:
-            return 0
-
         count = 0
-        for widget in self.page_widgets:
-            if not widget.isHidden():
+        for info in self.pages_info:
+            if info.page_num not in self.deleted_pages:
                 count += 1
         return count
 
-    def go_to_page(self, page_num: int):
-        """Navigate to specific page"""
-        if 0 <= page_num < len(self.page_widgets):
+    def go_to_page(self, layout_index: int):
+        """Navigate to a page by layout index (index into page_widgets/pages_info)"""
+        if 0 <= layout_index < len(self.page_widgets):
             self.cancel_all_renders()
-            widget = self.page_widgets[page_num]
-            if not widget.isHidden():
+            widget = self.page_widgets[layout_index]
+            orig = self.pages_info[layout_index].page_num
+            if orig not in self.deleted_pages:
                 self.ensureWidgetVisible(widget, 50, 50)
                 QTimer.singleShot(100, self.update_visible_pages)
 
-    # Page manipulation methods
-    def rotate_page_clockwise(self):
-        """Rotate current page clockwise"""
-        return self._rotate_page(90)
-
-    def rotate_page_counterclockwise(self):
-        """Rotate current page counterclockwise"""
-        return self._rotate_page(-90)
-
+    # ---------------- Page manipulation ----------------
     def _rotate_page(self, rotation: int):
         """Internal method to rotate a page"""
         if not self.document:
             return False
-
-        current_page = self.get_current_page()
-        current_rotation = self.page_rotations.get(current_page, 0)
+        # get original page id for current center
+        orig_current = self.get_current_page()
+        # update rotation keyed by original id
+        current_rotation = self.page_rotations.get(orig_current, 0)
         new_rotation = (current_rotation + rotation) % 360
-        self.page_rotations[current_page] = new_rotation
-
+        self.page_rotations[orig_current] = new_rotation
         self.is_modified = True
         self.document_modified.emit(True)
 
-        # Force re-render
-        if current_page in self.page_cache.cache:
-            del self.page_cache.cache[current_page]
+        # clear cache for that original id
+        if orig_current in self.page_cache.cache:
+            del self.page_cache.cache[orig_current]
 
-        self.clear_page_widget(current_page)
-
-        # Update all page labels after rotation
+        # clear placeholder and force re-render
+        layout_idx = self.layout_index_for_original(orig_current)
+        if layout_idx is not None:
+            self.clear_page_widget(layout_idx)
         self.update_all_page_labels()
 
         QTimer.singleShot(50, self.update_visible_pages)
         return True
+
+    def rotate_page_clockwise(self):
+        return self._rotate_page(90)
+
+    def rotate_page_counterclockwise(self):
+        return self._rotate_page(-90)
 
     def delete_current_page(self):
         """Delete the current page"""
         if not self.document:
             return False
 
-        current_page = self.get_current_page()
-        remaining_pages = self.get_visible_page_count()
-
-        if remaining_pages <= 1:
+        orig_current = self.get_current_page()
+        if self.get_visible_page_count() <= 1:
             QMessageBox.warning(None, "Cannot Delete", "Cannot delete the last remaining page.")
             return False
 
-        self.deleted_pages.add(current_page)
+        # mark original page as deleted
+        self.deleted_pages.add(orig_current)
         self.is_modified = True
         self.document_modified.emit(True)
 
-        # Hide the widget
-        widget = self.page_widgets[current_page]
-        widget.hide()
+        layout_idx = self.layout_index_for_original(orig_current)
+        if layout_idx is not None:
+            self.page_widgets[layout_idx].hide()
 
         # Update all page labels for remaining pages
         self.update_all_page_labels()
-
+        # emit new centered page (original id)
         self.page_changed.emit(self.get_current_page())
         return True
 
-    def move_page_up(self):
-        """Move current page up"""
-        return self._move_page(-1)
-
-    def move_page_down(self):
-        """Move current page down"""
-        return self._move_page(1)
-
     def _move_page(self, direction: int):
-        """Internal method to move pages"""
+        """Move the currently centered page in layout (direction: -1 up, +1 down)"""
         if not self.document:
             return False
 
-        current_page = self.get_current_page()
-
-        # Find current position in layout
-        current_widget = self.page_widgets[current_page]
-        current_layout_pos = -1
-
-        for i in range(self.pages_layout.count()):
-            item = self.pages_layout.itemAt(i)
-            if item and item.widget() == current_widget:
-                current_layout_pos = i
-                break
-
-        if current_layout_pos == -1:
+        orig_current = self.get_current_page()
+        current_layout_idx = self.layout_index_for_original(orig_current)
+        if current_layout_idx is None:
             return False
 
-        # Find target position (skip hidden widgets)
-        target_pos = current_layout_pos
+        # find target layout pos (skip hidden original pages)
+        target_layout_pos = current_layout_idx
         step = 1 if direction > 0 else -1
 
         while True:
-            target_pos += step
-            if target_pos < 0 or target_pos >= self.pages_layout.count():
+            target_layout_pos += step
+            if target_layout_pos < 0 or target_layout_pos >= self.pages_layout.count():
                 return False
-
-            target_item = self.pages_layout.itemAt(target_pos)
-            if target_item and target_item.widget() and not target_item.widget().isHidden():
+            if target_layout_pos >= len(self.page_widgets):
+                return False
+            target_widget = self.pages_layout.itemAt(target_layout_pos).widget()
+            if target_widget and not target_widget.isHidden():
                 break
 
-        target_widget = target_item.widget()
+        # compute layout index of target_widget
+        target_layout_idx = None
+        for idx, w in enumerate(self.page_widgets):
+            if w == target_widget:
+                target_layout_idx = idx
+                break
+        if target_layout_idx is None:
+            return False
 
-        # Swap widgets
+        # swap widgets in layout (preserve visual order)
+        current_widget = self.page_widgets[current_layout_idx]
+        target_widget = self.page_widgets[target_layout_idx]
+
+        # Remove and re-insert using layout positions
         self.pages_layout.removeWidget(current_widget)
         self.pages_layout.removeWidget(target_widget)
 
-        if direction > 0:  # Moving down
-            self.pages_layout.insertWidget(current_layout_pos, target_widget)
-            self.pages_layout.insertWidget(target_pos, current_widget)
-        else:  # Moving up
-            self.pages_layout.insertWidget(target_pos, current_widget)
-            self.pages_layout.insertWidget(current_layout_pos, target_widget)
+        if direction > 0:  # moving down: insert target first then current
+            self.pages_layout.insertWidget(current_layout_idx, target_widget)
+            self.pages_layout.insertWidget(target_layout_idx, current_widget)
+        else:  # moving up
+            self.pages_layout.insertWidget(target_layout_idx, current_widget)
+            self.pages_layout.insertWidget(current_layout_idx, target_widget)
+
+        # swap entries in page_widgets and pages_info to keep lists reflect layout order
+        self.page_widgets[current_layout_idx], self.page_widgets[target_layout_idx] = (
+            self.page_widgets[target_layout_idx],
+            self.page_widgets[current_layout_idx],
+        )
+        self.pages_info[current_layout_idx], self.pages_info[target_layout_idx] = (
+            self.pages_info[target_layout_idx],
+            self.pages_info[current_layout_idx],
+        )
+
+        # no need to remap page_rotations or deleted_pages because they are keyed by ORIGINAL ids
 
         self.is_modified = True
         self.document_modified.emit(True)
 
         # Update all page labels to reflect new order
         self.update_all_page_labels()
-
         return True
 
+    def move_page_up(self):
+        return self._move_page(-1)
+
+    def move_page_down(self):
+        return self._move_page(1)
+
     def save_changes(self, file_path: str = None) -> bool:
-        """Save changes to file"""
+        """Save changes to file: build page_order by iterating layout and using ORIGINAL page numbers"""
         if not self.document or not self.is_modified:
             return True
-
         try:
             save_path = file_path if file_path else self.doc_path
             new_doc = fitz.open()
-
-            # Get page order from layout (only visible pages)
+            # page_order: list of original page numbers in current layout (skip deleted originals)
             page_order = []
             for i in range(self.pages_layout.count()):
                 item = self.pages_layout.itemAt(i)
                 if item and item.widget() and not item.widget().isHidden():
                     widget = item.widget()
-                    # Find original page number
+                    # find layout idx
                     for j, page_widget in enumerate(self.page_widgets):
                         if page_widget == widget:
-                            page_order.append(j)
+                            orig = self.pages_info[j].page_num
+                            page_order.append(orig)
                             break
 
-            # Copy pages in new order with rotations
-            for page_num in page_order:
-                if 0 <= page_num < len(self.document):
+            for orig_page_num in page_order:
+                if 0 <= orig_page_num < len(self.document):
                     temp_doc = fitz.open()
-                    temp_doc.insert_pdf(self.document, from_page=page_num, to_page=page_num)
-
-                    rotation = self.page_rotations.get(page_num, 0)
+                    temp_doc.insert_pdf(self.document, from_page=orig_page_num, to_page=orig_page_num)
+                    rotation = self.page_rotations.get(orig_page_num, 0)
                     if rotation != 0:
                         temp_page = temp_doc[0]
                         temp_page.set_rotation(rotation)
-
                     new_doc.insert_pdf(temp_doc)
                     temp_doc.close()
 
-            # Save
+            # Save (same behaviour as before)
             if save_path == self.doc_path:
-                import tempfile
-                import shutil
-
+                import tempfile, shutil
                 temp_fd, temp_path = tempfile.mkstemp(suffix='.pdf')
                 os.close(temp_fd)
-
                 new_doc.save(temp_path)
                 new_doc.close()
-
                 self.document.close()
                 shutil.move(temp_path, self.doc_path)
                 self.document = fitz.open(self.doc_path)
@@ -868,24 +806,18 @@ class PDFViewer(QScrollArea):
             self.deleted_pages.clear()
             self.page_rotations.clear()
             self.document_modified.emit(False)
-
             return True
 
         except Exception as e:
             QMessageBox.critical(None, "Save Error", f"Failed to save PDF: {e}")
             return False
 
-    def has_unsaved_changes(self) -> bool:
-        """Check if document has unsaved changes"""
-        return self.is_modified
-
+    # ---------------- Fit helpers ----------------
     def fit_to_width(self):
         """Fit document to width"""
         if not self.document or not self.page_widgets:
             return
-
-        # Calculate zoom to fit page width to viewport width
-        viewport_width = self.viewport().width() - 50  # Some margin
+        viewport_width = self.viewport().width() - 50
         if self.pages_info:
             page_width = self.pages_info[0].width
             new_zoom = viewport_width / page_width
@@ -895,9 +827,7 @@ class PDFViewer(QScrollArea):
         """Fit document to height"""
         if not self.document or not self.page_widgets:
             return
-
-        # Calculate zoom to fit page height to viewport height
-        viewport_height = self.viewport().height() - 50  # Some margin
+        viewport_height = self.viewport().height() - 50
         if self.pages_info:
             page_height = self.pages_info[0].height
             new_zoom = viewport_height / page_height
