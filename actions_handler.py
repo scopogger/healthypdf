@@ -466,21 +466,17 @@ class ActionsHandler:
 
     # Page manipulation operations
     def delete_current_page(self):
-        """Delete the current page with proper numbering update"""
-        if hasattr(self.ui.pdfView, 'delete_current_page'):
-            success = self.ui.pdfView.delete_current_page()
-            if success:
-                self.main_window.on_document_modified(True)
-                self.main_window.update_page_info()
+        current_page = self.ui.pdfView.get_current_page()  # <-- save BEFORE delete
+        success = self.ui.pdfView.delete_current_page()
+        if not success:
+            return
 
-                # Update thumbnail - hide the thumbnail for this page
-                current_page = self.ui.pdfView.get_current_page()
-                if hasattr(self.ui.thumbnailList, 'hide_page_thumbnail'):
-                    self.ui.thumbnailList.hide_page_thumbnail(current_page)
+        # hide the actually deleted page's thumbnail
+        self.ui.thumbnailList.hide_page_thumbnail(current_page)
 
-                # Update all thumbnail labels to reflect new display numbering
-                if hasattr(self.ui.thumbnailList, 'update_all_thumbnail_labels'):
-                    self.ui.thumbnailList.update_all_thumbnail_labels()
+        # re-label & re-order thumbnails to match the viewer’s new layout
+        visible = self.get_visible_pages_in_layout_order()
+        self.ui.thumbnailList.update_thumbnails_order(visible)
 
     def move_page_up(self):
         """Move current page up with proper numbering update"""
@@ -493,8 +489,11 @@ class ActionsHandler:
                 # Update thumbnail order and labels
                 if hasattr(self.ui.thumbnailList, 'update_thumbnails_order'):
                     self.ui.thumbnailList.update_thumbnails_order()
-                if hasattr(self.ui.thumbnailList, 'update_all_thumbnail_labels'):
-                    self.ui.thumbnailList.update_all_thumbnail_labels()
+                # if hasattr(self.ui.thumbnailList, 'update_all_thumbnail_labels'):
+                #     self.ui.thumbnailList.update_all_thumbnail_labels()
+
+                visible = self.get_visible_pages_in_layout_order()
+                self.ui.thumbnailList.update_thumbnails_order(visible)
 
     def move_page_down(self):
         """Move current page down with proper numbering update"""
@@ -507,8 +506,11 @@ class ActionsHandler:
                 # Update thumbnail order and labels
                 if hasattr(self.ui.thumbnailList, 'update_thumbnails_order'):
                     self.ui.thumbnailList.update_thumbnails_order()
-                if hasattr(self.ui.thumbnailList, 'update_all_thumbnail_labels'):
-                    self.ui.thumbnailList.update_all_thumbnail_labels()
+                # if hasattr(self.ui.thumbnailList, 'update_all_thumbnail_labels'):
+                #     self.ui.thumbnailList.update_all_thumbnail_labels()
+
+                visible = self.get_visible_pages_in_layout_order()
+                self.ui.thumbnailList.update_thumbnails_order(visible)
 
     def rotate_page_clockwise(self):
         """Rotate current page clockwise with thumbnail update"""
