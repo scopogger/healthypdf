@@ -54,7 +54,7 @@ def get_system_language():
     elif language.startswith('en'):
         return 'en-US'
     else:
-        return 'ru-RU'  # Default to English
+        return 'ru-RU'  # Default to Russian
 
 
 def main():
