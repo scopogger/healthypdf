@@ -1,6 +1,9 @@
+"""
+Fixed thumbnail_widget.py - Properly handles page modifications and numbering
+"""
 import os
 import threading
-from typing import Optional, Dict
+from typing import Optional, Dict, List
 from collections import OrderedDict
 
 from PySide6.QtWidgets import (
@@ -18,25 +21,19 @@ class ThumbnailCache:
 
     def __init__(self, max_size: int = 100):
         self.max_size = max_size
+        # Store raw thumbnails WITHOUT page numbers
         self.cache: OrderedDict[tuple, QPixmap] = OrderedDict()  # (page_num, size) -> pixmap
-        self.display_order_map = {}  # actual_page_index -> display_index (0-based)
-        # Ensure deleted_pages is available (viewer also tracks it)
-        if not hasattr(self, 'deleted_pages'):
-            self.deleted_pages = set()
-        # Timer used to batch thumbnail loads (if you already have one, skip this)
-        if not hasattr(self, 'load_timer'):
-            self.load_timer = QTimer()
-            self.load_timer.setSingleShot(True)
-            self.load_timer.timeout.connect(self.load_visible_thumbnails)
 
-    def get(self, page_num: int, size: int) -> Optional[QPixmap]:
+    def get_raw(self, page_num: int, size: int) -> Optional[QPixmap]:
+        """Get raw thumbnail without page number overlay"""
         key = (page_num, size)
         if key in self.cache:
             self.cache.move_to_end(key)
             return self.cache[key]
         return None
 
-    def put(self, page_num: int, size: int, pixmap: QPixmap):
+    def put_raw(self, page_num: int, size: int, pixmap: QPixmap):
+        """Store raw thumbnail without page number overlay"""
         key = (page_num, size)
         if key in self.cache:
             self.cache.move_to_end(key)
@@ -121,6 +118,7 @@ class ThumbnailRenderWorker(QRunnable):
             doc.close()
 
             if not self.cancelled:
+                # Pass raw pixmap WITHOUT page number
                 self.callback(self.page_num, pixmap, self.render_id, self.thumbnail_size)
 
         except Exception as e:
@@ -153,6 +151,9 @@ class ThumbnailWidget(QWidget):
         # Page modifications tracking
         self.page_rotations = {}
         self.deleted_pages = set()
+
+        # CRITICAL: Track the current display order
+        self.display_order: List[int] = []  # List of original page indices in display order
 
         # Thumbnail size (can be controlled by slider) and font
         self.thumbnail_size = 150  # Larger default size
@@ -232,40 +233,11 @@ class ThumbnailWidget(QWidget):
 
         layout.addWidget(self.size_slider)
 
-        # No other sliders added — this is the only one
-
         # Connect item click and selection change
         self.thumbnail_list.itemClicked.connect(self._on_item_clicked)
         self.thumbnail_list.currentItemChanged.connect(self._on_current_item_changed)
 
         self.setMinimumWidth(150)
-
-    def authenticate_document(self, file_path: str) -> Optional[str]:
-        """Handle password authentication for encrypted PDFs"""
-        temp_doc = fitz.open(file_path)
-
-        if temp_doc.needs_pass:
-            password, ok = QInputDialog.getText(
-                self,
-                "Password Required",
-                f"Thumbnails: File {os.path.basename(file_path)} is password protected.\nEnter password:",
-                QInputDialog.Password
-            )
-
-            if ok and password:
-                if temp_doc.authenticate(password):
-                    temp_doc.close()
-                    return password
-                else:
-                    QMessageBox.warning(self, "Authentication Failed", "Invalid password for thumbnails!")
-                    temp_doc.close()
-                    return None
-            else:
-                temp_doc.close()
-                return None
-        else:
-            temp_doc.close()
-            return ""
 
     def set_document(self, document, doc_path: str, password: str = ""):
         """Set the document to display thumbnails for"""
@@ -278,6 +250,8 @@ class ThumbnailWidget(QWidget):
         self.deleted_pages.clear()
 
         if document:
+            # Initialize display order with original page indices
+            self.display_order = list(range(len(document)))
             self.create_thumbnail_items()
             # Delay thumbnail loading to prevent freezing
             self.load_timer.start(300)
@@ -291,6 +265,7 @@ class ThumbnailWidget(QWidget):
 
         self.thumbnail_list.clear()
         self.thumbnail_cache.clear()
+        self.display_order = []
 
     def create_thumbnail_items(self):
         """Create thumbnail items for all pages"""
@@ -298,31 +273,76 @@ class ThumbnailWidget(QWidget):
             return
 
         for page_num in range(len(self.document)):
-            item = QListWidgetItem(f"")  # Page {page_num + 1}
-            item.setData(Qt.UserRole, page_num)  # Store page number
+            item = QListWidgetItem()
+            item.setData(Qt.UserRole, page_num)  # Store ORIGINAL page number
             item.setSizeHint(QSize(self.thumbnail_size + 12, self.thumbnail_size + 12))
             item.setFlags(Qt.ItemIsSelectable | Qt.ItemIsEnabled)
 
-            # Placeholder pixmap (white background)
-            placeholder = QPixmap(self.thumbnail_size, self.thumbnail_size)
-            placeholder.fill(Qt.white)
-
-            # Overlay page number on placeholder
-            placeholder_with_number = self._overlay_page_number(placeholder, page_num)
-
-            item.setIcon(QIcon(placeholder_with_number))
+            # Create placeholder with page number
+            placeholder = self._create_placeholder_with_number(page_num)
+            item.setIcon(QIcon(placeholder))
 
             self.thumbnail_list.addItem(item)
 
         # Update grid size
         self.update_grid_size()
 
+    def _create_placeholder_with_number(self, original_page_num: int) -> QPixmap:
+        """Create a placeholder pixmap with the current display number"""
+        placeholder = QPixmap(self.thumbnail_size, self.thumbnail_size)
+        placeholder.fill(Qt.white)
+
+        # Get display number for this page
+        display_num = self._get_display_number(original_page_num)
+
+        if display_num is not None:
+            painter = QPainter(placeholder)
+            painter.setRenderHint(QPainter.Antialiasing)
+
+            # Draw page number bar at bottom
+            h = placeholder.height()
+            bar_h = max(18, int(h * 0.14))
+            painter.fillRect(0, h - bar_h, placeholder.width(), bar_h, QColor(0, 0, 0, 150))
+
+            # Draw page number
+            f = painter.font()
+            f.setBold(True)
+            f.setPointSize(self.page_number_font_size)
+            painter.setFont(f)
+            painter.setPen(Qt.white)
+
+            painter.drawText(placeholder.rect().adjusted(0, 0, 0, -2),
+                             Qt.AlignHCenter | Qt.AlignBottom,
+                             str(display_num))
+            painter.end()
+
+        return placeholder
+
+    def _get_display_number(self, original_page_num: int) -> Optional[int]:
+        """Get 1-based display number for an original page index"""
+        if original_page_num in self.deleted_pages:
+            return None
+
+        try:
+            # Find position in display order
+            if original_page_num in self.display_order:
+                return self.display_order.index(original_page_num) + 1
+        except (ValueError, AttributeError):
+            pass
+
+        # Fallback: count non-deleted pages up to this one
+        count = 1
+        for i in range(original_page_num):
+            if i not in self.deleted_pages:
+                count += 1
+        return count if original_page_num not in self.deleted_pages else None
+
     def update_grid_size(self):
         """Update the grid size based on current thumbnail size"""
         if self.thumbnail_list.count() == 0:
             return
 
-        item_width = self.thumbnail_size + 12  # tight padding
+        item_width = self.thumbnail_size + 12
         item_height = self.thumbnail_size + 12
 
         self.thumbnail_list.setGridSize(QSize(item_width, item_height))
@@ -334,17 +354,10 @@ class ThumbnailWidget(QWidget):
             if item:
                 item.setSizeHint(QSize(item_width, item_height))
 
-    def set_slider_value(self, value):
-        self.size_slider.setValue(value)
-
     def on_size_changed(self, value):
         """Handle thumbnail size slider change"""
         if value == self.thumbnail_size:
             return
-
-        # # Guard: Check if thumbnail_list still exists
-        # if not hasattr(self, 'thumbnail_list') or self.thumbnail_list.isAncestorOf(self) is False:
-        #     return  # Widget is likely being destroyed
 
         self.thumbnail_size = value
         self.thumbnail_list.setIconSize(QSize(self.thumbnail_size, self.thumbnail_size))
@@ -361,20 +374,34 @@ class ThumbnailWidget(QWidget):
         # Update grid and item sizes
         self.update_grid_size()
 
-        # Clear current icons
-        for i in range(self.thumbnail_list.count()):
-            item = self.thumbnail_list.item(i)
-            if item:
-                placeholder = QPixmap(self.thumbnail_size, self.thumbnail_size)
-                placeholder.fill(Qt.white)
-                item.setIcon(QIcon(placeholder))
+        # Update all thumbnails with new placeholders
+        self._refresh_all_thumbnails()
 
         # Reload visible thumbnails with new size
         self.load_timer.start(200)
 
+    def _refresh_all_thumbnails(self):
+        """Refresh all thumbnail icons with updated page numbers"""
+        for i in range(self.thumbnail_list.count()):
+            item = self.thumbnail_list.item(i)
+            if item:
+                original_page = item.data(Qt.UserRole)
+
+                # Check if we have a cached raw thumbnail
+                raw_pixmap = self.thumbnail_cache.get_raw(original_page, self.thumbnail_size)
+
+                if raw_pixmap:
+                    # Add current page number overlay
+                    final_pixmap = self._add_page_number_overlay(raw_pixmap, original_page)
+                    item.setIcon(QIcon(final_pixmap))
+                else:
+                    # Use placeholder with number
+                    placeholder = self._create_placeholder_with_number(original_page)
+                    item.setIcon(QIcon(placeholder))
+
     def load_visible_thumbnails(self):
         """Load thumbnails for visible items only"""
-        if self.document is None:
+        if self.document is None or self.thumbnail_list.count() == 0:
             return
 
         # Get visible range with buffer
@@ -386,7 +413,7 @@ class ThumbnailWidget(QWidget):
             viewport_rect = self.thumbnail_list.viewport().rect()
             for i in range(self.thumbnail_list.count()):
                 item = self.thumbnail_list.item(i)
-                if item:
+                if item and not item.isHidden():
                     item_rect = self.thumbnail_list.visualItemRect(item)
                     if item_rect.intersects(viewport_rect):
                         if first_visible is None:
@@ -397,44 +424,57 @@ class ThumbnailWidget(QWidget):
 
         if first_visible is None or last_visible is None:
             first_visible = 0
-            last_visible = self.thumbnail_list.count() - 1
+            last_visible = min(self.thumbnail_list.count() - 1, len(self.display_order) - 1)
 
         # Add buffer
         buffer_size = 5
         start = max(0, first_visible - buffer_size)
         end = min(self.thumbnail_list.count(), last_visible + buffer_size + 1)
 
-        for page_num in range(start, end):
-            if page_num not in self.deleted_pages:
-                self.load_thumbnail(page_num)
+        for i in range(start, end):
+            if i < self.thumbnail_list.count():
+                item = self.thumbnail_list.item(i)
+                if item and not item.isHidden():
+                    original_page = item.data(Qt.UserRole)
+                    if original_page is not None and original_page not in self.deleted_pages:
+                        self.load_thumbnail(original_page)
 
-    def load_thumbnail(self, page_num: int):
-        """Load thumbnail for specific page"""
-        if page_num >= self.thumbnail_list.count():
+    def load_thumbnail(self, original_page_num: int):
+        """Load thumbnail for specific page (by original page number)"""
+        if original_page_num >= len(self.document):
             return
 
-        item = self.thumbnail_list.item(page_num)
+        # Find the item for this page
+        item = None
+        for i in range(self.thumbnail_list.count()):
+            test_item = self.thumbnail_list.item(i)
+            if test_item and test_item.data(Qt.UserRole) == original_page_num:
+                item = test_item
+                break
+
         if not item:
             return
 
-        # Check cache first
-        cached_pixmap = self.thumbnail_cache.get(page_num, self.thumbnail_size)
-        if cached_pixmap:
-            item.setIcon(QIcon(cached_pixmap))
+        # Check cache first for RAW thumbnail
+        cached_raw = self.thumbnail_cache.get_raw(original_page_num, self.thumbnail_size)
+        if cached_raw:
+            # Add current page number overlay
+            final_pixmap = self._add_page_number_overlay(cached_raw, original_page_num)
+            item.setIcon(QIcon(final_pixmap))
             return
 
         # Generate unique render ID
         with self.render_lock:
             self.current_render_id += 1
-            render_id = f"thumb_{self.current_render_id}_{page_num}_{self.thumbnail_size}"
+            render_id = f"thumb_{self.current_render_id}_{original_page_num}_{self.thumbnail_size}"
 
         # Get rotation for this page
-        rotation = self.page_rotations.get(page_num, 0)
+        rotation = self.page_rotations.get(original_page_num, 0)
 
         # Create worker
         worker = ThumbnailRenderWorker(
             self.doc_path,
-            page_num,
+            original_page_num,
             self.on_thumbnail_rendered,
             render_id,
             self.thumbnail_size,
@@ -447,46 +487,80 @@ class ThumbnailWidget(QWidget):
 
         self.thread_pool.start(worker)
 
-    def on_thumbnail_rendered(self, page_num: int, pixmap: QPixmap, render_id: str, size: int):
+    def on_thumbnail_rendered(self, original_page_num: int, raw_pixmap: QPixmap, render_id: str, size: int):
         """Handle rendered thumbnail result"""
         with self.render_lock:
             if render_id in self.active_workers:
                 del self.active_workers[render_id]
 
-        if page_num < self.thumbnail_list.count():
-            # paint page number onto the image itself (no extra label space)
-            composed = self._overlay_page_number(pixmap, page_num)
-            self.thumbnail_cache.put(page_num, size, composed)
-            item = self.thumbnail_list.item(page_num)
-            if item:
-                item.setIcon(QIcon(composed))
+        # Store RAW pixmap in cache
+        self.thumbnail_cache.put_raw(original_page_num, size, raw_pixmap)
+
+        # Find and update the item
+        for i in range(self.thumbnail_list.count()):
+            item = self.thumbnail_list.item(i)
+            if item and item.data(Qt.UserRole) == original_page_num:
+                # Add current page number overlay
+                final_pixmap = self._add_page_number_overlay(raw_pixmap, original_page_num)
+                item.setIcon(QIcon(final_pixmap))
+                break
+
+    def _add_page_number_overlay(self, raw_pixmap: QPixmap, original_page_num: int) -> QPixmap:
+        """Add page number overlay to a raw thumbnail"""
+        display_num = self._get_display_number(original_page_num)
+        if display_num is None:
+            return raw_pixmap
+
+        # Create a copy to avoid modifying the cached version
+        result = QPixmap(raw_pixmap)
+        painter = QPainter(result)
+        painter.setRenderHint(QPainter.Antialiasing)
+
+        # Draw page number bar at bottom
+        h = result.height()
+        bar_h = max(18, int(h * 0.14))
+        painter.fillRect(0, h - bar_h, result.width(), bar_h, QColor(0, 0, 0, 150))
+
+        # Draw page number
+        f = painter.font()
+        f.setBold(True)
+        f.setPointSize(self.page_number_font_size)
+        painter.setFont(f)
+        painter.setPen(Qt.white)
+
+        painter.drawText(result.rect().adjusted(0, 0, 0, -2),
+                         Qt.AlignHCenter | Qt.AlignBottom,
+                         str(display_num))
+        painter.end()
+
+        return result
 
     def _on_item_clicked(self, item):
         if not item:
             return
 
-        # Get the page number from the item's user data
+        # Get the ORIGINAL page number from the item's user data
         page_num = item.data(Qt.UserRole)
         if page_num is not None and page_num not in self.deleted_pages:
-            print(f"Thumbnail clicked: page {page_num}")  # Debug
+            print(f"Thumbnail clicked: original page {page_num}")
             self.page_clicked.emit(page_num)
 
     def _on_current_item_changed(self, current, previous):
         if not current:
             return
 
-        # Get the page number from the item's user data
+        # Get the ORIGINAL page number from the item's user data
         page_num = current.data(Qt.UserRole)
         if page_num is not None and page_num not in self.deleted_pages:
-            print(f"Thumbnail selected: page {page_num}")  # Debug
+            print(f"Thumbnail selected: original page {page_num}")
             self.page_clicked.emit(page_num)
 
-    # thumbnail_widget.py
-    def set_current_page(self, page_num: int):
-        """Highlight the thumbnail for the given ACTUAL page index."""
+    def set_current_page(self, original_page_num: int):
+        """Highlight the thumbnail for the given ORIGINAL page number."""
         for i in range(self.thumbnail_list.count()):
             item = self.thumbnail_list.item(i)
-            if item and not item.isHidden() and item.data(Qt.UserRole) == page_num:
+            if item and not item.isHidden() and item.data(Qt.UserRole) == original_page_num:
+                # Temporarily disconnect to avoid recursion
                 self.thumbnail_list.itemClicked.disconnect()
                 self.thumbnail_list.currentItemChanged.disconnect()
 
@@ -498,64 +572,87 @@ class ThumbnailWidget(QWidget):
                 self.thumbnail_list.currentItemChanged.connect(self._on_current_item_changed)
                 break
 
-    def hide_page_thumbnail(self, page_num: int):
+    def hide_page_thumbnail(self, original_page_num: int):
         """Hide thumbnail for deleted page"""
-        if page_num < self.thumbnail_list.count():
-            item = self.thumbnail_list.item(page_num)
-            if item:
+        self.deleted_pages.add(original_page_num)
+
+        # Find and hide the item
+        for i in range(self.thumbnail_list.count()):
+            item = self.thumbnail_list.item(i)
+            if item and item.data(Qt.UserRole) == original_page_num:
                 item.setHidden(True)
-                self.deleted_pages.add(page_num)
-                # Remove from cache
-                self.thumbnail_cache.remove_page(page_num)
+                break
 
-    def rotate_page_thumbnail(self, page_num: int, rotation: int):
+        # Remove from cache
+        self.thumbnail_cache.remove_page(original_page_num)
+
+        # Remove from display order
+        if original_page_num in self.display_order:
+            self.display_order.remove(original_page_num)
+
+    def rotate_page_thumbnail(self, original_page_num: int, rotation: int):
         """Rotate a page thumbnail and reload it"""
-        if page_num < self.thumbnail_list.count():
-            current_rotation = self.page_rotations.get(page_num, 0)
-            new_rotation = (current_rotation + rotation) % 360
-            self.page_rotations[page_num] = new_rotation
+        current_rotation = self.page_rotations.get(original_page_num, 0)
+        new_rotation = (current_rotation + rotation) % 360
+        self.page_rotations[original_page_num] = new_rotation
 
-            # Remove from cache
-            self.thumbnail_cache.remove_page(page_num)
+        # Remove from cache to force reload
+        self.thumbnail_cache.remove_page(original_page_num)
 
-            item = self.thumbnail_list.item(page_num)
-            if item:
+        # Find and update the item
+        for i in range(self.thumbnail_list.count()):
+            item = self.thumbnail_list.item(i)
+            if item and item.data(Qt.UserRole) == original_page_num:
                 # Set placeholder while loading
-                placeholder = QPixmap(self.thumbnail_size, self.thumbnail_size)
-                placeholder.fill(Qt.white)
+                placeholder = self._create_placeholder_with_number(original_page_num)
                 item.setIcon(QIcon(placeholder))
+                break
 
-            # Delay reload to prevent UI freezing
-            QTimer.singleShot(100, lambda: self.load_thumbnail(page_num))
+        # Reload the thumbnail
+        QTimer.singleShot(100, lambda: self.load_thumbnail(original_page_num))
 
-    def update_thumbnails_order(self, visible_order: list[int]):
-        """Reorder QListWidget items to match visible_order (actual page indices)."""
-        count = self.thumbnail_list.count()
-        if count == 0:
-            return
+    def update_thumbnails_order(self, visible_order: List[int]):
+        """Update display order and refresh all thumbnails
 
-        # Take all items out (keeping their icons/text intact)
-        items = [self.thumbnail_list.takeItem(0) for _ in range(count)]
+        Args:
+            visible_order: List of ORIGINAL page indices in their new display order
+        """
+        # Update our display order
+        self.display_order = visible_order.copy()
 
-        order_set = set(visible_order)
-        # Re-add visible pages in the requested order …
-        for idx in visible_order:
-            if 0 <= idx < len(items):
-                self.thumbnail_list.addItem(items[idx])
-        # … then append any remaining (hidden/deleted) items at the end
-        for i in range(len(items)):
-            if i not in order_set:
-                self.thumbnail_list.addItem(items[i])
+        # Rebuild the list widget to match the new order
+        self.thumbnail_list.clear()
 
-        # Also refresh numbering overlay
-        self.set_display_order(visible_order)
+        # Add visible pages in order
+        for original_page in visible_order:
+            if original_page < len(self.document):
+                item = QListWidgetItem()
+                item.setData(Qt.UserRole, original_page)
+                item.setSizeHint(QSize(self.thumbnail_size + 12, self.thumbnail_size + 12))
+                item.setFlags(Qt.ItemIsSelectable | Qt.ItemIsEnabled)
 
-    def set_display_order(self, visible_order: list[int]):
-        """visible_order: list of ACTUAL page indices in display order"""
-        self.display_order_map = {actual: i for i, actual in enumerate(visible_order)}
-        # drop cached pixmaps for visible pages so numbers repaint
-        for p in visible_order:
-            self.thumbnail_cache.remove_page(p)
+                # Check cache for raw thumbnail
+                raw_pixmap = self.thumbnail_cache.get_raw(original_page, self.thumbnail_size)
+                if raw_pixmap:
+                    final_pixmap = self._add_page_number_overlay(raw_pixmap, original_page)
+                    item.setIcon(QIcon(final_pixmap))
+                else:
+                    placeholder = self._create_placeholder_with_number(original_page)
+                    item.setIcon(QIcon(placeholder))
+
+                self.thumbnail_list.addItem(item)
+
+        # Add hidden/deleted pages at the end (they won't be visible)
+        for original_page in range(len(self.document)):
+            if original_page in self.deleted_pages:
+                item = QListWidgetItem()
+                item.setData(Qt.UserRole, original_page)
+                item.setSizeHint(QSize(self.thumbnail_size + 12, self.thumbnail_size + 12))
+                item.setFlags(Qt.ItemIsSelectable | Qt.ItemIsEnabled)
+                item.setHidden(True)
+                self.thumbnail_list.addItem(item)
+
+        # Trigger loading of visible thumbnails
         self.load_timer.start(50)
 
     def resizeEvent(self, event):
@@ -569,47 +666,7 @@ class ThumbnailWidget(QWidget):
         if self.document:
             self.load_timer.start(200)
 
-    def scrollContentsBy(self, dx, dy):
-        """Override to load thumbnails when scrolling"""
-        # This method doesn't exist in QWidget, but we handle scroll in the list widget
-        pass
-
     def wheelEvent(self, event):
         """Handle wheel events to trigger thumbnail loading"""
         super().wheelEvent(event)
         self.load_timer.start(300)
-
-    # --- helpers ---
-    def _overlay_page_number(self, pixmap: QPixmap, page_index: int) -> QPixmap:
-        """Draw a small dark bar with page number at the bottom of the thumbnail"""
-        out = QPixmap(pixmap.size())
-        out.fill(Qt.transparent)
-        painter = QPainter(out)
-        painter.setRenderHint(QPainter.Antialiasing)
-        painter.drawPixmap(0, 0, pixmap)
-
-        h = pixmap.height()
-        bar_h = max(18, int(h * 0.14))
-        painter.fillRect(0, h - bar_h, pixmap.width(), bar_h, QColor(0, 0, 0, 150))
-
-        f = painter.font()
-        f.setBold(True)
-        f.setPointSize(self.page_number_font_size)
-        painter.setFont(f)
-        painter.setPen(Qt.white)
-
-        # display index (0-based) -> 1-based label
-        display_idx = self.display_order_map.get(page_index)
-        if display_idx is None:
-            # fallback: count non-hidden pages up to this actual index
-            display_idx = sum(
-                1 for i in range(page_index + 1)
-                if i not in self.deleted_pages
-            ) - 1
-
-        painter.drawText(pixmap.rect().adjusted(0, 0, 0, -2),
-                         Qt.AlignHCenter | Qt.AlignBottom,
-                         str(display_idx + 1))
-        painter.end()
-        return out
-

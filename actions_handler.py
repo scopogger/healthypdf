@@ -1,6 +1,3 @@
-"""
-Enhanced Actions Handler - Handles all UI actions with proper page numbering
-"""
 import os
 import fitz
 from PySide6.QtWidgets import (
