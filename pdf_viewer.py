@@ -141,6 +141,14 @@ class PDFViewer(QScrollArea):
 
     def __init__(self, parent=None):
         super().__init__(parent)
+        from PySide6.QtCore import QTimer
+
+        self._center_timer = QTimer(self)
+        self._center_timer.setSingleShot(True)
+        self._center_timer.timeout.connect(lambda: self._do_pending_center())
+
+        self._pending_center_index = None
+        self._last_center_time = 0
 
         print("Initializing PDFViewer")
 
@@ -613,15 +621,92 @@ class PDFViewer(QScrollArea):
                 count += 1
         return count
 
-    def go_to_page(self, layout_index: int):
-        """Navigate to a page by layout index (index into page_widgets/pages_info)"""
-        if 0 <= layout_index < len(self.page_widgets):
-            self.cancel_all_renders()
-            widget = self.page_widgets[layout_index]
-            orig = self.pages_info[layout_index].page_num
-            if orig not in self.deleted_pages:
+    def request_center_on_layout_index(self, layout_index: int, delay_ms: int = 80):
+        """
+        Request centering on a layout index. Multiple requests are debounced so only the
+        last request within `delay_ms` will actually perform the scroll.
+        Use this from code that might call centering many times (e.g. during batch ops).
+        """
+        if layout_index is None:
+            return
+        # remember last requested (we always keep the newest)
+        self._pending_center_index = int(layout_index)
+        # restart timer (coalesce multiple calls)
+        try:
+            self._center_timer.start(delay_ms)
+        except Exception:
+            # fallback: call synchronously
+            self._do_pending_center()
+
+    def _do_pending_center(self):
+        """Called by the single-shot timer to perform the actual centering once."""
+        idx = self._pending_center_index
+        self._pending_center_index = None
+        if idx is None:
+            return
+        try:
+            self.center_on_layout_index(idx)
+        except Exception as e:
+            # swallow errors — centering is best-effort
+            print(f"[PDFViewer] center error: {e}")
+
+    def center_on_layout_index(self, layout_index: int):
+        """
+        Center the viewport on the widget at layout_index deterministically by setting the scrollbar value.
+        This is the actual centering operation — kept idempotent where possible.
+        """
+        if not self.page_widgets or layout_index is None:
+            return
+
+        # clamp index
+        layout_index = max(0, min(layout_index, len(self.page_widgets) - 1))
+
+        widget = self.page_widgets[layout_index]
+        if widget is None:
+            return
+
+        try:
+            # compute widget center Y in the container coordinates
+            widget_y = widget.y()
+            widget_center = widget_y + widget.height() // 2
+            viewport_h = self.viewport().height() or 1
+
+            desired_scroll = max(0, widget_center - viewport_h // 2)
+
+            sb = self.verticalScrollBar()
+            desired_scroll = max(0, min(desired_scroll, sb.maximum()))
+
+            # Idempotent set: avoid setting the same value repeatedly (reduces noise and avoids side-effects)
+            current = sb.value()
+            if int(current) == int(desired_scroll):
+                return
+
+            # set the scrollbar synchronously
+            sb.setValue(int(desired_scroll))
+        except Exception:
+            # fallback safe call
+            try:
                 self.ensureWidgetVisible(widget, 50, 50)
-                QTimer.singleShot(100, self.update_visible_pages)
+            except Exception:
+                pass
+
+        # schedule visible-pages update once scroll settles
+        from PySide6.QtCore import QTimer
+        QTimer.singleShot(80, self.update_visible_pages)
+
+    def go_to_page(self, layout_index: int):
+        """
+        Public navigation entrypoint; request a centered scroll rather than doing many immediate scrolls.
+        Use request_center_on_layout_index to coalesce repeated nav requests.
+        """
+        if not self.page_widgets:
+            return
+        if layout_index < 0 or layout_index >= len(self.page_widgets):
+            return
+
+        # cancel renders but DO NOT center synchronously; request debounced centering
+        self.cancel_all_renders()
+        self.request_center_on_layout_index(layout_index, delay_ms=60)
 
     # ---------------- Page manipulation ----------------
     def _rotate_page(self, rotation: int):

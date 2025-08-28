@@ -240,11 +240,26 @@ class MainWindow(QMainWindow):
 
             # Update thumbnail widget
             if hasattr(self.ui.thumbnailList, 'set_document'):
-                print("Setting document on thumbnail widget")
                 self.ui.thumbnailList.set_document(
                     getattr(self.ui.pdfView, 'document', None),
                     file_path
                 )
+
+            # Ensure viewer starts at top of layout (layout index 0) and refresh thumbnails' order
+            try:
+                # go to first layout position (if method exists)
+                if hasattr(self.ui.pdfView, 'go_to_page'):
+                    self.ui.pdfView.go_to_page(0)
+                # compute visible_order (list of ORIGINAL page ids) and send to thumbnails
+                if hasattr(self.ui.pdfView, 'pages_info') and hasattr(self.ui.thumbnailList, 'set_display_order'):
+                    visible_order = [info.page_num for info in self.ui.pdfView.pages_info
+                                     if info.page_num not in getattr(self.ui.pdfView, 'deleted_pages', set())]
+                    self.ui.thumbnailList.set_display_order(visible_order)
+                    # highlight current page
+                    cur_orig = self.ui.pdfView.get_current_page()
+                    self.ui.thumbnailList.set_current_page(cur_orig)
+            except Exception:
+                pass
 
             self.is_document_modified = False
             self.update_ui_state()

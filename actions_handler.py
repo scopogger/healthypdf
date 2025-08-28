@@ -103,18 +103,16 @@ class ActionsHandler:
             self.ui.actionPrint.triggered.connect(self.print_document)
 
     def get_visible_pages_in_layout_order(self):
-        """Get list of visible page indices in their current layout order"""
+        """Return list of ORIGINAL page indices in the current layout order (skips deleted)."""
         visible_pages = []
-        if hasattr(self.ui.pdfView, 'pages_layout') and hasattr(self.ui.pdfView, 'page_widgets'):
-            for i in range(self.ui.pdfView.pages_layout.count()):
-                item = self.ui.pdfView.pages_layout.itemAt(i)
-                if item and item.widget() and not item.widget().isHidden():
-                    # Find which page widget this is
-                    widget = item.widget()
-                    for j, page_widget in enumerate(self.ui.pdfView.page_widgets):
-                        if page_widget == widget:
-                            visible_pages.append(j)
-                            break
+        if not hasattr(self.ui.pdfView, 'pages_info'):
+            return visible_pages
+        # pages_info is a list where pages_info[i].page_num == ORIGINAL page index at layout position i
+        for info in self.ui.pdfView.pages_info:
+            orig = info.page_num
+            if orig in getattr(self.ui.pdfView, 'deleted_pages', set()):
+                continue
+            visible_pages.append(orig)
         return visible_pages
 
     def get_visible_pages_list(self):
@@ -466,51 +464,110 @@ class ActionsHandler:
 
     # Page manipulation operations
     def delete_current_page(self):
-        current_page = self.ui.pdfView.get_current_page()  # <-- save BEFORE delete
+        """Delete current page and refresh thumbnails using ORIGINAL page ids order."""
+        current_orig = self.ui.pdfView.get_current_page()  # save before delete (if needed)
         success = self.ui.pdfView.delete_current_page()
         if not success:
             return
 
-        # hide the actually deleted page's thumbnail
-        self.ui.thumbnailList.hide_page_thumbnail(current_page)
-
-        # re-label & re-order thumbnails to match the viewer’s new layout
+        # compute visible order (ORIGINAL page ids)
         visible = self.get_visible_pages_in_layout_order()
-        self.ui.thumbnailList.update_thumbnails_order(visible)
+        if hasattr(self.ui.thumbnailList, 'set_display_order'):
+            try:
+                self.ui.thumbnailList.set_display_order(visible)
+            except Exception:
+                pass
+
+        # new centered original (pdfView should provide)
+        new_center_orig = self.ui.pdfView.get_current_page()
+
+        # force viewer to center on the layout index of that original
+        if hasattr(self.ui.pdfView, 'layout_index_for_original') and hasattr(self.ui.pdfView, 'center_on_layout_index'):
+            layout_idx = self.ui.pdfView.layout_index_for_original(new_center_orig)
+            if layout_idx is not None:
+                try:
+                    self.ui.pdfView.center_on_layout_index(layout_idx)
+                except Exception:
+                    pass
+
+        # set thumbnail selection to same original
+        if hasattr(self.ui.thumbnailList, 'set_current_page'):
+            try:
+                self.ui.thumbnailList.set_current_page(new_center_orig)
+            except Exception:
+                pass
+
+        # update UI
+        if hasattr(self.main_window, 'on_document_modified'):
+            self.main_window.on_document_modified(True)
+        self.main_window.update_page_info()
 
     def move_page_up(self):
-        """Move current page up with proper numbering update"""
         if hasattr(self.ui.pdfView, 'move_page_up'):
             success = self.ui.pdfView.move_page_up()
-            if success:
+            if not success:
+                return
+
+            if hasattr(self.main_window, 'on_document_modified'):
                 self.main_window.on_document_modified(True)
-                self.main_window.update_page_info()
+            self.main_window.update_page_info()
 
-                # Update thumbnail order and labels
-                if hasattr(self.ui.thumbnailList, 'update_thumbnails_order'):
-                    self.ui.thumbnailList.update_thumbnails_order()
-                # if hasattr(self.ui.thumbnailList, 'update_all_thumbnail_labels'):
-                #     self.ui.thumbnailList.update_all_thumbnail_labels()
+            visible = self.get_visible_pages_in_layout_order()
+            if hasattr(self.ui.thumbnailList, 'set_display_order'):
+                try:
+                    self.ui.thumbnailList.set_display_order(visible)
+                except Exception:
+                    pass
 
-                visible = self.get_visible_pages_in_layout_order()
-                self.ui.thumbnailList.update_thumbnails_order(visible)
+            # focus on current original
+            cur_orig = self.ui.pdfView.get_current_page()
+            if hasattr(self.ui.pdfView, 'layout_index_for_original') and hasattr(self.ui.pdfView,
+                                                                                 'center_on_layout_index'):
+                layout_idx = self.ui.pdfView.layout_index_for_original(cur_orig)
+                if layout_idx is not None:
+                    try:
+                        self.ui.pdfView.center_on_layout_index(layout_idx)
+                    except Exception:
+                        pass
+
+            if hasattr(self.ui.thumbnailList, 'set_current_page'):
+                try:
+                    self.ui.thumbnailList.set_current_page(cur_orig)
+                except Exception:
+                    pass
 
     def move_page_down(self):
-        """Move current page down with proper numbering update"""
         if hasattr(self.ui.pdfView, 'move_page_down'):
             success = self.ui.pdfView.move_page_down()
-            if success:
+            if not success:
+                return
+
+            if hasattr(self.main_window, 'on_document_modified'):
                 self.main_window.on_document_modified(True)
-                self.main_window.update_page_info()
+            self.main_window.update_page_info()
 
-                # Update thumbnail order and labels
-                if hasattr(self.ui.thumbnailList, 'update_thumbnails_order'):
-                    self.ui.thumbnailList.update_thumbnails_order()
-                # if hasattr(self.ui.thumbnailList, 'update_all_thumbnail_labels'):
-                #     self.ui.thumbnailList.update_all_thumbnail_labels()
+            visible = self.get_visible_pages_in_layout_order()
+            if hasattr(self.ui.thumbnailList, 'set_display_order'):
+                try:
+                    self.ui.thumbnailList.set_display_order(visible)
+                except Exception:
+                    pass
 
-                visible = self.get_visible_pages_in_layout_order()
-                self.ui.thumbnailList.update_thumbnails_order(visible)
+            cur_orig = self.ui.pdfView.get_current_page()
+            if hasattr(self.ui.pdfView, 'layout_index_for_original') and hasattr(self.ui.pdfView,
+                                                                                 'center_on_layout_index'):
+                layout_idx = self.ui.pdfView.layout_index_for_original(cur_orig)
+                if layout_idx is not None:
+                    try:
+                        self.ui.pdfView.center_on_layout_index(layout_idx)
+                    except Exception:
+                        pass
+
+            if hasattr(self.ui.thumbnailList, 'set_current_page'):
+                try:
+                    self.ui.thumbnailList.set_current_page(cur_orig)
+                except Exception:
+                    pass
 
     def rotate_page_clockwise(self):
         """Rotate current page clockwise with thumbnail update"""
