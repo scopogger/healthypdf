@@ -742,7 +742,7 @@ class PDFViewer(QScrollArea):
         return self._rotate_page(-90)
 
     def delete_current_page(self):
-        """Delete the current page"""
+        """Delete the current page (remove placeholder/widget and page_info entry)."""
         if not self.document:
             return False
 
@@ -751,19 +751,42 @@ class PDFViewer(QScrollArea):
             QMessageBox.warning(None, "Cannot Delete", "Cannot delete the last remaining page.")
             return False
 
-        # mark original page as deleted
+        # Mark original page as deleted for persistence/undo tracking
         self.deleted_pages.add(orig_current)
         self.is_modified = True
         self.document_modified.emit(True)
 
+        # Find layout index and REMOVE the widget + pages_info entry so we don't keep hidden placeholders
         layout_idx = self.layout_index_for_original(orig_current)
         if layout_idx is not None:
-            self.page_widgets[layout_idx].hide()
+            # remove widget and its layout entry
+            try:
+                widget = self.page_widgets.pop(layout_idx)
+                widget.deleteLater()
+            except Exception:
+                pass
 
-        # Update all page labels for remaining pages
+            try:
+                self.pages_info.pop(layout_idx)
+            except Exception:
+                pass
+
+            # Remove any cached pixmap for that original page
+            self.page_cache.cache.pop(orig_current, None)
+
+        # Force labels and lazy loader to recompute
         self.update_all_page_labels()
+
+        # clear last visible set so the lazy loader doesn't think old indices are still visible
+        self.last_visible_layout_indices.clear()
+
+        # schedule visible-pages update (debounced)
+        QTimer.singleShot(50, self.update_visible_pages)
+
         # emit new centered page (original id)
-        self.page_changed.emit(self.get_current_page())
+        new_center = self.get_current_page()
+        if new_center is not None:
+            self.page_changed.emit(new_center)
         return True
 
     def _move_page(self, direction: int):
@@ -824,13 +847,24 @@ class PDFViewer(QScrollArea):
             self.pages_info[current_layout_idx],
         )
 
-        # no need to remap page_rotations or deleted_pages because they are keyed by ORIGINAL ids
-
         self.is_modified = True
         self.document_modified.emit(True)
 
-        # Update all page labels to reflect new order
+        # Update labels to match new order
         self.update_all_page_labels()
+
+        # Clear cached visible indices so update_visible_pages will reload appropriate pages
+        self.last_visible_layout_indices.clear()
+
+        # Coalesce and trigger a visible-pages update
+        QTimer.singleShot(50, self.update_visible_pages)
+
+        # Emit the currently-centered page (original id) so UI syncs
+        try:
+            self.page_changed.emit(self.get_current_page())
+        except Exception:
+            pass
+
         return True
 
     def move_page_up(self):

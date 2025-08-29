@@ -489,7 +489,11 @@ class ActionsHandler:
 
         # Update thumbnail order to match viewer's layout
         visible_pages = self.get_visible_pages_as_original_indices()
-        self.ui.thumbnailList.update_thumbnails_order(visible_pages)
+        try:
+            self.ui.thumbnailList.set_current_page(self.ui.pdfView.get_current_page())
+        except Exception:
+            pass
+
 
     def move_page_up(self):
         """Move current page up with proper numbering update"""
@@ -502,6 +506,10 @@ class ActionsHandler:
                 # Update thumbnail order with original page indices
                 visible_pages = self.get_visible_pages_as_original_indices()
                 self.ui.thumbnailList.update_thumbnails_order(visible_pages)
+                try:
+                    self.ui.thumbnailList.set_current_page(self.ui.pdfView.get_current_page())
+                except Exception:
+                    pass
 
     def move_page_down(self):
         """Move current page down with proper numbering update"""
@@ -514,6 +522,10 @@ class ActionsHandler:
                 # Update thumbnail order with original page indices
                 visible_pages = self.get_visible_pages_as_original_indices()
                 self.ui.thumbnailList.update_thumbnails_order(visible_pages)
+                try:
+                    self.ui.thumbnailList.set_current_page(self.ui.pdfView.get_current_page())
+                except Exception:
+                    pass
 
     def rotate_page_clockwise(self):
         """Rotate current page clockwise with thumbnail update"""

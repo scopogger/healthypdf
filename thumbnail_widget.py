@@ -570,17 +570,18 @@ class ThumbnailWidget(QWidget):
                 break
 
     def hide_page_thumbnail(self, original_page_num: int):
-        """Hide thumbnail for deleted page"""
+        """Hide (remove) thumbnail for deleted page"""
         self.deleted_pages.add(original_page_num)
 
-        # Find and hide the item
+        # Find and remove the item
         for i in range(self.thumbnail_list.count()):
             item = self.thumbnail_list.item(i)
             if item and item.data(Qt.UserRole) == original_page_num:
-                item.setHidden(True)
+                # remove from the list entirely
+                self.thumbnail_list.takeItem(i)
                 break
 
-        # Remove from cache
+        # Remove from cache and display order
         self.thumbnail_cache.remove_page(original_page_num)
 
         # Remove from display order
@@ -639,16 +640,7 @@ class ThumbnailWidget(QWidget):
 
                 self.thumbnail_list.addItem(item)
 
-        # Add hidden/deleted pages at the end (they won't be visible)
-        for original_page in range(len(self.document)):
-            if original_page in self.deleted_pages:
-                item = QListWidgetItem()
-                item.setData(Qt.UserRole, original_page)
-                item.setSizeHint(QSize(self.thumbnail_size + 12, self.thumbnail_size + 12))
-                item.setFlags(Qt.ItemIsSelectable | Qt.ItemIsEnabled)
-                item.setHidden(True)
-                self.thumbnail_list.addItem(item)
-
+        # Note: do NOT append deleted pages as hidden items at the end.
         # Trigger loading of visible thumbnails
         self.load_timer.start(50)
 
