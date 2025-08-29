@@ -1,6 +1,3 @@
-"""
-Fixed thumbnail_widget.py - Properly handles page modifications and numbering
-"""
 import os
 import threading
 from typing import Optional, Dict, List

@@ -1,5 +1,6 @@
 import os
 import fitz
+from typing import List
 from PySide6.QtWidgets import (
     QFileDialog, QMessageBox, QInputDialog, QProgressDialog, QApplication
 )
@@ -98,6 +99,20 @@ class ActionsHandler:
         """Connect printing actions"""
         if hasattr(self.ui, 'actionPrint'):
             self.ui.actionPrint.triggered.connect(self.print_document)
+
+    def get_visible_pages_as_original_indices(self) -> List[int]:
+        """Get list of ORIGINAL page indices for visible pages in their current layout order
+
+        Returns:
+            List of original page indices in display order
+        """
+        visible_pages = []
+        if hasattr(self.ui.pdfView, 'pages_info') and hasattr(self.ui.pdfView, 'deleted_pages'):
+            # Iterate through pages_info in order
+            for info in self.ui.pdfView.pages_info:
+                if info.page_num not in self.ui.pdfView.deleted_pages:
+                    visible_pages.append(info.page_num)
+        return visible_pages
 
     def get_visible_pages_in_layout_order(self):
         """Get list of visible page indices in their current layout order"""
@@ -368,7 +383,7 @@ class ActionsHandler:
                 pix = page.get_pixmap(matrix=matrix)
 
                 image = QImage(pix.samples, pix.width, pix.height,
-                              pix.stride, QImage.Format_RGB888)
+                               pix.stride, QImage.Format_RGB888)
 
                 # Get the page rect from printer in device pixels
                 paint_rect = printer.pageRect(QPrinter.DevicePixel)
@@ -463,17 +478,18 @@ class ActionsHandler:
 
     # Page manipulation operations
     def delete_current_page(self):
-        current_page = self.ui.pdfView.get_current_page()  # <-- save BEFORE delete
+        """Delete current page and update thumbnails"""
+        current_page = self.ui.pdfView.get_current_page()  # Save BEFORE delete
         success = self.ui.pdfView.delete_current_page()
         if not success:
             return
 
-        # hide the actually deleted page's thumbnail
+        # Remove the deleted page's thumbnail
         self.ui.thumbnailList.hide_page_thumbnail(current_page)
 
-        # re-label & re-order thumbnails to match the viewer’s new layout
-        visible = self.get_visible_pages_in_layout_order()
-        self.ui.thumbnailList.update_thumbnails_order(visible)
+        # Update thumbnail order to match viewer's layout
+        visible_pages = self.get_visible_pages_as_original_indices()
+        self.ui.thumbnailList.update_thumbnails_order(visible_pages)
 
     def move_page_up(self):
         """Move current page up with proper numbering update"""
@@ -483,14 +499,9 @@ class ActionsHandler:
                 self.main_window.on_document_modified(True)
                 self.main_window.update_page_info()
 
-                # Update thumbnail order and labels
-                if hasattr(self.ui.thumbnailList, 'update_thumbnails_order'):
-                    self.ui.thumbnailList.update_thumbnails_order()
-                # if hasattr(self.ui.thumbnailList, 'update_all_thumbnail_labels'):
-                #     self.ui.thumbnailList.update_all_thumbnail_labels()
-
-                visible = self.get_visible_pages_in_layout_order()
-                self.ui.thumbnailList.update_thumbnails_order(visible)
+                # Update thumbnail order with original page indices
+                visible_pages = self.get_visible_pages_as_original_indices()
+                self.ui.thumbnailList.update_thumbnails_order(visible_pages)
 
     def move_page_down(self):
         """Move current page down with proper numbering update"""
@@ -500,14 +511,9 @@ class ActionsHandler:
                 self.main_window.on_document_modified(True)
                 self.main_window.update_page_info()
 
-                # Update thumbnail order and labels
-                if hasattr(self.ui.thumbnailList, 'update_thumbnails_order'):
-                    self.ui.thumbnailList.update_thumbnails_order()
-                # if hasattr(self.ui.thumbnailList, 'update_all_thumbnail_labels'):
-                #     self.ui.thumbnailList.update_all_thumbnail_labels()
-
-                visible = self.get_visible_pages_in_layout_order()
-                self.ui.thumbnailList.update_thumbnails_order(visible)
+                # Update thumbnail order with original page indices
+                visible_pages = self.get_visible_pages_as_original_indices()
+                self.ui.thumbnailList.update_thumbnails_order(visible_pages)
 
     def rotate_page_clockwise(self):
         """Rotate current page clockwise with thumbnail update"""
