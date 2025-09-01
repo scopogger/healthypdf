@@ -183,6 +183,9 @@ class MainWindow(QMainWindow):
         if hasattr(self.ui, 'm_zoomSelector') and hasattr(self.ui.m_zoomSelector, 'zoom_changed'):
             self.ui.m_zoomSelector.zoom_changed.connect(self.on_zoom_changed)
 
+        if hasattr(self.ui, 'actionDraw'):
+            self.ui.actionDraw.toggled.connect(self.on_action_draw_toggled)
+
         # All action connections are now handled by ActionsHandler
 
     def load_document(self, file_path: str):
@@ -492,6 +495,62 @@ class MainWindow(QMainWindow):
                 if layout_idx is not None and hasattr(self.ui.thumbnailList, 'set_current_page'):
                     self.ui.thumbnailList.set_current_page(layout_idx)
         self.update_page_info()
+
+    def on_action_draw_toggled(self, checked: bool):
+        """Toggle drawing mode. If turning off and there are unsaved drawings prompt Save/Discard/Cancel."""
+        if checked:
+            # enable drawing mode
+            if hasattr(self.ui.pdfView, 'set_drawing_mode'):
+                self.ui.pdfView.set_drawing_mode(True)
+        else:
+            # user requested to exit drawing mode — check unsaved annotations
+            if hasattr(self.ui.pdfView, 'any_annotations_dirty') and self.ui.pdfView.any_annotations_dirty():
+                from PySide6.QtWidgets import QMessageBox
+                choice = QMessageBox.question(
+                    self,
+                    "Save drawings?",
+                    "Save drawings to the document? (Save = persist, Discard = remove)",
+                    QMessageBox.Save | QMessageBox.Discard | QMessageBox.Cancel,
+                    QMessageBox.Save
+                )
+                if choice == QMessageBox.Save:
+                    # mark modified so normal Save will persist drawings
+                    # we set is_modified so Save action is enabled
+                    if hasattr(self.ui.pdfView, 'is_modified'):
+                        self.ui.pdfView.is_modified = True
+                        try:
+                            self.ui.pdfView.document_modified.emit(True)
+                        except Exception:
+                            pass
+                    # disable drawing UI but keep drawings in memory (they will be merged on actual Save)
+                    if hasattr(self.ui.pdfView, 'set_drawing_mode'):
+                        self.ui.pdfView.set_drawing_mode(False)
+                elif choice == QMessageBox.Discard:
+                    # clear overlays on all pages
+                    for w in getattr(self.ui.pdfView, "page_widgets", []):
+                        try:
+                            w.overlay.clear_annotations()
+                        except Exception:
+                            pass
+                    if hasattr(self.ui.pdfView, 'set_drawing_mode'):
+                        self.ui.pdfView.set_drawing_mode(False)
+                    # mark not modified if nothing else changed
+                    self.is_document_modified = False
+                    try:
+                        self.ui.pdfView.document_modified.emit(False)
+                    except Exception:
+                        pass
+                else:
+                    # cancel: re-enable drawing toggle
+                    try:
+                        self.ui.actionDraw.setChecked(True)
+                    except Exception:
+                        pass
+                    return
+            else:
+                # no dirty annotations: just disable
+                if hasattr(self.ui.pdfView, 'set_drawing_mode'):
+                    self.ui.pdfView.set_drawing_mode(False)
 
     def on_document_modified(self, is_modified: bool):
         """Handle document modification status change"""

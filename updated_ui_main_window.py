@@ -387,6 +387,7 @@ class UiMainWindow(object):
         # Drawing/annotation actions
         self.actionDraw = QAction(main_window)
         self.actionDraw.setObjectName("actionDraw")
+        self.actionDraw.setCheckable(True)
 
         # Additional actions from old version
         self.actionSave_Page_As_Image = QAction(main_window)

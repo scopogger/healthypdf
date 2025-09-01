@@ -5,13 +5,15 @@ from typing import Optional, Dict, Set
 from dataclasses import dataclass
 from collections import OrderedDict
 
+from drawing_overlay import PageWidget
+
 from PySide6.QtWidgets import (
-    QScrollArea, QVBoxLayout, QWidget, QLabel, QMessageBox, QInputDialog
+    QScrollArea, QVBoxLayout, QWidget, QLabel, QMessageBox, QInputDialog, QFrame, QPushButton
 )
 from PySide6.QtCore import (
     Qt, QRunnable, QThreadPool, QTimer, Signal
 )
-from PySide6.QtGui import QPixmap
+from PySide6.QtGui import QPixmap, QColor
 
 import fitz  # PyMuPDF
 
@@ -347,7 +349,7 @@ class PDFViewer(QScrollArea):
         return display
 
     def create_placeholder_widgets(self):
-        """Create lightweight placeholder widgets - NO RENDERING"""
+        """Create lightweight placeholder PageWidget instances (no rendering yet)."""
         print(f"Creating {len(self.pages_info)} placeholder widgets")
         self.page_widgets = []
         # clear existing layout
@@ -363,16 +365,23 @@ class PDFViewer(QScrollArea):
             display_h = max(display_h, 200)
 
             display_num = self.get_display_page_number(i)
-            page_widget = QLabel(f"Page {display_num}\nLoading...")
+            page_widget = PageWidget(display_w, display_h)
             page_widget.setMinimumSize(display_w, display_h)
             page_widget.setFixedSize(display_w, display_h)
-            page_widget.setAlignment(Qt.AlignCenter)
-            page_widget.setStyleSheet("""
+            page_widget.base_label.setText(f"Page {display_num}\nLoading...")
+            page_widget.base_label.setAlignment(Qt.AlignCenter)
+            page_widget.base_label.setStyleSheet("""
                 QLabel { border: 2px solid #ddd; background-color: white; color: #666; font-size: 14px; margin: 5px; }
             """)
 
             # store original id as property for easier debugging if needed
             page_widget.setProperty("orig_page_num", page_info.page_num)
+
+            # connect overlay change signal so viewer knows document is modified
+            try:
+                page_widget.overlay.annotation_changed.connect(self.on_annotation_changed)
+            except Exception:
+                pass
 
             self.page_widgets.append(page_widget)
             self.pages_layout.addWidget(page_widget)
@@ -483,30 +492,46 @@ class PDFViewer(QScrollArea):
         display_h = int(page_info.height * self.zoom_level)
         display_w = max(display_w, 200)
         display_h = max(display_h, 200)
-        widget.setFixedSize(display_w, display_h)
-        widget.clear()
-        display_page_num = self.get_display_page_number(layout_index)
-        widget.setText(f"Page {display_page_num}\nLoading...")
 
-        widget.setStyleSheet("""
-            QLabel { border: 2px solid #ddd; background-color: white; color: #666; font-size: 14px; margin: 5px; }
-        """)
+        # Clear base image and annotations
+        try:
+            widget.clear_base()
+        except Exception:
+            # legacy QLabel fallback
+            try:
+                widget.clear()
+            except Exception:
+                pass
+
+        # Reset placeholder text and size if possible
+        try:
+            display_page_num = self.get_display_page_number(layout_index)
+            widget.setFixedSize(display_w, display_h)
+            # if has base_label show placeholder text
+            if hasattr(widget, 'base_label'):
+                widget.base_label.setText(f"Page {display_page_num}\nLoading...")
+                widget.base_label.setAlignment(Qt.AlignCenter)
+                widget.base_label.setStyleSheet(
+                    "\nQLabel { border: 2px solid #ddd; background-color: white; color: #666; font-size: 14px; margin: 5px; }"
+                )
+        except Exception:
+            pass
 
     def load_page_if_needed(self, layout_index: int):
         if layout_index >= len(self.page_widgets):
             return
 
         widget = self.page_widgets[layout_index]
-        # if widget already has a pixmap, assume loaded
-        if hasattr(widget, 'pixmap') and widget.pixmap() and not widget.pixmap().isNull():
+        # if widget already has a base_pixmap, assume loaded
+        if getattr(widget, "base_pixmap", None) is not None:
             return
 
         orig_page = self.pages_info[layout_index].page_num
         cached = self.page_cache.get(orig_page)
         if cached:
-            widget.setPixmap(cached)
+            widget.set_base_pixmap(cached)
             widget.setFixedSize(cached.size())
-            widget.setStyleSheet("border: 2px solid #ccc; margin: 5px;")
+            # style could be adjusted
             return
 
         self.start_page_render(layout_index)
@@ -550,9 +575,17 @@ class PDFViewer(QScrollArea):
         # only set pixmap if still visible
         if layout_index in self.last_visible_layout_indices and layout_index < len(self.page_widgets):
             widget = self.page_widgets[layout_index]
-            widget.setPixmap(pixmap)
-            widget.setFixedSize(pixmap.size())
-            widget.setStyleSheet("border: 2px solid #ccc; margin: 5px;")
+            # set base pixmap on our PageWidget
+            try:
+                widget.set_base_pixmap(pixmap)
+                widget.setFixedSize(pixmap.size())
+            except Exception:
+                # fallback for legacy QLabel
+                try:
+                    widget.setPixmap(pixmap)
+                    widget.setFixedSize(pixmap.size())
+                except Exception:
+                    pass
             widget.update()
 
     def set_zoom(self, zoom: float):
@@ -874,7 +907,9 @@ class PDFViewer(QScrollArea):
         return self._move_page(1)
 
     def save_changes(self, file_path: str = None) -> bool:
-        """Save changes to file: build page_order by iterating layout and using ORIGINAL page numbers"""
+        """Save changes to file: build page_order by iterating layout and using ORIGINAL page numbers.
+        This version inserts the original page content and then overlays annotation PNG (if present) on top.
+        """
         if not self.document or not self.is_modified:
             return True
         try:
@@ -895,19 +930,34 @@ class PDFViewer(QScrollArea):
 
             for orig_page_num in page_order:
                 if 0 <= orig_page_num < len(self.document):
-                    temp_doc = fitz.open()
-                    temp_doc.insert_pdf(self.document, from_page=orig_page_num, to_page=orig_page_num)
-                    rotation = self.page_rotations.get(orig_page_num, 0)
-                    if rotation != 0:
-                        temp_page = temp_doc[0]
-                        temp_page.set_rotation(rotation)
-                    new_doc.insert_pdf(temp_doc)
-                    temp_doc.close()
+                    # create a new page with original size
+                    src_page = self.document[orig_page_num]
+                    rect = src_page.rect
+                    new_page = new_doc.new_page(width=rect.width, height=rect.height)
+                    # render original page to pixmap and insert as background image
+                    pix = src_page.get_pixmap(alpha=False)
+                    base_bytes = pix.tobytes("png")
+                    new_page.insert_image(rect, stream=base_bytes)
 
-            # Save (same behaviour as before)
+                    # if we have annotations for layout index of orig_page_num, draw them on top
+                    layout_idx = self.layout_index_for_original(orig_page_num)
+                    if layout_idx is not None and 0 <= layout_idx < len(self.page_widgets):
+                        pw = self.page_widgets[layout_idx]
+                        if pw.has_annotations():
+                            # export annotation PNG scaled to page size
+                            ann_bytes = pw.export_annotations_png(int(rect.width), int(rect.height))
+                            if ann_bytes:
+                                # insert annotation PNG on the same rect as overlay (overlay=True)
+                                try:
+                                    new_page.insert_image(rect, stream=ann_bytes, overlay=True)
+                                except Exception:
+                                    # fallback: still continue without overlay
+                                    pass
+
+            # Save (atomic replace if saving to original path)
             if save_path == self.doc_path:
                 import tempfile, shutil
-                temp_fd, temp_path = tempfile.mkstemp(suffix='.pdf')
+                temp_fd, temp_path = tempfile.mkstemp(suffix=".pdf")
                 os.close(temp_fd)
                 new_doc.save(temp_path)
                 new_doc.close()
@@ -920,8 +970,14 @@ class PDFViewer(QScrollArea):
                 new_doc.save(save_path)
                 new_doc.close()
 
-            # Reset modification state
+            # Reset modification state (we consider drawings saved)
             self.is_modified = False
+            # After save, clear per-page overlay dirty flags
+            for w in self.page_widgets:
+                try:
+                    w.overlay._dirty = False
+                except Exception:
+                    pass
             self.deleted_pages.clear()
             self.page_rotations.clear()
             self.document_modified.emit(False)
@@ -930,6 +986,108 @@ class PDFViewer(QScrollArea):
         except Exception as e:
             QMessageBox.critical(None, "Save Error", f"Failed to save PDF: {e}")
             return False
+
+    def on_annotation_changed(self):
+        """Called when any overlay emits a change (user drew something)."""
+        try:
+            self.is_modified = True
+            self.document_modified.emit(True)
+        except Exception:
+            pass
+
+    def any_annotations_dirty(self) -> bool:
+        """Return True if any page overlay has unsaved annotations."""
+        return any((getattr(w, "overlay", None) and w.overlay.is_dirty()) for w in self.page_widgets)
+
+    def set_drawing_mode(self, enabled: bool):
+        """Enable or disable drawing mode for all page widgets and show tools panel."""
+        self._drawing_mode = bool(enabled)
+        for w in self.page_widgets:
+            try:
+                w.overlay.set_enabled(enabled)
+            except Exception:
+                pass
+        if enabled:
+            if not hasattr(self, "drawing_tools"):
+                self._create_drawing_tools()
+            try:
+                self.drawing_tools.show()
+            except Exception:
+                pass
+        else:
+            if hasattr(self, "drawing_tools"):
+                try:
+                    self.drawing_tools.hide()
+                except Exception:
+                    pass
+
+    def _create_drawing_tools(self):
+        """Create a small floating tools panel at top-right of viewport."""
+        panel = QFrame(self.viewport())
+        panel.setObjectName("drawingTools")
+        panel.setStyleSheet("QFrame { background: rgba(255,255,255,0.92); border: 1px solid #bbb; padding:4px; }")
+        layout = QVBoxLayout(panel)
+        layout.setContentsMargins(4, 4, 4, 4)
+        brush_btn = QPushButton("Brush", panel)
+        rect_btn = QPushButton("Rect", panel)
+        color_btn = QPushButton("Black/White", panel)
+        clear_btn = QPushButton("Clear page", panel)
+        layout.addWidget(brush_btn)
+        layout.addWidget(rect_btn)
+        layout.addWidget(color_btn)
+        layout.addWidget(clear_btn)
+        panel.adjustSize()
+
+        def place_panel():
+            vp = self.viewport()
+            x = max(8, vp.width() - panel.width() - 8)
+            y = 8
+            panel.move(x, y)
+
+        place_panel()
+        # reconnect placement on resize via viewer's resizeEvent (we add one below)
+        brush_btn.clicked.connect(lambda: self._set_tool_for_all("brush"))
+        rect_btn.clicked.connect(lambda: self._set_tool_for_all("rect"))
+        color_btn.clicked.connect(self._toggle_color_for_all)
+        clear_btn.clicked.connect(self._clear_current_page_overlay)
+
+        self.drawing_tools = panel
+
+    def _set_tool_for_all(self, tool: str):
+        for w in self.page_widgets:
+            try:
+                w.overlay.set_tool(tool)
+            except Exception:
+                pass
+
+    def _toggle_color_for_all(self):
+        for w in self.page_widgets:
+            try:
+                cur = w.overlay.color
+                new = QColor(Qt.white) if cur == QColor(Qt.black) else QColor(Qt.black)
+                w.overlay.set_color(new)
+            except Exception:
+                pass
+
+    def _clear_current_page_overlay(self):
+        cur_page = self.get_current_page()
+        layout_idx = self.layout_index_for_original(cur_page)
+        if layout_idx is not None and 0 <= layout_idx < len(self.page_widgets):
+            try:
+                self.page_widgets[layout_idx].overlay.clear_annotations()
+            except Exception:
+                pass
+
+    def resizeEvent(self, ev):
+        super().resizeEvent(ev)
+        try:
+            if hasattr(self, "drawing_tools") and self.drawing_tools.isVisible():
+                vp = self.viewport()
+                x = max(8, vp.width() - self.drawing_tools.width() - 8)
+                y = 8
+                self.drawing_tools.move(x, y)
+        except Exception:
+            pass
 
     # ---------------- Fit helpers ----------------
     def fit_to_width(self):
