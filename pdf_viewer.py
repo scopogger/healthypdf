@@ -1102,16 +1102,100 @@ class PDFViewer(QScrollArea):
                     layout_idx = self.layout_index_for_original(orig_page_num)
                     if layout_idx is not None and 0 <= layout_idx < len(self.page_widgets):
                         pw = self.page_widgets[layout_idx]
-                        if pw.has_annotations():
-                            # export annotation PNG scaled to page size
-                            ann_bytes = pw.export_annotations_png(int(rect.width), int(rect.height))
-                            if ann_bytes:
-                                # insert annotation PNG on the same rect as overlay (overlay=True)
+                        # Prefer vector annotations if present
+                        try:
+                            # Vector path handling
+                            vec = {}
+                            try:
+                                vec = pw.overlay.get_vector_shapes()
+                            except Exception:
+                                vec = {"strokes": [], "rects": []}
+
+                            if vec and (vec.get("strokes") or vec.get("rects")):
+                                # draw each primitive into the PDF page as vector shapes
                                 try:
-                                    new_page.insert_image(rect, stream=ann_bytes, overlay=True)
+                                    shape = new_page.new_shape()
+                                    page_rect = rect  # src_page.rect mapped to new_page
+                                    # If the PageWidget has a base_pixmap, compute mapping factors
+                                    widget_w = pw.base_pixmap.width() if getattr(pw, "base_pixmap",
+                                                                                 None) is not None else pw.width() or 1
+                                    widget_h = pw.base_pixmap.height() if getattr(pw, "base_pixmap",
+                                                                                  None) is not None else pw.height() or 1
+                                    pdf_w = float(page_rect.width)
+                                    pdf_h = float(page_rect.height)
+
+                                    # draw strokes: points are normalized (0..1) in overlay
+                                    for s in vec.get("strokes", []):
+                                        pts = s.get("points", [])
+                                        if not pts or len(pts) < 2:
+                                            continue
+                                        stroke_color = s.get("color", (0, 0, 0))
+                                        stroke_width_px = float(s.get("width", 1))
+                                        # convert width px -> pdf units (use pdf_w/widget_w scale)
+                                        stroke_width = (stroke_width_px / max(1.0, widget_w)) * pdf_w
+
+                                        last_point = None
+                                        for nx, ny in pts:
+                                            x = nx * pdf_w
+                                            y = ny * pdf_h
+                                            if last_point is None:
+                                                last_point = (x, y)
+                                            else:
+                                                shape.draw_line(last_point, (x, y))
+                                                last_point = (x, y)
+
+                                        # finish this stroke with stroke_color and stroke_width
+                                        r, g, b = stroke_color
+                                        # map 0-255 -> 0..1
+                                        shape.finish(color=(r / 255.0, g / 255.0, b / 255.0), fill=None,
+                                                     width=stroke_width)
+                                        shape.commit()
+                                        # create a fresh shape object for next primitive
+                                        shape = new_page.new_shape()
+
+                                    # draw rects (filled)
+                                    for rdef in vec.get("rects", []):
+                                        x0, y0, x1, y1 = rdef.get("rect", (0, 0, 0, 0))
+                                        # normalized -> pdf coords
+                                        x_a = x0 * pdf_w
+                                        y_a = y0 * pdf_h
+                                        x_b = x1 * pdf_w
+                                        y_b = y1 * pdf_h
+                                        rcol = rdef.get("color", (0, 0, 0))
+                                        rr, rg, rb = rcol
+                                        shape.draw_rect(fitz.Rect(x_a, y_a, x_b, y_b))
+                                        shape.finish(color=(rr / 255.0, rg / 255.0, rb / 255.0),
+                                                     fill=(rr / 255.0, rg / 255.0, rb / 255.0), width=0)
+                                        shape.commit()
+                                        shape = new_page.new_shape()
+
+                                except Exception as e:
+                                    # fallback to raster overlay if vector commit fails
+                                    print(f"[PDFViewer] vector overlay commit failed for orig {orig_page_num}: {e}")
+                                    try:
+                                        ann_bytes = pw.export_annotations_png(int(page_rect.width),
+                                                                              int(page_rect.height))
+                                        if ann_bytes:
+                                            new_page.insert_image(page_rect, stream=ann_bytes, overlay=True)
+                                    except Exception:
+                                        pass
+
+                            else:
+                                # no vector shapes — fallback to PNG overlay if overlay has raster
+                                try:
+                                    ann_bytes = pw.export_annotations_png(int(rect.width), int(rect.height))
+                                    if ann_bytes:
+                                        new_page.insert_image(rect, stream=ann_bytes, overlay=True)
                                 except Exception:
-                                    # fallback: still continue without overlay
                                     pass
+                        except Exception:
+                            # if anything goes wrong, keep going (do not abort entire save)
+                            try:
+                                ann_bytes = pw.export_annotations_png(int(rect.width), int(rect.height))
+                                if ann_bytes:
+                                    new_page.insert_image(rect, stream=ann_bytes, overlay=True)
+                            except Exception:
+                                pass
 
             # Save (atomic replace if saving to original path)
             if save_path == self.doc_path:
