@@ -169,6 +169,8 @@ class PDFViewer(QScrollArea):
 
         # Caching/rendering
         self.page_cache = PageCache(max_size=3)
+        # per-original-page annotation storage (orig_page_num => PNG bytes)
+        self.page_annotations: Dict[int, bytes] = {}
         self.thread_pool = QThreadPool()
         self.thread_pool.setMaxThreadCount(1)  # Single thread to prevent memory spikes
 
@@ -313,16 +315,28 @@ class PDFViewer(QScrollArea):
         self.deleted_pages = set()
         self.page_rotations = {}
 
+        # Clear stored per-page annotation bytes
+        try:
+            self.page_annotations.clear()
+        except Exception:
+            self.page_annotations = {}
+
         # Clear page widgets
-        for widget in self.page_widgets:
-            widget.deleteLater()
-        self.page_widgets.clear()
+        for widget in getattr(self, "page_widgets", []):
+            try:
+                widget.deleteLater()
+            except Exception:
+                pass
+        self.page_widgets = []
 
         # Clear layout
         while self.pages_layout.count():
             item = self.pages_layout.takeAt(0)
             if item.widget():
-                item.widget().deleteLater()
+                try:
+                    item.widget().deleteLater()
+                except Exception:
+                    pass
 
         # Force garbage collection
         gc.collect()
@@ -493,11 +507,29 @@ class PDFViewer(QScrollArea):
         display_w = max(display_w, 200)
         display_h = max(display_h, 200)
 
-        # Clear base image and annotations
+        # Save overlay bytes if there are annotations (keep this behavior)
         try:
-            widget.clear_base()
+            orig = page_info.page_num
+            if hasattr(widget, "overlay") and widget.overlay.is_dirty():
+                # choose export size that matches current pixmap size if present
+                if getattr(widget, "base_pixmap", None) is not None:
+                    tw = widget.base_pixmap.width()
+                    th = widget.base_pixmap.height()
+                else:
+                    tw = max(1, widget.width())
+                    th = max(1, widget.height())
+                ann_bytes = widget.export_annotations_png(int(tw), int(th))
+                if ann_bytes:
+                    self.page_annotations[orig] = ann_bytes
         except Exception:
-            # legacy QLabel fallback
+            pass
+
+        # Clear base image and annotations WITHOUT emitting annotation_changed
+        try:
+            # pass emit=False to avoid triggering on_annotation_changed and heavy export work
+            widget.clear_base(emit=False)
+        except Exception:
+            # legacy QLabel fallback (shouldn't happen with PageWidget)
             try:
                 widget.clear()
             except Exception:
@@ -598,7 +630,7 @@ class PDFViewer(QScrollArea):
         self.zoom_level = zoom
         self.page_cache.clear()
 
-        # Update all widget sizes without rendering
+        # Update all widget sizes without rendering and avoid emitting annotation change signals
         for i, widget in enumerate(self.page_widgets):
             if i >= len(self.pages_info):
                 continue
@@ -608,16 +640,28 @@ class PDFViewer(QScrollArea):
             display_h = int(page_info.height * self.zoom_level)
             display_w = max(display_w, 200)
             display_h = max(display_h, 200)
-            widget.setFixedSize(display_w, display_h)
-            widget.clear()
 
-            # Use correct display page number
-            display_page_num = self.get_display_page_number(i)
-            widget.setText(f"Page {display_page_num}\nLoading...")
+            # Resize widget and clear base silently (don't emit annotation_changed)
+            try:
+                widget.setFixedSize(display_w, display_h)
+                # silent clear: emit=False
+                widget.clear_base(emit=False)
+            except Exception:
+                # fallback: try legacy clear (which also now defaults to silent)
+                try:
+                    widget.clear()
+                except Exception:
+                    pass
 
-            widget.setStyleSheet("""
-                QLabel { border: 2px solid #ddd; background-color: white; color: #666; font-size: 14px; margin: 5px; }
-            """)
+            # Use correct display page number and placeholder text
+            try:
+                display_page_num = self.get_display_page_number(i)
+                widget.setText(f"Page {display_page_num}\nLoading...")
+                widget.setStyleSheet("""
+                    QLabel { border: 2px solid #ddd; background-color: white; color: #666; font-size: 14px; margin: 5px; }
+                """)
+            except Exception:
+                pass
 
         gc.collect()
         QTimer.singleShot(150, self.update_visible_pages)
@@ -970,6 +1014,16 @@ class PDFViewer(QScrollArea):
                 new_doc.save(save_path)
                 new_doc.close()
 
+            # Remove stored annotation bytes for pages we saved (or just clear all for simplicity)
+            try:
+                # If we have a local page_order list used during save, we can delete per-page:
+                # for orig in page_order:
+                #     self.page_annotations.pop(orig, None)
+                # Simpler: clear all in-memory annotation bytes after successful save
+                self.page_annotations.clear()
+            except Exception:
+                self.page_annotations = {}
+
             # Reset modification state (we consider drawings saved)
             self.is_modified = False
             # After save, clear per-page overlay dirty flags
@@ -987,13 +1041,57 @@ class PDFViewer(QScrollArea):
             QMessageBox.critical(None, "Save Error", f"Failed to save PDF: {e}")
             return False
 
-    def on_annotation_changed(self):
-        """Called when any overlay emits a change (user drew something)."""
+    def on_annotation_changed(self, orig_page_num=None):
+        """
+        Slot called when an overlay signals a change.
+        Accepts either:
+          - orig_page_num (int) if connected with a lambda capturing it, or
+          - no args (Qt sender() used to find which overlay emitted).
+        Saves annotation PNG bytes into self.page_annotations and marks document modified.
+        """
         try:
+            # Determine which original page this update belongs to
+            layout_idx = None
+            if orig_page_num is None:
+                sender = self.sender()  # overlay widget that emitted
+                if sender is None:
+                    return
+                # find overlay owner
+                for idx, w in enumerate(self.page_widgets):
+                    if getattr(w, "overlay", None) is sender:
+                        layout_idx = idx
+                        orig_page_num = self.pages_info[idx].page_num
+                        break
+            else:
+                layout_idx = self.layout_index_for_original(orig_page_num)
+
+            if layout_idx is None or not (0 <= layout_idx < len(self.page_widgets)):
+                # nothing we can do
+                return
+
+            pw = self.page_widgets[layout_idx]
+
+            # choose export size: prefer base_pixmap (actual rendered page size), fallback to widget size
+            if getattr(pw, "base_pixmap", None) is not None:
+                tw = pw.base_pixmap.width()
+                th = pw.base_pixmap.height()
+            else:
+                tw = max(1, pw.width())
+                th = max(1, pw.height())
+
+            ann_bytes = pw.export_annotations_png(int(tw), int(th))
+            if ann_bytes:
+                self.page_annotations[orig_page_num] = ann_bytes
+
+            # mark as modified and notify UI
             self.is_modified = True
-            self.document_modified.emit(True)
-        except Exception:
-            pass
+            try:
+                self.document_modified.emit(True)
+            except Exception:
+                pass
+
+        except Exception as e:
+            print(f"[PDFViewer] on_annotation_changed error: {e}")
 
     def any_annotations_dirty(self) -> bool:
         """Return True if any page overlay has unsaved annotations."""

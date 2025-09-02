@@ -48,13 +48,23 @@ class DrawingOverlay(QWidget):
     def set_color(self, color: QColor):
         self.color = color
 
-    def clear_annotations(self):
+    def clear_annotations(self, emit: bool = True):
+        """
+        Clear the annotation pixmap. By default, emit annotation_changed so listeners
+        (e.g. viewer) treat this as a user change. When clearing programmatically
+        (zoom/derender), call with emit=False to avoid expensive export+save flows.
+        """
         if not self.annot_pixmap.isNull():
             self.annot_pixmap.fill(Qt.transparent)
             self._dirty = False
             self.update()
-            # notify cleared => changed state
-            self.annotation_changed.emit()
+            if emit:
+                # notify cleared => changed state (user-intended)
+                try:
+                    self.annotation_changed.emit()
+                except Exception:
+                    pass
+
 
     def is_dirty(self) -> bool:
         return self._dirty
@@ -148,7 +158,10 @@ class DrawingOverlay(QWidget):
 
 
 class PageWidget(QWidget):
-    """Container for a single page: base QLabel + DrawingOverlay on top."""
+    """Container for a single page: base QLabel + DrawingOverlay on top.
+    Also implements small compatibility shims (setText, text, setPixmap, clear)
+    so older code that treated widgets as QLabel won't explode.
+    """
     def __init__(self, width=200, height=200, parent=None):
         super().__init__(parent)
         self.setAttribute(Qt.WA_StyledBackground, True)
@@ -173,6 +186,7 @@ class PageWidget(QWidget):
         self.overlay.setFixedSize(sz)
         super().resizeEvent(ev)
 
+    # --- Primary API used by the new viewer ---
     def set_base_pixmap(self, pixmap: QPixmap):
         if pixmap is None or pixmap.isNull():
             return
@@ -182,14 +196,65 @@ class PageWidget(QWidget):
         self.overlay.setFixedSize(pixmap.size())
         self.overlay.update()
 
-    def clear_base(self):
-        self.base_label.clear()
+    def clear_base(self, emit: bool = True):
+        """Clear base image and overlay. emit controls whether overlay emits annotation_changed."""
+        try:
+            self.base_label.clear()
+        except Exception:
+            pass
         self.base_pixmap = None
-        # also clear overlay
-        self.overlay.clear_annotations()
+        # also clear overlay without emitting if requested
+        try:
+            self.overlay.clear_annotations(emit=emit)
+        except Exception:
+            pass
+
+    def clear(self):
+        """Legacy compatibility: clear base and annotations like old QLabel.clear()."""
+        # When legacy calls clear() from viewer code it's almost always a programmatic clear.
+        # Use emit=False so we don't trigger save/export flows during housekeeping.
+        self.clear_base(emit=False)
 
     def has_annotations(self) -> bool:
         return self.overlay.is_dirty()
 
     def export_annotations_png(self, target_width: int, target_height: int) -> bytes:
         return self.overlay.export_png_bytes(target_width, target_height)
+
+    def setText(self, text: str):
+        """Legacy QLabel.setText equivalent."""
+        self.base_label.setText(text)
+
+    def text(self) -> str:
+        return self.base_label.text()
+
+    def setPixmap(self, pixmap: QPixmap):
+        """Legacy QLabel.setPixmap -> use set_base_pixmap for consistent behavior."""
+        # Accept either QPixmap or bytes-like; try to handle QPixmap primarily
+        try:
+            if isinstance(pixmap, QPixmap):
+                self.set_base_pixmap(pixmap)
+            else:
+                # attempt to load from bytes
+                pm = QPixmap()
+                ok = pm.loadFromData(pixmap)
+                if ok and not pm.isNull():
+                    self.set_base_pixmap(pm)
+        except Exception:
+            # fallback to naive assignment on base_label if something weird is passed
+            try:
+                self.base_label.setPixmap(pixmap)
+            except Exception:
+                pass
+
+    def setStyleSheet(self, sheet: str):
+        """Apply style to both the container and the inner label (most code expects QLabel styles)."""
+        try:
+            QWidget.setStyleSheet(self, sheet)
+        except Exception:
+            pass
+        try:
+            self.base_label.setStyleSheet(sheet)
+        except Exception:
+            pass
+
