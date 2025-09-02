@@ -349,6 +349,44 @@ class PDFViewer(QScrollArea):
                 return idx
         return None
 
+    def save_widget_annotation(self, layout_index: int):
+        """
+        Export overlay PNG bytes for the widget at layout_index (if it has dirty annotations)
+        and store them into self.page_annotations keyed by ORIGINAL page number.
+        """
+        try:
+            if layout_index is None or layout_index < 0 or layout_index >= len(self.page_widgets):
+                print(f"[PDFViewer] save_widget_annotation: invalid layout_index {layout_index}")
+                return
+            widget = self.page_widgets[layout_index]
+            page_info = self.pages_info[layout_index]
+            orig = page_info.page_num
+
+            if not getattr(widget, "overlay", None):
+                print(f"[PDFViewer] save_widget_annotation: no overlay for layout {layout_index} orig {orig}")
+                return
+
+            if not widget.overlay.is_dirty():
+                print(f"[PDFViewer] save_widget_annotation: overlay not dirty for layout {layout_index} orig {orig}")
+                return
+
+            if getattr(widget, "base_pixmap", None) is not None:
+                tw = widget.base_pixmap.width()
+                th = widget.base_pixmap.height()
+            else:
+                tw = max(1, widget.width())
+                th = max(1, widget.height())
+
+            ann_bytes = widget.export_annotations_png(int(tw), int(th))
+            if ann_bytes:
+                self.page_annotations[orig] = ann_bytes
+                print(f"[PDFViewer] save_widget_annotation: saved for orig {orig} len={len(ann_bytes)}")
+            else:
+                print(f"[PDFViewer] save_widget_annotation: export returned empty for orig {orig}")
+        except Exception as e:
+            print(f"[PDFViewer] save_widget_annotation error for layout {layout_index}: {e}")
+
+
     def get_display_page_number(self, layout_index: int) -> int:
         """1-based display number for a layout index (skips deleted original page ids)"""
         if layout_index >= len(self.pages_info):
@@ -392,8 +430,10 @@ class PDFViewer(QScrollArea):
             page_widget.setProperty("orig_page_num", page_info.page_num)
 
             # connect overlay change signal so viewer knows document is modified
+            # use lambda with default arg to capture orig page id safely in loop
             try:
-                page_widget.overlay.annotation_changed.connect(self.on_annotation_changed)
+                page_widget.overlay.annotation_changed.connect(
+                    lambda orig=page_info.page_num: self.on_annotation_changed(orig))
             except Exception:
                 pass
 
@@ -561,12 +601,44 @@ class PDFViewer(QScrollArea):
         orig_page = self.pages_info[layout_index].page_num
         cached = self.page_cache.get(orig_page)
         if cached:
+            print(f"[PDFViewer] load_page_if_needed: using cache for orig {orig_page}")
             widget.set_base_pixmap(cached)
-            widget.setFixedSize(cached.size())
-            # style could be adjusted
+            try:
+                widget.setFixedSize(cached.size())
+            except Exception:
+                pass
+
+            # restore saved annotations (if any)
+            try:
+                ann_bytes = self.page_annotations.get(orig_page)
+                if ann_bytes:
+                    print(
+                        f"[PDFViewer] load_page_if_needed: restoring annotation from cache for orig {orig_page} len={len(ann_bytes)}")
+                    loaded = QPixmap()
+                    ok = loaded.loadFromData(ann_bytes)
+                    if ok and not loaded.isNull():
+                        try:
+                            target_sz = cached.size()
+                            scaled = loaded.scaled(target_sz, Qt.IgnoreAspectRatio, Qt.SmoothTransformation)
+                            widget.overlay.annot_pixmap = scaled
+                            widget.overlay._dirty = True
+                            widget.overlay.update()
+                            print(f"[PDFViewer] load_page_if_needed: restored overlay into widget for orig {orig_page}")
+                        except Exception as e:
+                            print(f"[PDFViewer] load_page_if_needed: restore scaled failed for orig {orig_page}: {e}")
+                            widget.overlay.annot_pixmap = loaded
+                            widget.overlay._dirty = True
+                            widget.overlay.update()
+                    else:
+                        print(f"[PDFViewer] load_page_if_needed: loadFromData failed for orig {orig_page}")
+            except Exception as e:
+                print(f"[PDFViewer] load_page_if_needed: restore error for orig {orig_page}: {e}")
+
             return
 
+        # not cached — do the normal render flow
         self.start_page_render(layout_index)
+
 
     def start_page_render(self, layout_index: int):
         with self.render_lock:
@@ -602,6 +674,7 @@ class PDFViewer(QScrollArea):
         # find current layout index for that original page
         layout_index = self.layout_index_for_original(orig_page_num)
         if layout_index is None:
+            print(f"[PDFViewer] on_page_rendered: layout_index None for orig {orig_page_num}")
             return
 
         # only set pixmap if still visible
@@ -611,26 +684,61 @@ class PDFViewer(QScrollArea):
             try:
                 widget.set_base_pixmap(pixmap)
                 widget.setFixedSize(pixmap.size())
-            except Exception:
+            except Exception as e:
+                print(f"[PDFViewer] on_page_rendered: set_base_pixmap failed for orig {orig_page_num}: {e}")
                 # fallback for legacy QLabel
                 try:
                     widget.setPixmap(pixmap)
                     widget.setFixedSize(pixmap.size())
-                except Exception:
+                except Exception as e2:
+                    print(f"[PDFViewer] on_page_rendered: fallback setPixmap failed for orig {orig_page_num}: {e2}")
                     pass
+
+            # restore saved annotations if any
+            try:
+                ann_bytes = self.page_annotations.get(orig_page_num)
+                if ann_bytes:
+                    print(
+                        f"[PDFViewer] on_page_rendered: restoring annotation for orig {orig_page_num} len={len(ann_bytes)}")
+                    loaded = QPixmap()
+                    ok = loaded.loadFromData(ann_bytes)
+                    if ok and not loaded.isNull():
+                        try:
+                            target_sz = pixmap.size()
+                            scaled = loaded.scaled(target_sz, Qt.IgnoreAspectRatio, Qt.SmoothTransformation)
+                            widget.overlay.annot_pixmap = scaled
+                            widget.overlay._dirty = True
+                            widget.overlay.update()
+                            print(
+                                f"[PDFViewer] on_page_rendered: restored overlay into widget for orig {orig_page_num}")
+                        except Exception as e:
+                            print(f"[PDFViewer] on_page_rendered: restore scaled failed for orig {orig_page_num}: {e}")
+                            widget.overlay.annot_pixmap = loaded
+                            widget.overlay._dirty = True
+                            widget.overlay.update()
+                    else:
+                        print(f"[PDFViewer] on_page_rendered: loadFromData failed for orig {orig_page_num}")
+            except Exception as e:
+                print(f"[PDFViewer] on_page_rendered: restore error for orig {orig_page_num}: {e}")
+
             widget.update()
 
+
     def set_zoom(self, zoom: float):
-        """Set zoom level and refresh"""
+        """Set zoom level and refresh. Save any page annotations before clearing widgets."""
         if not self.document or zoom == self.zoom_level:
             return
 
         print(f"Setting zoom to {zoom}")
+        # cancel pending renders (we'll re-render visible pages at new zoom)
         self.cancel_all_renders()
+
+        # update zoom and clear page cache
         self.zoom_level = zoom
         self.page_cache.clear()
 
-        # Update all widget sizes without rendering and avoid emitting annotation change signals
+        # For each widget: if it has dirty annotations -> export them first,
+        # then silently clear the base pixmap/overlay and resize the placeholder.
         for i, widget in enumerate(self.page_widgets):
             if i >= len(self.pages_info):
                 continue
@@ -641,19 +749,25 @@ class PDFViewer(QScrollArea):
             display_w = max(display_w, 200)
             display_h = max(display_h, 200)
 
-            # Resize widget and clear base silently (don't emit annotation_changed)
+            # Save annotations (if any) before we clear the base/overlay
+            try:
+                self.save_widget_annotation(i)
+            except Exception:
+                pass
+
+            # Resize/clear silently (emit=False so no annotation_changed triggered)
             try:
                 widget.setFixedSize(display_w, display_h)
-                # silent clear: emit=False
+                # use clear_base(emit=False) so we don't trigger heavy export flows
                 widget.clear_base(emit=False)
             except Exception:
-                # fallback: try legacy clear (which also now defaults to silent)
+                # fallback to legacy clear shim (also silent)
                 try:
                     widget.clear()
                 except Exception:
                     pass
 
-            # Use correct display page number and placeholder text
+            # Update placeholder text / style
             try:
                 display_page_num = self.get_display_page_number(i)
                 widget.setText(f"Page {display_page_num}\nLoading...")
@@ -663,6 +777,7 @@ class PDFViewer(QScrollArea):
             except Exception:
                 pass
 
+        # small delay then lazy-render visible pages at the new zoom
         gc.collect()
         QTimer.singleShot(150, self.update_visible_pages)
 
