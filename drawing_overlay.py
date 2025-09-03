@@ -210,6 +210,30 @@ class DrawingOverlay(QWidget):
         self.update()
         try:
             self.annotation_changed.emit()
+
+            # # optionally ask owning viewer to persist vectors immediately (if available)
+            # try:
+            #     parent_viewer = getattr(self.parent(), "parent", None)
+            #     # some hierarchy differences exist; just try walking up a bit
+            #     if parent_viewer is None:
+            #         parent_viewer = getattr(self.parent(), "parentWidget", None)
+            #     # attempt to retrieve PDFViewer instance (heuristic)
+            #     pv = None
+            #     if hasattr(self, "parent") and callable(getattr(self, "parent")):
+            #         p = self.parent()
+            #         # try p.parent() or p.parentWidget()
+            #         pv = getattr(p, "parent", lambda: None)()
+            #     if pv is not None and hasattr(pv, "_save_vector_immediate"):
+            #         # orig_page_num lookup via widget property
+            #         try:
+            #             orig = self.parent().property("orig_page_num")
+            #             if orig is not None:
+            #                 pv._save_vector_immediate(self.parent(), orig)
+            #         except Exception:
+            #             pass
+            # except Exception:
+            #     pass
+
         except Exception:
             pass
         ev.accept()

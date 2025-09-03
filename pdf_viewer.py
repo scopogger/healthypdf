@@ -151,6 +151,10 @@ class PDFViewer(QScrollArea):
 
         self._pending_center_index = None
         self._last_center_time = 0
+        # per-original-page annotation storage (orig_page_num => PNG bytes)
+        self.page_annotations = {}
+        # per-original-page vector storage (orig_page_num => {"strokes":[...], "rects":[...]})
+        self.page_vectors = {}
 
         print("Initializing PDFViewer")
 
@@ -321,6 +325,11 @@ class PDFViewer(QScrollArea):
         except Exception:
             self.page_annotations = {}
 
+        try:
+            self.page_vectors.clear()
+        except Exception:
+            self.page_vectors = {}
+
         # Clear page widgets
         for widget in getattr(self, "page_widgets", []):
             try:
@@ -351,60 +360,72 @@ class PDFViewer(QScrollArea):
 
     def _save_vector_immediate(self, widget, orig_page_num: int):
         """
-        Immediately grab vector shapes from widget.overlay and store into self.page_vectors.
-        Only *save* when there is actual vector content; DO NOT delete previously stored vectors
-        when the overlay reports empty (prevents accidental loss).
+        Immediately export the widget.overlay vector shapes and store them in self.page_vectors.
+        Defensive: create self.page_vectors if it doesn't exist to avoid AttributeError races.
         """
         try:
+            # ensure storage exists
+            if not hasattr(self, "page_vectors") or self.page_vectors is None:
+                self.page_vectors = {}
+
             if widget is None or not getattr(widget, "overlay", None):
-                print(f"[PDFViewer] _save_vector_immediate: missing widget/overlay for orig {orig_page_num}")
+                print(f"[PDFViewer] _save_vector_immediate: no widget/overlay for orig {orig_page_num}")
                 return
 
-            # Pull canonical vector shapes (normalized coords)
             try:
                 vec = widget.overlay.get_vector_shapes()
             except Exception as e:
                 print(f"[PDFViewer] _save_vector_immediate: get_vector_shapes failed for orig {orig_page_num}: {e}")
-                return
+                vec = {"strokes": [], "rects": []}
 
-            has_strokes = bool(vec.get("strokes"))
-            has_rects = bool(vec.get("rects"))
+            strokes = vec.get("strokes") or []
+            rects = vec.get("rects") or []
 
-            if has_strokes or has_rects:
-                # store a copy to avoid mutation races
-                self.page_vectors[orig_page_num] = {"strokes": list(vec.get("strokes")),
-                                                    "rects": list(vec.get("rects"))}
+            if (len(strokes) > 0) or (len(rects) > 0):
+                # store a shallow copy (safe enough)
+                self.page_vectors[orig_page_num] = {"strokes": list(strokes), "rects": list(rects)}
                 print(
-                    f"[PDFViewer] _save_vector_immediate: saved vector for orig {orig_page_num} strokes={len(self.page_vectors[orig_page_num]['strokes'])} rects={len(self.page_vectors[orig_page_num]['rects'])}")
+                    f"[PDFViewer] _save_vector_immediate: saved vector for orig {orig_page_num} strokes={len(strokes)} rects={len(rects)}")
             else:
-                # overlay is empty; do NOT delete existing stored vector automatically.
-                # This avoids accidental overwrites when clears/housekeeping call annotation_changed.
-                print(
-                    f"[PDFViewer] _save_vector_immediate: overlay empty for orig {orig_page_num}; leaving stored vector intact (if any)")
+                # no shapes => remove stored entry if present
+                if orig_page_num in self.page_vectors:
+                    self.page_vectors.pop(orig_page_num, None)
+                    print(f"[PDFViewer] _save_vector_immediate: removed stored vector for orig {orig_page_num} (empty)")
+
         except Exception as e:
             print(f"[PDFViewer] _save_vector_immediate error for orig {orig_page_num}: {e}")
 
     def save_widget_vector(self, layout_index: int):
-        """Export overlay vector shapes for widget at layout_index into self.page_vectors (keyed by orig page num)."""
+        """Save overlay vector shapes for widget at layout_index into self.page_vectors."""
         try:
+            if not hasattr(self, "page_vectors") or self.page_vectors is None:
+                self.page_vectors = {}
+
             if layout_index is None or layout_index < 0 or layout_index >= len(self.page_widgets):
                 return
             widget = self.page_widgets[layout_index]
             page_info = self.pages_info[layout_index]
             orig = page_info.page_num
+
             if not getattr(widget, "overlay", None):
                 return
+
             try:
                 vec = widget.overlay.get_vector_shapes()
-            except Exception:
+            except Exception as e:
+                print(
+                    f"[PDFViewer] save_widget_vector: get_vector_shapes failed for layout {layout_index} orig {orig}: {e}")
                 vec = {"strokes": [], "rects": []}
-            if (vec.get("strokes") and len(vec.get("strokes")) > 0) or (vec.get("rects") and len(vec.get("rects")) > 0):
-                self.page_vectors[orig] = {"strokes": list(vec.get("strokes")), "rects": list(vec.get("rects"))}
+
+            strokes = vec.get("strokes") or []
+            rects = vec.get("rects") or []
+
+            if (len(strokes) > 0) or (len(rects) > 0):
+                self.page_vectors[orig] = {"strokes": list(strokes), "rects": list(rects)}
                 print(f"[PDFViewer] save_widget_vector: saved for layout {layout_index} orig {orig}")
             else:
-                # remove stored if overlay empty
                 if orig in self.page_vectors:
-                    del self.page_vectors[orig]
+                    self.page_vectors.pop(orig, None)
                     print(f"[PDFViewer] save_widget_vector: removed stored vector for orig {orig} (empty)")
         except Exception as e:
             print(f"[PDFViewer] save_widget_vector error for layout {layout_index}: {e}")
@@ -652,7 +673,7 @@ class PDFViewer(QScrollArea):
             pass
 
     def load_page_if_needed(self, layout_index: int):
-        if layout_index >= len(self.page_widgets):
+        if layout_index >= len(self.page_widgets) or layout_index >= len(self.pages_info):
             return
 
         widget = self.page_widgets[layout_index]
@@ -664,59 +685,45 @@ class PDFViewer(QScrollArea):
         cached = self.page_cache.get(orig_page)
         if cached:
             print(f"[PDFViewer] load_page_if_needed: using cache for orig {orig_page}")
-            widget.set_base_pixmap(cached)
             try:
+                widget.set_base_pixmap(cached)
                 widget.setFixedSize(cached.size())
             except Exception:
-                pass
-
-            if cached:
-                # set from cache
-                widget.set_base_pixmap(cached)
+                # fallback: try setPixmap if PageWidget shim doesn't accept it
                 try:
+                    widget.setPixmap(cached)
                     widget.setFixedSize(cached.size())
                 except Exception:
                     pass
 
-                # restore saved VECTOR annotations (if any)
+            # Try to restore vectors first; if not present, try raster restore
+            restored = False
+            try:
+                restored = self._restore_vectors_for_widget(widget, orig_page)
+            except Exception:
+                restored = False
+
+            if not restored:
                 try:
-                    vec = self.page_vectors.get(orig_page)
-                    if vec:
-                        try:
-                            widget.overlay.strokes = list(vec.get("strokes", []))
-                            widget.overlay.rects = list(vec.get("rects", []))
-                            widget.overlay._dirty = True
-                            widget.overlay.update()
-                            print(f"[PDFViewer] load_page_if_needed: restored VECTOR overlay for orig {orig_page}")
-                        except Exception as e:
-                            print(
-                                f"[PDFViewer] load_page_if_needed: failed to restore vector for orig {orig_page}: {e}")
-                    else:
-                        # fallback: try raster restore if exists
-                        ann_bytes = self.page_annotations.get(orig_page)
-                        if ann_bytes:
-                            loaded = QPixmap()
-                            ok = loaded.loadFromData(ann_bytes)
-                            if ok and not loaded.isNull():
-                                try:
-                                    target_sz = cached.size()
-                                    scaled = loaded.scaled(target_sz, Qt.IgnoreAspectRatio, Qt.SmoothTransformation)
-                                    widget.overlay.annot_pixmap = scaled
-                                    widget.overlay._dirty = True
-                                    widget.overlay.update()
-                                    print(
-                                        f"[PDFViewer] load_page_if_needed: restored RASTER overlay for orig {orig_page}")
-                                except Exception as e:
-                                    print(
-                                        f"[PDFViewer] load_page_if_needed: raster restore failed for orig {orig_page}: {e}")
+                    ann_bytes = self.page_annotations.get(orig_page)
+                    if ann_bytes:
+                        loaded = QPixmap()
+                        ok = loaded.loadFromData(ann_bytes)
+                        if ok and not loaded.isNull():
+                            target_sz = cached.size()
+                            scaled = loaded.scaled(target_sz, Qt.IgnoreAspectRatio, Qt.SmoothTransformation)
+                            if getattr(widget, "overlay", None):
+                                widget.overlay.annot_pixmap = scaled
+                                widget.overlay._dirty = True
+                                widget.overlay.update()
+                            print(f"[PDFViewer] load_page_if_needed: restored RASTER overlay for orig {orig_page}")
                 except Exception as e:
-                    print(f"[PDFViewer] load_page_if_needed: restore error for orig {orig_page}: {e}")
+                    print(f"[PDFViewer] load_page_if_needed: raster restore error for orig {orig_page}: {e}")
 
             return
 
         # not cached — do the normal render flow
         self.start_page_render(layout_index)
-
 
     def start_page_render(self, layout_index: int):
         with self.render_lock:
@@ -770,42 +777,32 @@ class PDFViewer(QScrollArea):
                     widget.setFixedSize(pixmap.size())
                 except Exception as e2:
                     print(f"[PDFViewer] on_page_rendered: fallback setPixmap failed for orig {orig_page_num}: {e2}")
-                    pass
 
-            # restore saved VECTOR annotations if any
+            # Try to restore vectors first; if not present, try raster restore
+            restored = False
             try:
-                vec = self.page_vectors.get(orig_page_num)
-                if vec:
-                    try:
-                        widget.overlay.strokes = list(vec.get("strokes", []))
-                        widget.overlay.rects = list(vec.get("rects", []))
-                        widget.overlay._dirty = True
-                        widget.overlay.update()
-                        print(f"[PDFViewer] on_page_rendered: restored VECTOR overlay for orig {orig_page_num}")
-                    except Exception as e:
-                        print(f"[PDFViewer] on_page_rendered: failed to restore vector for orig {orig_page_num}: {e}")
-                else:
-                    # fallback to raster restore if present
+                restored = self._restore_vectors_for_widget(widget, orig_page_num)
+            except Exception:
+                restored = False
+
+            if not restored:
+                try:
                     ann_bytes = self.page_annotations.get(orig_page_num)
                     if ann_bytes:
                         loaded = QPixmap()
                         ok = loaded.loadFromData(ann_bytes)
                         if ok and not loaded.isNull():
-                            try:
-                                target_sz = pixmap.size()
-                                scaled = loaded.scaled(target_sz, Qt.IgnoreAspectRatio, Qt.SmoothTransformation)
+                            target_sz = pixmap.size()
+                            scaled = loaded.scaled(target_sz, Qt.IgnoreAspectRatio, Qt.SmoothTransformation)
+                            if getattr(widget, "overlay", None):
                                 widget.overlay.annot_pixmap = scaled
                                 widget.overlay._dirty = True
                                 widget.overlay.update()
-                                print(f"[PDFViewer] on_page_rendered: restored RASTER overlay for orig {orig_page_num}")
-                            except Exception as e:
-                                print(
-                                    f"[PDFViewer] on_page_rendered: raster restore failed for orig {orig_page_num}: {e}")
-            except Exception as e:
-                print(f"[PDFViewer] on_page_rendered: restore error for orig {orig_page_num}: {e}")
+                            print(f"[PDFViewer] on_page_rendered: restored RASTER overlay for orig {orig_page_num}")
+                except Exception as e:
+                    print(f"[PDFViewer] on_page_rendered: raster restore error for orig {orig_page_num}: {e}")
 
             widget.update()
-
 
     def set_zoom(self, zoom: float):
         """Set zoom level and refresh. Save any page annotations before clearing widgets."""
@@ -888,6 +885,35 @@ class PDFViewer(QScrollArea):
                 min_distance = distance
                 current_layout_idx = i
         return self.pages_info[current_layout_idx].page_num
+
+    def _restore_vectors_for_widget(self, widget, orig_page):
+        """
+        Restore vector primitives from self.page_vectors (if present) into widget.overlay.
+        Returns True if restored, False otherwise.
+        Defensive: checks attributes, logs on failure.
+        """
+        try:
+            if widget is None or not getattr(widget, "overlay", None):
+                return False
+            if not hasattr(self, "page_vectors") or self.page_vectors is None:
+                return False
+            vec = self.page_vectors.get(orig_page)
+            if not vec:
+                return False
+
+            try:
+                widget.overlay.strokes = list(vec.get("strokes", []))
+                widget.overlay.rects = list(vec.get("rects", []))
+                widget.overlay._dirty = True
+                widget.overlay.update()
+                print(f"[PDFViewer] _restore_vectors_for_widget: restored VECTOR for orig {orig_page}")
+                return True
+            except Exception as e:
+                print(f"[PDFViewer] _restore_vectors_for_widget: apply failed for orig {orig_page}: {e}")
+                return False
+        except Exception as e:
+            print(f"[PDFViewer] _restore_vectors_for_widget error for orig {orig_page}: {e}")
+            return False
 
     def get_visible_page_count(self) -> int:
         count = 0
