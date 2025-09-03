@@ -58,6 +58,7 @@ class UiMainWindow(object):
         self.menuHelp = None
         self.menuView = None
         self.menuFile = None
+        self.menuOpenRecent = None  # New submenu for recent files
         self.menuRotation = None
         self.menuNavigation = None
         self.menuZoom = None
@@ -403,6 +404,11 @@ class UiMainWindow(object):
         self.actionAbout = QAction(main_window)
         self.actionAbout.setObjectName("actionAbout")
 
+        # Recent files management actions
+        self.actionClearRecentFiles = QAction(main_window)
+        self.actionClearRecentFiles.setObjectName("actionClearRecentFiles")
+        self.actionClearRecentFiles.setText("Clear recent files")
+
     def define_menus_ui(self, main_window):
         """Create menu bar and menus"""
         self.menuBar = QMenuBar(main_window)
@@ -430,6 +436,10 @@ class UiMainWindow(object):
         self.menuBar.addAction(self.menuEdit.menuAction())
         self.menuBar.addAction(self.menuHelp.menuAction())
 
+        # Create recent files submenu
+        self.menuOpenRecent = QMenu("Open recent...", self.menuFile)
+        self.menuOpenRecent.setObjectName("menuOpenRecent")
+
         # Add submenus to View menu
         self.menuRotation = QMenu("Rotation", self.menuView)
         self.menuView.addMenu(self.menuRotation)
@@ -444,6 +454,8 @@ class UiMainWindow(object):
         """Connect menu actions"""
         # File menu
         self.menuFile.addAction(self.actionOpen)
+        self.menuFile.addMenu(self.menuOpenRecent)  # Add recent files submenu after Open
+        self.menuFile.addSeparator()
         self.menuFile.addAction(self.actionSave)
         self.menuFile.addAction(self.actionSaveAs)
         self.menuFile.addAction(self.actionClosePdf)
@@ -571,6 +583,7 @@ class UiMainWindow(object):
         """Setup icons for actions"""
         # Set icons for submenus
         try:
+            self.menuOpenRecent.setIcon(QIcon(f":/{theme}/open_file.png"))
             self.menuRotation.setIcon(QIcon(f":/{theme}/rotate_temp_clockwise.png"))
             self.menuNavigation.setIcon(QIcon(f":/{theme}/jump_to_first.png"))
             self.menuZoom.setIcon(QIcon(f":/{theme}/zoom_in.png"))
@@ -592,6 +605,7 @@ class UiMainWindow(object):
             self.actionSave_Page_As_Image: "image_download.png",
             self.actionPasswordDoc: "password_doc.png",
             self.actionEnumeratePages: "enumerate_pages.png",
+            self.actionClearRecentFiles: "delete_pages.png",
 
             # View actions
             self.actionToggle_Panel: "pages.png",
