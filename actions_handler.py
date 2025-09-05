@@ -246,8 +246,8 @@ class ActionsHandler:
     def clear_recent_files(self):
         reply = QMessageBox.question(
             self.main_window,
-            "Clear Recent Files",
-            "Clear all recent files?",
+            "Удалить недавние",
+            "Очистить список недавних файлов?",
             QMessageBox.Yes | QMessageBox.No,
             QMessageBox.No,
         )
@@ -658,15 +658,15 @@ class ActionsHandler:
             QMessageBox.warning(self.main_window, "Cannot Delete Page", "Cannot delete the last remaining page.")
             return
 
-        reply = QMessageBox.question(
-            self.main_window,
-            "Delete Page",
-            "Are you sure you want to delete the current page?",
-            QMessageBox.Yes | QMessageBox.No,
-            QMessageBox.No,
-        )
-        if reply != QMessageBox.Yes:
-            return
+        # reply = QMessageBox.question(
+        #     self.main_window,
+        #     "Delete Page",
+        #     "Are you sure you want to delete the current page?",
+        #     QMessageBox.Yes | QMessageBox.No,
+        #     QMessageBox.No,
+        # )
+        # if reply != QMessageBox.Yes:
+        #     return
 
         if hasattr(pv, 'get_current_page'):
             current_page = pv.get_current_page()

@@ -437,7 +437,7 @@ class UiMainWindow(object):
         self.menuBar.addAction(self.menuHelp.menuAction())
 
         # Create recent files submenu
-        self.menuOpenRecent = QMenu("Open recent...", self.menuFile)
+        self.menuOpenRecent = QMenu("Открыть недавние файлы...", self.menuFile)
         self.menuOpenRecent.setObjectName("menuOpenRecent")
 
         # Add submenus to View menu
