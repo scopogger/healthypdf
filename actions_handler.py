@@ -72,6 +72,8 @@ class ActionsHandler:
             self.ui.actionClosePdf.triggered.connect(self.close_file)
         if hasattr(self.ui, 'actionQuit'):
             self.ui.actionQuit.triggered.connect(self.main_window.close)
+        if hasattr(self.ui, 'actionAddFile'):
+            self.ui.actionAddFile.triggered.connect(self.append_document)
 
     def connect_navigation_actions(self):
         """Connect navigation actions"""

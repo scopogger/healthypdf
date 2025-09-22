@@ -610,7 +610,8 @@ class MainWindow(QMainWindow):
         if urls:
             file_path = urls[0].toLocalFile()
             if file_path.lower().endswith('.pdf'):
-                self.load_document(file_path)
+                self.ui.pdfView.open_document(file_path)
+                self.ui.thumbnailList.set_document(self.ui.pdfView.document, file_path, self.ui.pdfView.document_password)
 
     def closeEvent(self, event):
         """Handle application close event"""
