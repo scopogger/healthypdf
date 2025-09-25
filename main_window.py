@@ -203,31 +203,29 @@ class MainWindow(QMainWindow):
         # Check if we have a stored password for this file
         stored_password = settings_manager.get_encryption_password(file_path)
 
-        # Use the PDF viewer's optimized loading
         success = False
         if hasattr(self.ui.pdfView, 'open_document'):
             print("Attempting to open document with PDF viewer")
             success = self.ui.pdfView.open_document(file_path)
             print(f"PDF viewer open result: {success}")
 
-            # If loading failed due to encryption, try with stored password
+            # Если не удалось открыть, а пароль сохранён — попробуем снова
             if not success and stored_password:
                 print("Retrying with stored password")
-                # Try to authenticate with stored password
                 try:
                     import fitz
                     test_doc = fitz.open(file_path)
                     if test_doc.is_encrypted and test_doc.authenticate(stored_password):
                         test_doc.close()
+                        # сохраним пароль в pdfView перед повторным открытием
+                        self.ui.pdfView.document_password = stored_password
                         success = self.ui.pdfView.open_document(file_path)
                     else:
                         test_doc.close()
-                        # Remove invalid stored password
                         settings_manager.remove_encryption_password(file_path)
                 except Exception as e:
                     print(f"Password retry failed: {e}")
 
-            # If still failed and document is encrypted, ask for password
             if not success:
                 print("Document loading failed, checking if encrypted")
                 success = self.handle_encrypted_document(file_path)
@@ -241,24 +239,22 @@ class MainWindow(QMainWindow):
             filename = os.path.basename(file_path)
             self.setWindowTitle(f"PDF Editor - {filename}")
 
-            # Update thumbnail widget
             if hasattr(self.ui.thumbnailList, 'set_document'):
                 self.ui.thumbnailList.set_document(
                     getattr(self.ui.pdfView, 'document', None),
-                    file_path
+                    file_path,
+                    getattr(self.ui.pdfView, 'document_password', None)  # ← добавлено
                 )
 
-            # Ensure viewer starts at top of layout (layout index 0) and refresh thumbnails' order
             try:
-                # go to first layout position (if method exists)
                 if hasattr(self.ui.pdfView, 'go_to_page'):
                     self.ui.pdfView.go_to_page(0)
-                # compute visible_order (list of ORIGINAL page ids) and send to thumbnails
                 if hasattr(self.ui.pdfView, 'pages_info') and hasattr(self.ui.thumbnailList, 'set_display_order'):
-                    visible_order = [info.page_num for info in self.ui.pdfView.pages_info
-                                     if info.page_num not in getattr(self.ui.pdfView, 'deleted_pages', set())]
+                    visible_order = [
+                        info.page_num for info in self.ui.pdfView.pages_info
+                        if info.page_num not in getattr(self.ui.pdfView, 'deleted_pages', set())
+                    ]
                     self.ui.thumbnailList.set_display_order(visible_order)
-                    # highlight current page
                     cur_orig = self.ui.pdfView.get_current_page()
                     self.ui.thumbnailList.set_current_page(cur_orig)
             except Exception:
@@ -268,7 +264,6 @@ class MainWindow(QMainWindow):
             self.update_ui_state()
             self.update_page_info()
 
-            # Add to recent files
             settings_manager.add_recent_file(file_path)
             if hasattr(self.actions_handler, 'update_recent_files_menu'):
                 self.actions_handler.update_recent_files_menu()
@@ -610,8 +605,7 @@ class MainWindow(QMainWindow):
         if urls:
             file_path = urls[0].toLocalFile()
             if file_path.lower().endswith('.pdf'):
-                self.ui.pdfView.open_document(file_path)
-                self.ui.thumbnailList.set_document(self.ui.pdfView.document, file_path, self.ui.pdfView.document_password)
+                self.load_document(file_path)
 
     def closeEvent(self, event):
         """Handle application close event"""

@@ -1,9 +1,11 @@
 import os
+import shutil
+import tempfile
 from typing import List, Optional
 
 # PySide6
 from PySide6.QtWidgets import (
-    QFileDialog, QMessageBox, QProgressDialog, QApplication
+    QFileDialog, QMessageBox, QProgressDialog, QApplication, QInputDialog, QLineEdit
 )
 from PySide6.QtCore import Qt
 from PySide6.QtGui import QAction, QPainter, QImage
@@ -72,8 +74,10 @@ class ActionsHandler:
             self.ui.actionClosePdf.triggered.connect(self.close_file)
         if hasattr(self.ui, 'actionQuit'):
             self.ui.actionQuit.triggered.connect(self.main_window.close)
+        if hasattr(self.ui, 'actionPasswordDoc'):
+            self.ui.actionPasswordDoc.triggered.connect(self.toggle_password_for_current_document)
         if hasattr(self.ui, 'actionAddFile'):
-            self.ui.actionAddFile.triggered.connect(self.append_document)
+            self.ui.actionAddFile.triggered.connect(self.add_file_to_document)
 
     def connect_navigation_actions(self):
         """Connect navigation actions"""
@@ -128,6 +132,230 @@ class ActionsHandler:
         """Connect printing actions"""
         if hasattr(self.ui, 'actionPrint'):
             self.ui.actionPrint.triggered.connect(self.print_document)
+
+    def toggle_password_for_current_document(self):
+        """If current document has password -> ask to remove, else ask to set a new password."""
+        pv = getattr(self.ui, 'pdfView', None)
+        if not pv or not getattr(pv, 'doc_path', None):
+            messagebox_info(self.main_window, "Внимание", "Сначала откройте документ.")
+            return
+
+        doc_path = pv.doc_path
+        current_pw = getattr(pv, 'document_password', "") or ""
+
+        if current_pw:
+            # Есть пароль — предложить удалить
+            reply = QMessageBox.question(
+                self.main_window,
+                "Удалить пароль",
+                "Документ защищён паролем. Удалить пароль (разблокировать файл)?",
+                QMessageBox.Yes | QMessageBox.No,
+                QMessageBox.No
+            )
+            if reply == QMessageBox.Yes:
+                ok = self._remove_password_for_file(doc_path, current_pw)
+                if ok:
+                    settings_manager.remove_encryption_password(doc_path)
+                    messagebox_info(self.main_window, "Готово", "Пароль удалён и документ перезагружен.")
+                    # Перезагружаем документ в UI (viewer + thumbnails)
+                    try:
+                        self.main_window.load_document(doc_path)
+                    except Exception:
+                        pass
+                else:
+                    QMessageBox.critical(self.main_window, "Ошибка",
+                                         "Не удалось удалить пароль. Проверьте текущий пароль.")
+        else:
+            # Нет пароля — предложить задать
+            pw, ok = QInputDialog.getText(self.main_window, "Установить пароль", "Введите новый пароль:",
+                                          QLineEdit.Password)
+            if not ok or not pw:
+                return
+            pw2, ok2 = QInputDialog.getText(self.main_window, "Подтверждение пароля", "Повторите пароль:",
+                                            QLineEdit.Password)
+            if not ok2 or pw != pw2:
+                QMessageBox.warning(self.main_window, "Ошибка", "Пароли не совпадают или пустые.")
+                return
+
+            success = self._set_password_for_file(doc_path, pw, current_password_hint=current_pw)
+            if success:
+                # Пометить (опционально) в настройках
+                try:
+                    settings_manager.save_encryption_password(doc_path, pw)
+                except Exception:
+                    pass
+                messagebox_info(self.main_window, "Готово", "Пароль установлен и документ перезагружен.")
+                try:
+                    self.main_window.load_document(doc_path)
+                except Exception:
+                    pass
+            else:
+                QMessageBox.critical(self.main_window, "Ошибка", "Не удалось установить пароль для файла.")
+
+    def _set_password_for_file(self, file_path: str, new_password: str, current_password_hint: str = "") -> bool:
+        """Save a password-protected copy over the original file.
+        Strategy: open original with PyMuPDF (authenticate if needed), save to temp with encryption, replace file.
+        """
+        if fitz is None:
+            QMessageBox.critical(self.main_window, "Ошибка", "PyMuPDF (fitz) не установлен — операция недоступна.")
+            return False
+
+        try:
+            doc = fitz.open(file_path)
+            if doc.needs_pass and current_password_hint:
+                if not doc.authenticate(current_password_hint):
+                    doc.close()
+                    return False
+
+            # Save to temp file with AES-256 encryption (owner & user same for simplicity)
+            fd, tmp_path = tempfile.mkstemp(suffix=".pdf")
+            os.close(fd)
+            try:
+                # PyMuPDF encryption constants: fitz.PDF_ENCRYPT_AES_256
+                # Use owner_pw and user_pw parameters.
+                doc.save(tmp_path, encryption=fitz.PDF_ENCRYPT_AES_256, owner_pw=new_password, user_pw=new_password)
+            except TypeError:
+                # Older PyMuPDF signature fallback
+                try:
+                    doc.save(tmp_path, encryption=fitz.PDF_ENCRYPT_AES_256)
+                    # If API doesn't accept owner_pw/user_pw, we can't set password reliably
+                    doc.close()
+                    return False
+                except Exception as e:
+                    doc.close()
+                    print("save encryption failed:", e)
+                    return False
+            finally:
+                doc.close()
+
+            # Replace original with temp (atomic)
+            shutil.move(tmp_path, file_path)
+            return True
+
+        except Exception as e:
+            print(f"_set_password_for_file error: {e}")
+            return False
+
+    def _remove_password_for_file(self, file_path: str, current_password: str) -> bool:
+        """Remove password by opening and saving plain copy, then replacing original."""
+        if fitz is None:
+            QMessageBox.critical(self.main_window, "Ошибка", "PyMuPDF (fitz) не установлен — операция недоступна.")
+            return False
+
+        try:
+            doc = fitz.open(file_path)
+            if doc.needs_pass:
+                if not doc.authenticate(current_password):
+                    doc.close()
+                    return False
+
+            fd, tmp_path = tempfile.mkstemp(suffix=".pdf")
+            os.close(fd)
+            try:
+                # Save without encryption
+                doc.save(tmp_path)
+            finally:
+                doc.close()
+
+            shutil.move(tmp_path, file_path)
+            return True
+
+        except Exception as e:
+            print(f"_remove_password_for_file error: {e}")
+            return False
+
+    def add_file_to_document(self):
+        """Append or insert another PDF into the current document."""
+        pv = getattr(self.ui, 'pdfView', None)
+        if not pv or not getattr(pv, 'document', None):
+            QMessageBox.warning(self.main_window, "Нет документа", "Сначала откройте PDF документ.")
+            return
+
+        # Выбор нового файла
+        file_path, _ = QFileDialog.getOpenFileName(
+            self.main_window,
+            "Выберите PDF для вставки",
+            "",
+            "PDF Files (*.pdf)"
+        )
+        if not file_path:
+            return
+
+        try:
+            import fitz
+            new_doc = fitz.open(file_path)
+        except Exception as e:
+            QMessageBox.critical(self.main_window, "Ошибка", f"Не удалось открыть файл:\n{e}")
+            return
+
+        cur_doc = pv.document
+        page_count = cur_doc.page_count
+
+        # Спросим у пользователя индекс вставки
+        insert_at, ok = QInputDialog.getInt(
+            self.main_window,
+            "Куда вставить?",
+            f"Введите номер страницы (0…{page_count}) перед которой вставить новый файл.\n"
+            f"0 = в начало, {page_count} = в конец.",
+            value=page_count  # по умолчанию вставка в конец
+        )
+        if not ok:
+            new_doc.close()
+            return
+
+        if insert_at < 0:
+            insert_at = 0
+        if insert_at > page_count:
+            insert_at = page_count
+
+        try:
+            try:
+                # Новая сигнатура (>=1.18)
+                cur_doc.insert_pdf(new_doc, start=0, end=new_doc.page_count - 1, to_page=insert_at)
+            except TypeError:
+                # Старая сигнатура (<1.18)
+                cur_doc.insert_pdf(new_doc, from_page=0, to_page=new_doc.page_count - 1, start_at=insert_at)
+
+            new_doc.close()
+
+            # Обновим viewer (создаст новый self.document внутри pdfView)
+            pv.reload_document_after_edit()
+
+            # Теперь берём обновлённый document из pdfView
+            if hasattr(self.ui, 'thumbnailList'):
+                self.ui.thumbnailList.set_document(
+                    pv.document,
+                    pv.doc_path,
+                    getattr(pv, 'document_password', None)
+                )
+
+            self.main_window.is_document_modified = True
+            self.main_window.update_ui_state()
+            self.main_window.update_page_info()
+
+            QMessageBox.information(self.main_window, "Готово", f"Файл вставлен на позицию {insert_at}.")
+            # Обновим viewer (создаст новый self.document внутри pdfView)
+            if pv.reload_document_after_edit():
+                if hasattr(self.ui, 'thumbnailList'):
+                    self.ui.thumbnailList.set_document(
+                        pv.document,
+                        pv.doc_path,
+                        getattr(pv, 'document_password', None)
+                    )
+
+                self.main_window.is_document_modified = True
+                self.main_window.update_ui_state()
+                self.main_window.update_page_info()
+                QMessageBox.information(self.main_window, "Готово", f"Файл вставлен на позицию {insert_at}.")
+            else:
+                QMessageBox.critical(self.main_window, "Ошибка", "Не удалось перезагрузить документ после вставки.")
+
+        except Exception as e:
+            try:
+                new_doc.close()
+            except Exception:
+                pass
+            QMessageBox.critical(self.main_window, "Ошибка вставки", f"{e}")
 
     # -----------------------------
     # Helpers for page visibility/order (compatible with old & new viewers)

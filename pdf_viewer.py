@@ -8,7 +8,7 @@ from collections import OrderedDict
 from drawing_overlay import PageWidget
 
 from PySide6.QtWidgets import (
-    QScrollArea, QVBoxLayout, QWidget, QLabel, QMessageBox, QInputDialog, QFrame, QPushButton
+    QScrollArea, QVBoxLayout, QWidget, QLabel, QMessageBox, QInputDialog, QFrame, QPushButton, QLineEdit
 )
 from PySide6.QtCore import (
     Qt, QRunnable, QThreadPool, QTimer, Signal
@@ -214,7 +214,7 @@ class PDFViewer(QScrollArea):
             temp_doc = fitz.open(file_path)
 
             if temp_doc.needs_pass:
-                password, ok = QInputDialog.getText(self, "Password Required", f"File {os.path.basename(file_path)} is password protected.\nEnter password:", QInputDialog.Password)
+                password, ok = QInputDialog.getText(self, "Password Required", f"File {os.path.basename(file_path)} is password protected.\nEnter password:", QLineEdit.Password)
                 if ok and password:
                     if temp_doc.authenticate(password):
                         temp_doc.close()
@@ -357,6 +357,21 @@ class PDFViewer(QScrollArea):
             if info.page_num == orig_page_num:
                 return idx
         return None
+
+    def reload_document_after_edit(self):
+        """Refresh viewer widgets after the underlying fitz.Document was modified."""
+        if not getattr(self, "doc_path", None):
+            print("reload_document_after_edit: no doc_path set")
+            return False
+
+        # Temporarily store the document path
+        temp_doc_path = self.doc_path
+
+        self.close_document()
+
+        # Restore the document path before reopening
+        self.doc_path = temp_doc_path
+        return self.open_document(self.doc_path)
 
     def _save_vector_immediate(self, widget, orig_page_num: int):
         """
