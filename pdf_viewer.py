@@ -364,14 +364,25 @@ class PDFViewer(QScrollArea):
             print("reload_document_after_edit: no doc_path set")
             return False
 
-        # Temporarily store the document path
-        temp_doc_path = self.doc_path
-
         self.close_document()
-
-        # Restore the document path before reopening
-        self.doc_path = temp_doc_path
         return self.open_document(self.doc_path)
+
+    def rebuild_after_append(self):
+        """Rebuild internal UI after appending pages to the document without closing it."""
+        if not self.document:
+            return
+        self.page_count = self.document.page_count
+        print(f"[PDFViewer] rebuild_after_append: document now has {self.page_count} pages")
+        # Очистим кэш и пересоздадим плейсхолдеры
+        self.page_cache.clear()
+        for i in reversed(range(self.scroll_layout.count())):
+            w = self.scroll_layout.itemAt(i).widget()
+            if w:
+                w.setParent(None)
+        self.page_widgets.clear()
+
+        self.create_page_placeholders()
+        self.update_visible_pages()
 
     def _save_vector_immediate(self, widget, orig_page_num: int):
         """

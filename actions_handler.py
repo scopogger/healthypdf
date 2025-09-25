@@ -265,16 +265,16 @@ class ActionsHandler:
             return False
 
     def add_file_to_document(self):
-        """Append or insert another PDF into the current document."""
+        """Append another PDF to the current document and display the merged result"""
         pv = getattr(self.ui, 'pdfView', None)
         if not pv or not getattr(pv, 'document', None):
-            QMessageBox.warning(self.main_window, "Нет документа", "Сначала откройте PDF документ.")
+            QMessageBox.warning(self.main_window, "No Document", "Please open a PDF document first.")
             return
 
-        # Выбор нового файла
+        # Select file to merge
         file_path, _ = QFileDialog.getOpenFileName(
             self.main_window,
-            "Выберите PDF для вставки",
+            "Select PDF to Append",
             "",
             "PDF Files (*.pdf)"
         )
@@ -282,80 +282,84 @@ class ActionsHandler:
             return
 
         try:
-            import fitz
+            # Open the document to append
             new_doc = fitz.open(file_path)
         except Exception as e:
-            QMessageBox.critical(self.main_window, "Ошибка", f"Не удалось открыть файл:\n{e}")
+            QMessageBox.critical(self.main_window, "Error", f"Failed to open file:\n{e}")
             return
-
-        cur_doc = pv.document
-        page_count = cur_doc.page_count
-
-        # Спросим у пользователя индекс вставки
-        insert_at, ok = QInputDialog.getInt(
-            self.main_window,
-            "Куда вставить?",
-            f"Введите номер страницы (0…{page_count}) перед которой вставить новый файл.\n"
-            f"0 = в начало, {page_count} = в конец.",
-            value=page_count  # по умолчанию вставка в конец
-        )
-        if not ok:
-            new_doc.close()
-            return
-
-        if insert_at < 0:
-            insert_at = 0
-        if insert_at > page_count:
-            insert_at = page_count
 
         try:
-            try:
-                # Новая сигнатура (>=1.18)
-                cur_doc.insert_pdf(new_doc, start=0, end=new_doc.page_count - 1, to_page=insert_at)
-            except TypeError:
-                # Старая сигнатура (<1.18)
-                cur_doc.insert_pdf(new_doc, from_page=0, to_page=new_doc.page_count - 1, start_at=insert_at)
+            # Handle password protection for the new document
+            if new_doc.needs_pass:
+                authed = False
+                for _ in range(3):
+                    pw, ok = QInputDialog.getText(self.main_window, "Password",
+                                                  f"Enter password for {os.path.basename(file_path)}:",
+                                                  QLineEdit.Password)
+                    if not ok:
+                        break
+                    if new_doc.authenticate(pw):
+                        authed = True
+                        break
+                if not authed:
+                    QMessageBox.critical(self.main_window, "Error", "Invalid password or operation cancelled.")
+                    new_doc.close()
+                    return
 
+            # Get current document
+            cur_doc = pv.document
+
+            # Create a new merged document
+            merged_doc = fitz.open()
+
+            # Insert all pages from current document
+            merged_doc.insert_pdf(cur_doc)
+
+            # Insert all pages from new document (append to end)
+            merged_doc.insert_pdf(new_doc)
+
+            # Save merged document to a temporary file
+            import tempfile
+            fd, temp_path = tempfile.mkstemp(suffix=".pdf")
+            os.close(fd)
+            merged_doc.save(temp_path)
+            merged_doc.close()
             new_doc.close()
 
-            # Обновим viewer (создаст новый self.document внутри pdfView)
-            pv.reload_document_after_edit()
+            # Close current document properly
+            pv.close_document()
 
-            # Теперь берём обновлённый document из pdfView
-            if hasattr(self.ui, 'thumbnailList'):
-                self.ui.thumbnailList.set_document(
-                    pv.document,
-                    pv.doc_path,
-                    getattr(pv, 'document_password', None)
-                )
+            # Load the merged document
+            success = pv.open_document(temp_path)
 
-            self.main_window.is_document_modified = True
-            self.main_window.update_ui_state()
-            self.main_window.update_page_info()
+            if success:
+                # Update the document path to the temp file
+                pv.doc_path = temp_path
 
-            QMessageBox.information(self.main_window, "Готово", f"Файл вставлен на позицию {insert_at}.")
-            # Обновим viewer (создаст новый self.document внутри pdfView)
-            if pv.reload_document_after_edit():
+                # Update thumbnails
                 if hasattr(self.ui, 'thumbnailList'):
-                    self.ui.thumbnailList.set_document(
-                        pv.document,
-                        pv.doc_path,
-                        getattr(pv, 'document_password', None)
-                    )
+                    try:
+                        self.ui.thumbnailList.set_document(pv.document, pv.doc_path,
+                                                           getattr(pv, 'document_password', None))
+                    except Exception as e:
+                        print(f"Thumbnail update failed: {e}")
 
+                # Mark as modified and update UI
+                pv.is_modified = True
                 self.main_window.is_document_modified = True
                 self.main_window.update_ui_state()
                 self.main_window.update_page_info()
-                QMessageBox.information(self.main_window, "Готово", f"Файл вставлен на позицию {insert_at}.")
+
+                QMessageBox.information(self.main_window, "Success", "Files merged successfully!")
             else:
-                QMessageBox.critical(self.main_window, "Ошибка", "Не удалось перезагрузить документ после вставки.")
+                QMessageBox.critical(self.main_window, "Error", "Failed to load merged document.")
 
         except Exception as e:
             try:
                 new_doc.close()
-            except Exception:
+            except:
                 pass
-            QMessageBox.critical(self.main_window, "Ошибка вставки", f"{e}")
+            QMessageBox.critical(self.main_window, "Merge Error", f"Error during merge operation: {e}")
 
     # -----------------------------
     # Helpers for page visibility/order (compatible with old & new viewers)
