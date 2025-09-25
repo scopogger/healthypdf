@@ -91,7 +91,7 @@ def translate_ui(self, main_window, language):
         self.actionQuit.setText(QCoreApplication.translate("MainWindow", "&Выход", None))
         self.actionSave_Page_As_Image.setText(
             QCoreApplication.translate("MainWindow", "Сохранить страницу как &изображение...", None))
-        self.actionPasswordDoc.setText(QCoreApplication.translate("MainWindow", "Установить &пароль...", None))
+        self.actionPasswordDoc.setText(QCoreApplication.translate("MainWindow", "Пароль...", None))
         self.actionEnumeratePages.setText(QCoreApplication.translate("MainWindow", "&Нумерация страниц...", None))
 
         # View menu and actions
