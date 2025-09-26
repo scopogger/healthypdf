@@ -8,12 +8,12 @@ from collections import OrderedDict
 from drawing_overlay import PageWidget
 
 from PySide6.QtWidgets import (
-    QScrollArea, QVBoxLayout, QWidget, QLabel, QMessageBox, QInputDialog, QFrame, QPushButton, QLineEdit
+    QScrollArea, QVBoxLayout, QWidget, QLabel, QMessageBox, QInputDialog, QFrame, QPushButton, QLineEdit, QApplication
 )
 from PySide6.QtCore import (
     Qt, QRunnable, QThreadPool, QTimer, Signal
 )
-from PySide6.QtGui import QPixmap, QColor
+from PySide6.QtGui import QPixmap, QColor, QWheelEvent
 
 import fitz  # PyMuPDF
 
@@ -886,6 +886,108 @@ class PDFViewer(QScrollArea):
         # small delay then lazy-render visible pages at the new zoom
         gc.collect()
         QTimer.singleShot(150, self.update_visible_pages)
+
+    def wheelEvent(self, event: QWheelEvent):
+        if QApplication.keyboardModifiers() == Qt.ControlModifier:
+            angle = event.angleDelta().y()
+            factor = 1.25 if angle > 0 else 0.8
+            old_zoom = self.zoom_level
+            new_zoom = max(0.1, min(5.0, old_zoom * factor))
+
+            if abs(new_zoom - old_zoom) < 0.001:  # No significant zoom change
+                event.accept()
+                return
+
+            # Get mouse position in viewport coordinates
+            mouse_pos = event.position().toPoint()
+
+            # Get viewport dimensions
+            viewport = self.viewport()
+            viewport_width = viewport.width()
+            viewport_height = viewport.height()
+
+            # Get current scroll positions
+            v_scrollbar = self.verticalScrollBar()
+            h_scrollbar = self.horizontalScrollBar()
+            old_v_scroll = v_scrollbar.value()
+            old_h_scroll = h_scrollbar.value()
+
+            # IMPORTANT: Check if mouse is actually within valid content area
+            # If mouse is outside content bounds, default to viewport center
+            content_widget = self.pages_container
+            if content_widget:
+                content_rect = content_widget.rect()
+                mouse_in_content_x = old_h_scroll + mouse_pos.x()
+                mouse_in_content_y = old_v_scroll + mouse_pos.y()
+
+                # If mouse is outside content bounds, use viewport center as zoom target
+                if (mouse_in_content_x < 0 or mouse_in_content_x >= content_rect.width() or
+                        mouse_in_content_y < 0 or mouse_in_content_y >= content_rect.height()):
+                    # Use current viewport center as the zoom target
+                    target_x = old_h_scroll + viewport_width / 2
+                    target_y = old_v_scroll + viewport_height / 2
+                else:
+                    # Use actual mouse position
+                    target_x = mouse_in_content_x
+                    target_y = mouse_in_content_y
+            else:
+                # Fallback to viewport center
+                target_x = old_h_scroll + viewport_width / 2
+                target_y = old_v_scroll + viewport_height / 2
+
+            # Apply the new zoom
+            self.set_zoom(new_zoom)
+
+            # Wait for layout to update
+            QApplication.processEvents()
+
+            # Calculate zoom ratio
+            zoom_ratio = new_zoom / old_zoom
+
+            # Scale the target point according to the zoom change
+            new_target_x = target_x * zoom_ratio
+            new_target_y = target_y * zoom_ratio
+
+            # Calculate new scroll positions to center the target point in viewport
+            new_h_scroll = new_target_x - (viewport_width / 2)
+            new_v_scroll = new_target_y - (viewport_height / 2)
+
+            # Get updated scrollbar ranges after zoom
+            v_max = v_scrollbar.maximum()
+            h_max = h_scrollbar.maximum()
+
+            # Apply more intelligent clamping that prevents top-left bias
+            # If the calculated scroll would be negative, don't just clamp to 0
+            # Instead, adjust proportionally
+            if new_h_scroll < 0 and h_max > 0:
+                # We're trying to scroll past the left edge
+                # Adjust the centering to keep some content visible
+                new_h_scroll = max(0, min(h_max * 0.1, new_target_x * 0.5))
+            elif new_h_scroll > h_max:
+                new_h_scroll = h_max
+            else:
+                new_h_scroll = max(0, new_h_scroll)
+
+            if new_v_scroll < 0 and v_max > 0:
+                # We're trying to scroll past the top edge
+                # Adjust the centering to keep some content visible
+                new_v_scroll = max(0, min(v_max * 0.1, new_target_y * 0.5))
+            elif new_v_scroll > v_max:
+                new_v_scroll = v_max
+            else:
+                new_v_scroll = max(0, new_v_scroll)
+
+            # Set the new scroll positions
+            h_scrollbar.setValue(int(new_h_scroll))
+            v_scrollbar.setValue(int(new_v_scroll))
+
+            # Force update
+            self.update()
+
+            event.accept()
+        else:
+            # Regular scrolling when Ctrl is not pressed
+            super().wheelEvent(event)
 
     # ---------------- Navigation helpers ----------------
     def get_current_page(self) -> int:
