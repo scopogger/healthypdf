@@ -2,6 +2,7 @@ import os
 import sys
 from typing import Optional
 
+from PySide6.QtPdf import QPdfBookmarkModel
 from PySide6.QtWidgets import (
     QMainWindow, QApplication, QFileDialog, QMessageBox, QSplitter,
     QWidget, QVBoxLayout, QLabel, QFrame, QInputDialog
@@ -162,8 +163,37 @@ class MainWindow(QMainWindow):
         if hasattr(self.ui.thumbnailList, 'thumbnail_size'):
             settings_manager.save_thumbnail_size(self.ui.thumbnailList.thumbnail_size)
 
+    def on_bookmark_clicked(self, index):
+        """Handle bookmark selection with single click - adapted from old code"""
+        if not index.isValid():
+            return
+
+        # Get page number from bookmark (0-based in Qt)
+        page = index.data(int(QPdfBookmarkModel.Role.Page))
+        zoom_level = index.data(int(QPdfBookmarkModel.Role.Level))
+
+        print(f"Bookmark clicked - Page: {page}, Zoom: {zoom_level}")
+
+        if page is not None:
+            # Convert to layout index and navigate
+            layout_index = self.ui.pdfView.layout_index_for_original(page)
+            if layout_index is not None:
+                print(f"Navigating to layout index: {layout_index}")
+                self.ui.pdfView.go_to_page(layout_index)
+            else:
+                print(f"Could not find layout index for original page {page}")
+
+    def load_bookmarks_document(self, file_path: str):
+        """Load the same document into QPdfDocument for bookmarks"""
+        if hasattr(self.ui, 'm_document'):
+            self.ui.m_document.load(file_path)
+
     def connect_signals(self):
         """Connect UI signals to their respective handlers"""
+
+        # Connect bookmark selection - use clicked for single-click response
+        if hasattr(self.ui, 'bookmarkView'):
+            self.ui.bookmarkView.clicked.connect(self.on_bookmark_clicked)
 
         # PDF viewer signals
         if hasattr(self.ui.pdfView, 'page_changed'):
@@ -209,7 +239,7 @@ class MainWindow(QMainWindow):
             success = self.ui.pdfView.open_document(file_path)
             print(f"PDF viewer open result: {success}")
 
-            # Если не удалось открыть, а пароль сохранён — попробуем снова
+            # If failed but password is stored, retry with password
             if not success and stored_password:
                 print("Retrying with stored password")
                 try:
@@ -217,7 +247,6 @@ class MainWindow(QMainWindow):
                     test_doc = fitz.open(file_path)
                     if test_doc.is_encrypted and test_doc.authenticate(stored_password):
                         test_doc.close()
-                        # сохраним пароль в pdfView перед повторным открытием
                         self.ui.pdfView.document_password = stored_password
                         success = self.ui.pdfView.open_document(file_path)
                     else:
@@ -239,11 +268,14 @@ class MainWindow(QMainWindow):
             filename = os.path.basename(file_path)
             self.setWindowTitle(f"PDF Editor - {filename}")
 
+            # Load document for bookmarks
+            self.load_bookmarks_document(file_path)
+
             if hasattr(self.ui.thumbnailList, 'set_document'):
                 self.ui.thumbnailList.set_document(
                     getattr(self.ui.pdfView, 'document', None),
                     file_path,
-                    getattr(self.ui.pdfView, 'document_password', None)  # ← добавлено
+                    getattr(self.ui.pdfView, 'document_password', None)
                 )
 
             try:

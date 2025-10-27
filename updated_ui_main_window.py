@@ -4,6 +4,8 @@ from PySide6.QtWidgets import (QMenu, QMenuBar, QSizePolicy, QSplitter, QStatusB
                                QToolBar, QVBoxLayout, QWidget, QListWidget, QHBoxLayout,
                                QLineEdit, QLabel, QFrame, QTreeView, QToolButton,
                                QStyleOptionToolButton, QStyle, QScrollArea)
+from PySide6.QtPdf import QPdfDocument, QPdfBookmarkModel
+from PySide6.QtPdfWidgets import QPdfView
 import sys
 import os
 from thumbnail_widget import ThumbnailWidget
@@ -86,9 +88,15 @@ class UiMainWindow(object):
         self.sidePanelContent = None
         self.tabButtonsWidget = None
 
+        # PDF document for bookmarks
+        self.m_document = None
+
     def setup_ui(self, main_window, localization_language):
         if not main_window.objectName():
             main_window.setObjectName("mainWindow")
+
+        # Initialize PDF document for bookmarks
+        self.m_document = QPdfDocument(main_window)
 
         self.setup_layout(main_window)
         self.setup_sidepanel_tab_widget()
@@ -260,7 +268,7 @@ class UiMainWindow(object):
                     self.splitter.setSizes([25, 0, total_width - 25])
 
     def setup_bookmarks_tab(self):
-        """Setup bookmarks tab content"""
+        """Setup bookmarks tab content with QPdfBookmarkModel"""
         self.bookmarkTab = QWidget()
         self.verticalLayout_3 = QVBoxLayout(self.bookmarkTab)
         self.verticalLayout_3.setContentsMargins(2, 2, 2, 2)
@@ -269,7 +277,12 @@ class UiMainWindow(object):
         self.bookmarkView = QTreeView(self.bookmarkTab)
         self.bookmarkView.setObjectName("bookmarkView")
         self.bookmarkView.setHeaderHidden(True)
-        # Remove fixed width - let the parent container handle sizing
+
+        # Set up the bookmark model (from old code)
+        self.bookmark_model = QPdfBookmarkModel(self.bookmarkTab)
+        self.bookmark_model.setDocument(self.m_document)
+        self.bookmarkView.setModel(self.bookmark_model)
+
         self.verticalLayout_3.addWidget(self.bookmarkView)
 
     def setup_pages_tab(self):
@@ -285,7 +298,6 @@ class UiMainWindow(object):
 
         # Expose inner controls under old names, so other code keeps working
         self.thumbnailList = self.thumbnailWidget
-        # No separate thumbnail_size_slider - it's inside thumbnailWidget
 
     def setup_pdf_view(self):
         """Setup PDF viewer widget"""

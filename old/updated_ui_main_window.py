@@ -164,6 +164,7 @@ class UiMainWindow(object):
             self.sidePanelContent.hide()
 
     def setup_bookmarks_tab(self):
+        """Setup bookmarks tab content with QPdfBookmarkModel"""
         self.bookmarkTab = QWidget()
         self.verticalLayout_3 = QVBoxLayout(self.bookmarkTab)
         self.verticalLayout_3.setContentsMargins(2, 2, 2, 2)
@@ -172,7 +173,15 @@ class UiMainWindow(object):
         self.bookmarkView = QTreeView(self.bookmarkTab)
         self.bookmarkView.setObjectName("bookmarkView")
         self.bookmarkView.setHeaderHidden(True)
-        self.bookmarkView.setMinimumWidth(150)
+
+        # Set up the bookmark model (from old code)
+        self.bookmark_model = QPdfBookmarkModel(self.bookmarkTab)
+        self.bookmark_model.setDocument(self.m_document)
+        self.bookmarkView.setModel(self.bookmark_model)
+
+        # REMOVE THIS LINE - we'll connect in main_window.py instead
+        # self.bookmarkView.clicked.connect(self.on_bookmark_clicked)
+
         self.verticalLayout_3.addWidget(self.bookmarkView)
 
     def setup_pages_tab(self):
