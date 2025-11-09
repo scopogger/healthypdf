@@ -268,13 +268,13 @@ class ActionsHandler:
         """Append another PDF to the current document and display the merged result"""
         pv = getattr(self.ui, 'pdfView', None)
         if not pv or not getattr(pv, 'document', None):
-            QMessageBox.warning(self.main_window, "No Document", "Please open a PDF document first.")
+            QMessageBox.warning(self.main_window, "No Document", "Пожалуйста сначала откройте PDF документ.")
             return
 
         # Select file to merge
         file_path, _ = QFileDialog.getOpenFileName(
             self.main_window,
-            "Select PDF to Append",
+            "Выберите PDF документ для добавления",
             "",
             "PDF Files (*.pdf)"
         )
@@ -294,7 +294,7 @@ class ActionsHandler:
                 authed = False
                 for _ in range(3):
                     pw, ok = QInputDialog.getText(self.main_window, "Password",
-                                                  f"Enter password for {os.path.basename(file_path)}:",
+                                                  f"Введите пароль для {os.path.basename(file_path)}:",
                                                   QLineEdit.Password)
                     if not ok:
                         break
@@ -302,7 +302,7 @@ class ActionsHandler:
                         authed = True
                         break
                 if not authed:
-                    QMessageBox.critical(self.main_window, "Error", "Invalid password or operation cancelled.")
+                    QMessageBox.critical(self.main_window, "Error", "Неверный пароль или операция была отменена.")
                     new_doc.close()
                     return
 
