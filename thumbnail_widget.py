@@ -1,3 +1,4 @@
+import gc
 import os
 import threading
 from typing import Optional, Dict, List
@@ -16,7 +17,7 @@ import fitz  # PyMuPDF
 class ThumbnailCache:
     """Cache for thumbnail images with size-aware storage"""
 
-    def __init__(self, max_size: int = 100):
+    def __init__(self, max_size: int = 50):  # Reduced from 100 to 50
         self.max_size = max_size
         # Store raw thumbnails WITHOUT page numbers
         self.cache: OrderedDict[tuple, QPixmap] = OrderedDict()  # (page_num, size) -> pixmap
@@ -38,15 +39,33 @@ class ThumbnailCache:
             self.cache[key] = pixmap
             if len(self.cache) > self.max_size:
                 oldest = next(iter(self.cache))
+                # Properly clean up the oldest pixmap
+                oldest_pixmap = self.cache[oldest]
+                if not oldest_pixmap.isNull():
+                    oldest_pixmap = QPixmap()
                 del self.cache[oldest]
+                gc.collect()
 
     def clear(self):
+        """Thoroughly clear all cached thumbnails"""
+        keys_to_delete = list(self.cache.keys())
+        for key in keys_to_delete:
+            pixmap = self.cache[key]
+            # Proper pixmap cleanup
+            if not pixmap.isNull():
+                # Force Qt to release the pixmap data
+                self.cache[key] = QPixmap()
+            del self.cache[key]
         self.cache.clear()
+        gc.collect()
 
     def remove_page(self, page_num: int):
         """Remove all cached thumbnails for a specific page"""
         keys_to_remove = [key for key in self.cache.keys() if key[0] == page_num]
         for key in keys_to_remove:
+            pixmap = self.cache[key]
+            if not pixmap.isNull():
+                pixmap = QPixmap()
             del self.cache[key]
 
 
@@ -72,6 +91,7 @@ class ThumbnailRenderWorker(QRunnable):
         if self.cancelled:
             return
 
+        doc = None
         try:
             doc = fitz.open(self.doc_path)
 
@@ -112,15 +132,33 @@ class ThumbnailRenderWorker(QRunnable):
             pixmap = QPixmap()
             pixmap.loadFromData(img_data)
 
+            # Close document and clean up PyMuPDF objects
             doc.close()
+            doc = None
+
+            # Force cleanup
+            del pix
+            del matrix
+            del page
 
             if not self.cancelled:
                 # Pass raw pixmap WITHOUT page number
                 self.callback(self.page_num, pixmap, self.render_id, self.thumbnail_size)
+            else:
+                # Clean up pixmap if cancelled
+                if not pixmap.isNull():
+                    pixmap = QPixmap()
 
         except Exception as e:
             if not self.cancelled:
                 print(f"Error rendering thumbnail {self.page_num}: {e}")
+        finally:
+            # Ensure document is always closed
+            if doc is not None:
+                try:
+                    doc.close()
+                except:
+                    pass
 
 
 class ThumbnailWidget(QWidget):
@@ -238,6 +276,8 @@ class ThumbnailWidget(QWidget):
 
     def set_document(self, document, doc_path: str, password: str = ""):
         """Set the document to display thumbnails for"""
+        self.cancel_all_renders()
+
         self.clear_thumbnails()
 
         self.document = document
@@ -249,20 +289,114 @@ class ThumbnailWidget(QWidget):
         if document:
             # Initialize display order with original page indices
             self.display_order = list(range(len(document)))
-            self.create_thumbnail_items()
-            # Delay thumbnail loading to prevent freezing
+
+            # For large documents, create items lazily
+            page_count = len(document)
+            if page_count > 100:  # Threshold for lazy loading
+                print(f"Large document ({page_count} pages) - using lazy item creation")
+                self._create_items_batch(0, min(50, page_count))  # Create first batch
+                # Schedule creating more items
+                QTimer.singleShot(100, lambda: self._create_remaining_items(50, page_count))
+            else:
+                self.create_thumbnail_items()
+                # Delay thumbnail loading to prevent freezing
+                self.load_timer.start(300)
+
+    def _create_items_batch(self, start_idx: int, end_idx: int):
+        """Create a batch of thumbnail items"""
+        if self.document is None:
+            return
+
+        for page_num in range(start_idx, min(end_idx, len(self.document))):
+            item = QListWidgetItem()
+            item.setData(Qt.UserRole, page_num)
+            item.setSizeHint(QSize(self.thumbnail_size + 12, self.thumbnail_size + 12))
+            item.setFlags(Qt.ItemIsSelectable | Qt.ItemIsEnabled)
+
+            # Create placeholder with page number
+            placeholder = self._create_placeholder_with_number(page_num)
+            item.setIcon(QIcon(placeholder))
+
+            self.thumbnail_list.addItem(item)
+
+        self.update_grid_size()
+
+    def _create_remaining_items(self, start_idx: int, total: int):
+        """Create remaining items in batches to avoid freezing"""
+        if self.document is None or start_idx >= total:
+            return
+
+        batch_size = 50
+        end_idx = min(start_idx + batch_size, total)
+
+        self._create_items_batch(start_idx, end_idx)
+
+        # Schedule next batch if more items remain
+        if end_idx < total:
+            QTimer.singleShot(50, lambda: self._create_remaining_items(end_idx, total))
+        else:
+            # All items created, now load visible thumbnails
+            print(f"All {total} thumbnail items created")
             self.load_timer.start(300)
 
     def clear_thumbnails(self):
-        """Clear all thumbnails and reset state"""
+        """Clear all thumbnails and reset state with proper memory cleanup"""
+        print("Clearing thumbnails - aggressive cleanup")
+
+        self.cancel_all_renders()
+
+        # Clear the list widget with proper item cleanup
+        count = self.thumbnail_list.count()
+        for i in range(count - 1, -1, -1):  # Iterate backwards
+            item = self.thumbnail_list.takeItem(i)  # Remove from list
+            if item:
+                # Get and clear the icon
+                icon = item.icon()
+                # Explicitly destroy the icon by setting an empty one
+                item.setIcon(QIcon())
+                # Clear user data
+                item.setData(Qt.UserRole, None)
+                # Delete the item
+                del item
+
+        # Clear cache with proper cleanup
+        if hasattr(self, 'thumbnail_cache'):
+            self.thumbnail_cache.clear()
+
+        # Clear other collections
+        self.display_order.clear()
+        self.page_rotations.clear()
+        self.deleted_pages.clear()
+
+        # Reset document references
+        self.document = None
+        self.doc_path = ""
+        self.document_password = ""
+
+        # Clear active workers
         with self.render_lock:
-            for worker in self.active_workers.values():
+            for worker_id in list(self.active_workers.keys()):
+                worker = self.active_workers[worker_id]
+                if hasattr(worker, 'cancel'):
+                    worker.cancel()
+                del self.active_workers[worker_id]
+            self.active_workers.clear()
+
+        # Force garbage collection multiple times
+        for _ in range(3):
+            gc.collect()
+
+        print("Thumbnails cleared and memory cleaned")
+
+    def cancel_all_renders(self):
+        """Cancel all active rendering tasks and wait for completion"""
+        with self.render_lock:
+            for worker_id, worker in list(self.active_workers.items()):
                 worker.cancel()
             self.active_workers.clear()
 
-        self.thumbnail_list.clear()
-        self.thumbnail_cache.clear()
-        self.display_order = []
+        # Wait for any running tasks to complete
+        self.thread_pool.waitForDone()
 
     def create_thumbnail_items(self):
         """Create thumbnail items for all pages"""

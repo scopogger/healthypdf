@@ -47,10 +47,20 @@ class PageCache:
             self.cache[orig_page_num] = pixmap
             while len(self.cache) > self.max_size:
                 oldest = next(iter(self.cache))
+                # PROPERLY clean up the QPixmap before deletion
+                oldest_pixmap = self.cache[oldest]
+                if not oldest_pixmap.isNull():
+                    oldest_pixmap = QPixmap()  # Explicitly clear
                 del self.cache[oldest]
                 gc.collect()
 
     def clear(self):
+        """Thoroughly clear all cached pixmaps"""
+        for key in list(self.cache.keys()):
+            pixmap = self.cache[key]
+            if not pixmap.isNull():
+                pixmap = QPixmap()  # Explicitly clear
+            del self.cache[key]
         self.cache.clear()
         gc.collect()
 
@@ -77,6 +87,7 @@ class PageRenderWorker(QRunnable):
         if self.cancelled:
             return
 
+        doc = None
         try:
             print(f"Rendering page {self.page_num} with zoom {self.zoom}")
 
@@ -123,16 +134,32 @@ class PageRenderWorker(QRunnable):
 
             # Close immediately to free memory
             doc.close()
+            doc = None
+
+            # Force cleanup of PyMuPDF objects
+            del pix
+            del matrix
+            del page
 
             if not self.cancelled and success:
                 # callback receives original page number, pixmap and render_id
                 self.callback(self.page_num, pixmap, self.render_id)
             else:
                 print(f"Failed to render page {self.page_num} or was cancelled")
+                # Clean up the pixmap if not used
+                if not pixmap.isNull():
+                    pixmap = QPixmap()
 
         except Exception as e:
             if not self.cancelled:
                 print(f"Error rendering page {self.page_num}: {e}")
+        finally:
+            # Ensure document is always closed
+            if doc is not None:
+                try:
+                    doc.close()
+                except:
+                    pass
 
 
 class PDFViewer(QScrollArea):
@@ -325,54 +352,113 @@ class PDFViewer(QScrollArea):
 
     def close_document(self):
         """Close document and aggressively free resources"""
-        print("Closing document")
+        print("Closing document - aggressive cleanup")
 
+        # Cancel all active renders first
         self.cancel_all_renders()
 
-        if self.document:
-            self.document.close()
-            self.document = None
+        # Wait for thread pool to finish current tasks
+        self.thread_pool.waitForDone()
 
-        self.doc_path = ""
-        self.document_password = ""
-        self.pages_info.clear()
+        # Close and delete document
+        if self.document:
+            try:
+                self.document.close()
+                self.document = None
+            except Exception as e:
+                print(f"Error closing document: {e}")
+
+        # Clear all caches and collections with proper cleanup
         self.page_cache.clear()
         self.last_visible_layout_indices.clear()
-        self.is_modified = False
-        self.deleted_pages = set()
-        self.page_rotations = {}
 
-        # Clear stored per-page annotation bytes
-        try:
+        # Clear all stored data
+        self.pages_info.clear()
+        self.deleted_pages.clear()
+        self.page_rotations.clear()
+
+        # Clear annotation storage with proper cleanup
+        if hasattr(self, 'page_annotations'):
+            for key in list(self.page_annotations.keys()):
+                # Ensure bytes are properly dereferenced
+                self.page_annotations[key] = b''
             self.page_annotations.clear()
-        except Exception:
-            self.page_annotations = {}
 
-        try:
+        if hasattr(self, 'page_vectors'):
+            for key in list(self.page_vectors.keys()):
+                self.page_vectors[key] = None
             self.page_vectors.clear()
-        except Exception:
-            self.page_vectors = {}
 
-        # Clear page widgets
+        # Clear page widgets with proper cleanup
         for widget in getattr(self, "page_widgets", []):
             try:
+                # Clear any pixmap data from widgets
+                if hasattr(widget, 'clear_base'):
+                    widget.clear_base(emit=False)
+                elif hasattr(widget, 'clear'):
+                    widget.clear()
+
+                # Remove from layout
+                if widget.parent() == self.pages_container:
+                    self.pages_layout.removeWidget(widget)
+
+                # Clear any remaining references
+                if hasattr(widget, 'base_pixmap') and widget.base_pixmap:
+                    widget.base_pixmap = QPixmap()
+
+                # Schedule for deletion
                 widget.deleteLater()
-            except Exception:
-                pass
+            except Exception as e:
+                print(f"Error cleaning up widget: {e}")
+
         self.page_widgets = []
 
-        # Clear layout
+        # Clear layout completely
         while self.pages_layout.count():
             item = self.pages_layout.takeAt(0)
             if item.widget():
                 try:
-                    item.widget().deleteLater()
+                    widget = item.widget()
+                    # Clear any pixmaps from widget before deletion
+                    if hasattr(widget, 'clear'):
+                        widget.clear()
+                    widget.deleteLater()
                 except Exception:
                     pass
 
-        # Force garbage collection
-        gc.collect()
-        print("Document closed")
+        # Reset document properties
+        self.doc_path = ""
+        self.document_password = ""
+        self.is_modified = False
+        self.zoom_level = 1.0
+
+        # Clear any active worker references
+        with self.render_lock:
+            # Ensure all worker references are cleared
+            for worker_id in list(self.active_workers.keys()):
+                worker = self.active_workers[worker_id]
+                if hasattr(worker, 'cancel'):
+                    worker.cancel()
+                del self.active_workers[worker_id]
+            self.active_workers.clear()
+
+        # Notify thumbnail widget to clear before final cleanup
+        try:
+            # If we have a reference to thumbnail widget, tell it to clear
+            if hasattr(self, 'parent') and self.parent():
+                main_window = self.parent()
+                while main_window and not isinstance(main_window, QWidget):
+                    main_window = main_window.parent()
+                if main_window and hasattr(main_window, 'thumbnail_widget'):
+                    main_window.thumbnail_widget.clear_thumbnails()
+        except Exception as e:
+            print(f"Error clearing thumbnails during document close: {e}")
+
+        # Force multiple garbage collections to ensure cleanup
+        for _ in range(3):
+            gc.collect()
+
+        print("Document closed and memory cleaned")
 
     # ---------------- Helpers ----------------
     def layout_index_for_original(self, orig_page_num: int) -> Optional[int]:
@@ -517,7 +603,7 @@ class PDFViewer(QScrollArea):
             page_widget.setMinimumSize(display_w, display_h)
             page_widget.setMaximumSize(display_w, display_h)  # Prevent expansion
 
-            page_widget.base_label.setText(f"Page {display_num}\nLoading...")
+            page_widget.base_label.setText(f"Страница {display_num}\nЗагрузка...")
             page_widget.base_label.setAlignment(Qt.AlignCenter)
             # page_widget.base_label.setStyleSheet("""
             #     QLabel {
@@ -562,8 +648,8 @@ class PDFViewer(QScrollArea):
             # Update the widget's display text if it's showing placeholder text
             if hasattr(widget, 'base_label'):
                 current_text = widget.base_label.text()
-                if "Page " in current_text and "Loading" in current_text:
-                    widget.base_label.setText(f"Page {display}\nLoading...")
+                if "Страница " in current_text and "Загрузка" in current_text:
+                    widget.base_label.setText(f"Страница {display}\nЗагрузка...")
             display += 1
 
     def cancel_all_renders(self):
@@ -669,8 +755,10 @@ class PDFViewer(QScrollArea):
         except Exception:
             pass
 
-        # Clear base image WITHOUT emitting signals
+        # Clear base image WITHOUT emitting signals and properly cleanup pixmap
         try:
+            if hasattr(widget, 'base_pixmap') and widget.base_pixmap:
+                widget.base_pixmap = QPixmap()  # Explicitly clear
             widget.clear_base(emit=False)
         except Exception:
             try:
@@ -684,11 +772,8 @@ class PDFViewer(QScrollArea):
             widget.setMinimumSize(display_size)
             widget.setMaximumSize(display_size)
             if hasattr(widget, 'base_label'):
-                widget.base_label.setText(f"Page {display_page_num}\nLoading...")
+                widget.base_label.setText(f"Страница {display_page_num}\nЗагрузка...")
                 widget.base_label.setAlignment(Qt.AlignCenter)
-                # widget.base_label.setStyleSheet("""
-                #     QLabel { border: 2px solid #ddd; background-color: white; color: #666; font-size: 14px; margin: -100px; }
-                # """)
         except Exception:
             pass
 
@@ -864,7 +949,7 @@ class PDFViewer(QScrollArea):
             try:
                 display_page_num = self.get_display_page_number(i)
                 if hasattr(widget, 'base_label'):
-                    widget.base_label.setText(f"Page {display_page_num}\nLoading...")
+                    widget.base_label.setText(f"Страница {display_page_num}\nЗагрузка...")
                     # widget.base_label.setStyleSheet("""
                     #     QLabel { border: 2px solid #ddd; background-color: white; color: #666; font-size: 14px; margin: -100px; }
                     # """)

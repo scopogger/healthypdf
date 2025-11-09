@@ -639,6 +639,31 @@ class MainWindow(QMainWindow):
             if file_path.lower().endswith('.pdf'):
                 self.load_document(file_path)
 
+    def cleanup_before_close(self):
+        """Aggressive cleanup before application closes"""
+        print("Performing aggressive cleanup before close...")
+
+        # Close PDF viewer document
+        if hasattr(self.ui, 'pdfView') and hasattr(self.ui.pdfView, 'close_document'):
+            self.ui.pdfView.close_document()
+
+        # Clear thumbnails
+        if hasattr(self.ui, 'thumbnailList') and hasattr(self.ui.thumbnailList, 'clear_thumbnails'):
+            self.ui.thumbnailList.clear_thumbnails()
+
+        # Clear any remaining references
+        self.current_document_path = ""
+        self.is_document_modified = False
+
+        # Clear actions handler if it holds references
+        if hasattr(self, 'actions_handler'):
+            self.actions_handler = None
+
+        # Force final garbage collection
+        import gc
+        for _ in range(3):
+            gc.collect()
+
     def closeEvent(self, event):
         """Handle application close event"""
         if self.is_document_modified:
@@ -654,8 +679,8 @@ class MainWindow(QMainWindow):
         # Save window settings before closing
         self.save_window_settings()
 
-        # Clean up PDF viewer
-        if hasattr(self.ui.pdfView, 'close_document'):
-            self.ui.pdfView.close_document()
+        # Perform aggressive cleanup
+        self.cleanup_before_close()
 
         event.accept()
+
