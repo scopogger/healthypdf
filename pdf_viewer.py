@@ -329,9 +329,6 @@ class PDFViewer(QScrollArea):
             self.deleted_pages = set()
             self.page_rotations = {}
 
-            # Create lightweight placeholder widgets
-            self.create_placeholder_widgets()
-
             # Scroll to top
             self.verticalScrollBar().setValue(0)
 
@@ -339,8 +336,19 @@ class PDFViewer(QScrollArea):
             self.update()
             self.repaint()
 
-            # Delay initial page loading to prevent freeze
-            QTimer.singleShot(100, self.update_visible_pages)
+            # Create placeholder widgets (but only for the first N pages for performance)
+            MAX_PLACEHOLDERS = 10
+            self.visible_page_limit = MAX_PLACEHOLDERS
+            self.create_placeholder_widgets(limit=MAX_PLACEHOLDERS)
+
+            # Prevent huge load during initial update
+            self.max_loaded_pages = 15  # Keep at most 15 pages rendered in memory
+
+            # Limit the number of pages actually loaded/rendered into memory
+            self.max_loaded_pages = 15  # number of pages to keep rendered at once
+
+            # Defer visible-page update slightly to allow the UI to breathe
+            QTimer.singleShot(200, self.update_visible_pages)
 
             print(f"Document opened successfully: {page_count} pages")
             return True
@@ -579,54 +587,27 @@ class PDFViewer(QScrollArea):
             display += 1
         return display
 
-    def create_placeholder_widgets(self):
-        """Create lightweight placeholder PageWidget instances (no rendering yet)."""
-        print(f"Creating {len(self.pages_info)} placeholder widgets")
-        self.page_widgets = []
+    def create_placeholder_widgets(self, limit: Optional[int] = None):
+        """Create placeholder widgets, optionally limited to a number of pages."""
+        if not hasattr(self, 'pages_info') or not self.pages_info:
+            return
 
-        # clear existing layout
+        # Remove any old widgets first
         while self.pages_layout.count():
             item = self.pages_layout.takeAt(0)
             if item.widget():
                 item.widget().deleteLater()
 
-        for i, page_info in enumerate(self.pages_info):
-            # Calculate proper display size
-            display_size = self._calculate_display_size(page_info)
-            display_w = display_size.width()
-            display_h = display_size.height()
+        self.page_widgets = []
+        page_count = len(self.pages_info)
+        if limit:
+            page_count = min(limit, page_count)
 
-            display_num = self.get_display_page_number(i)
-            page_widget = PageWidget(display_w, display_h)
-
-            # Set size constraints
-            page_widget.setMinimumSize(display_w, display_h)
-            page_widget.setMaximumSize(display_w, display_h)  # Prevent expansion
-
-            page_widget.base_label.setText(f"Страница {display_num}\nЗагрузка...")
-            page_widget.base_label.setAlignment(Qt.AlignCenter)
-            # page_widget.base_label.setStyleSheet("""
-            #     QLabel {
-            #         border: 2px solid #ddd;
-            #         background-color: white;
-            #         color: #666;
-            #         font-size: 14px;
-            #         margin: -100px;
-            #     }
-            # """)
-
-            page_widget.setProperty("orig_page_num", page_info.page_num)
-
-            # Connect overlay change signal
-            try:
-                page_widget.overlay.annotation_changed.connect(
-                    lambda pw=page_widget, orig=page_info.page_num: self._save_vector_immediate(pw, orig)
-                )
-            except Exception as e:
-                print(f"[PDFViewer] create_placeholder_widgets: connect failed for orig {page_info.page_num}: {e}")
-
-            self.page_widgets.append(page_widget)
-            self.pages_layout.addWidget(page_widget, 0, Qt.AlignCenter)
+        for i in range(page_count):
+            info = self.pages_info[i]
+            placeholder = self._create_page_placeholder(info)
+            self.pages_layout.addWidget(placeholder)
+            self.page_widgets.append(placeholder)
 
         print(f"Created {len(self.page_widgets)} placeholder widgets")
 
@@ -634,6 +615,129 @@ class PDFViewer(QScrollArea):
         self.pages_container.adjustSize()
         self.pages_container.updateGeometry()
         self.update()
+
+    def _create_page_placeholder(self, page_info: PageInfo):
+        """
+        Create a lightweight placeholder widget for a page.
+        Prefer PageWidget from drawing_overlay if available; otherwise fallback to QLabel shim.
+        The returned widget provides:
+          - base_pixmap attribute (None or QPixmap)
+          - set_base_pixmap(pixmap) method
+          - clear_base(emit=False) method
+          - base_label QLabel attribute for showing "Страница N\nЗагрузка..."
+        """
+        try:
+            # Try to create the real PageWidget (preferred)
+            widget = PageWidget(self.pages_container)
+            # Ensure expected attributes exist (defensive)
+            if not hasattr(widget, "base_pixmap"):
+                widget.base_pixmap = None
+
+            # Provide set_base_pixmap if missing (some PageWidget implementations differ)
+            if not hasattr(widget, "set_base_pixmap"):
+                def _set_base(pixmap):
+                    try:
+                        widget.setPixmap(pixmap)
+                    except Exception:
+                        pass
+                    widget.base_pixmap = pixmap
+
+                widget.set_base_pixmap = _set_base
+
+            # Provide clear_base if missing
+            if not hasattr(widget, "clear_base"):
+                def _clear_base(emit: bool = True):
+                    try:
+                        widget.setPixmap(QPixmap())
+                    except Exception:
+                        pass
+                    widget.base_pixmap = None
+
+                widget.clear_base = _clear_base
+
+            # Ensure there's a base_label we can update
+            if not hasattr(widget, "base_label"):
+                lbl = QLabel(widget)
+                lbl.setAlignment(Qt.AlignCenter)
+                widget.base_label = lbl
+            # Set placeholder text
+            try:
+                display_num = (page_info.page_num + 1)
+                widget.base_label.setText(f"Страница {display_num}\nЗагрузка...")
+            except Exception:
+                pass
+
+            # Size the widget to expected display size
+            display_size = self._calculate_display_size(page_info)
+            try:
+                widget.setMinimumSize(display_size)
+                widget.setMaximumSize(display_size)
+            except Exception:
+                pass
+
+            return widget
+
+        except Exception as e:
+            # Fallback lightweight QLabel shim if PageWidget creation fails
+            lbl = QLabel(self.pages_container)
+            lbl.setAlignment(Qt.AlignCenter)
+            display_num = (page_info.page_num + 1)
+            lbl.setText(f"Страница {display_num}\nЗагрузка...")
+            # attach shim attributes used elsewhere
+            lbl.base_pixmap = None
+
+            def _set_base(pixmap):
+                try:
+                    lbl.setPixmap(pixmap)
+                except Exception:
+                    pass
+                lbl.base_pixmap = pixmap
+
+            def _clear_base(emit: bool = False):
+                try:
+                    lbl.setPixmap(QPixmap())
+                except Exception:
+                    pass
+                lbl.base_pixmap = None
+
+            lbl.set_base_pixmap = _set_base
+            lbl.clear_base = _clear_base
+            lbl.base_label = lbl  # point to itself so code accessing base_label works
+
+            display_size = self._calculate_display_size(page_info)
+            lbl.setMinimumSize(display_size)
+            lbl.setMaximumSize(display_size)
+
+            print(
+                f"[PDFViewer] Warning: using QLabel fallback for page {page_info.page_num} because PageWidget init failed: {e}")
+            return lbl
+
+    def scroll_to_page(self, page_index: int):
+        """
+        Smoothly scroll the viewer to make the specified page visible,
+        loading it first if necessary.
+        """
+        if not self.page_widgets or page_index < 0 or page_index >= len(self.pages_info):
+            return
+
+        # Lazy: ensure placeholder exists for that page
+        if page_index >= len(self.page_widgets):
+            # Extend placeholder list if user clicked a far-away thumbnail
+            missing = page_index - len(self.page_widgets) + 1
+            for i in range(missing):
+                if len(self.page_widgets) < len(self.pages_info):
+                    info = self.pages_info[len(self.page_widgets)]
+                    placeholder = self._create_page_placeholder(info)
+                    self.pages_layout.addWidget(placeholder)
+                    self.page_widgets.append(placeholder)
+
+        # Load that page immediately if not rendered
+        self.load_page_if_needed(page_index)
+
+        target_widget = self.page_widgets[page_index]
+        target_y = target_widget.y()
+        self.verticalScrollBar().setValue(target_y)
+        QTimer.singleShot(100, self.update_visible_pages)
 
     def update_all_page_labels(self):
         """Update all page labels to reflect current order and visibility"""
@@ -666,57 +770,70 @@ class PDFViewer(QScrollArea):
         self.scroll_timer.start(200)
 
     def update_visible_pages(self):
-        """Ultra-conservative visible page management"""
-        if not self.document:
+        """Optimized but reliable visible page management (no freeze, no blank pages)"""
+        if not self.document or not self.page_widgets:
             return
 
         viewport_rect = self.viewport().rect()
         scroll_y = self.verticalScrollBar().value()
-        visible_layout_indices: Set[int] = set()
-        current_center_layout_index = None
         viewport_center_y = scroll_y + viewport_rect.height() // 2
 
+        visible_layout_indices: Set[int] = set()
+        current_center_layout_index = None
+
+        # --- Detect visible pages with small buffer ---
         for i, widget in enumerate(self.page_widgets):
             orig = self.pages_info[i].page_num
             if orig in self.deleted_pages:
                 continue
 
+            # Positions relative to the viewport
             widget_y = widget.y() - scroll_y
             widget_bottom = widget_y + widget.height()
 
-            # Only consider truly visible pages with small buffer
-            if widget_bottom >= -100 and widget_y <= viewport_rect.height() + 100:
+            # Mark pages that are visible or near the viewport
+            if widget_bottom >= -300 and widget_y <= viewport_rect.height() + 300:
                 visible_layout_indices.add(i)
                 widget_center_y = widget.y() + widget.height() // 2
-                if current_center_layout_index is None or abs(widget_center_y - viewport_center_y) < abs(
-                        self.page_widgets[current_center_layout_index].y() + self.page_widgets[
-                            current_center_layout_index].height() // 2 - viewport_center_y):
+                if (
+                        current_center_layout_index is None
+                        or abs(widget_center_y - viewport_center_y)
+                        < abs(
+                    self.page_widgets[current_center_layout_index].y()
+                    + self.page_widgets[current_center_layout_index].height() // 2
+                    - viewport_center_y
+                )
+                ):
                     current_center_layout_index = i
 
-        # limit to centre + one neighbor
-        if len(visible_layout_indices) > 2 and current_center_layout_index is not None:
-            visible_layout_indices = {current_center_layout_index}
-            if current_center_layout_index > 0:
-                left = current_center_layout_index - 1
-                if self.pages_info[left].page_num not in self.deleted_pages:
-                    visible_layout_indices.add(left)
-            if current_center_layout_index < len(self.page_widgets) - 1:
-                right = current_center_layout_index + 1
-                if self.pages_info[right].page_num not in self.deleted_pages:
-                    visible_layout_indices.add(right)
+        # --- Safety: fallback if nothing detected (top of document etc.) ---
+        if not visible_layout_indices and self.page_widgets:
+            visible_layout_indices = {0}
+            current_center_layout_index = 0
 
-        # clear those that are no longer visible
+        # --- Limit number of pages to load in memory ---
+        max_load = getattr(self, "max_loaded_pages", 15)
+
+        # Expand slightly around visible pages for smoother scrolling
+        if current_center_layout_index is not None:
+            half = max_load // 2
+            start = max(0, current_center_layout_index - half)
+            end = min(len(self.page_widgets), current_center_layout_index + half + 1)
+            expanded_indices = set(range(start, end))
+            visible_layout_indices |= expanded_indices
+
+        # --- Free pages that are no longer in view ---
         for layout_idx in self.last_visible_layout_indices - visible_layout_indices:
             if 0 <= layout_idx < len(self.page_widgets):
                 self.clear_page_widget(layout_idx)
 
-        # load visible
+        # --- Load or restore pages now in view ---
         for layout_idx in visible_layout_indices:
             if 0 <= layout_idx < len(self.page_widgets):
                 self.load_page_if_needed(layout_idx)
 
+        # --- Bookkeeping and signal emission ---
         self.last_visible_layout_indices = visible_layout_indices.copy()
-
         if current_center_layout_index is not None:
             orig_center = self.pages_info[current_center_layout_index].page_num
             self.page_changed.emit(orig_center)

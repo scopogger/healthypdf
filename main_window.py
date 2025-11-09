@@ -204,6 +204,7 @@ class MainWindow(QMainWindow):
         # Thumbnail signals
         if hasattr(self.ui.thumbnailList, 'page_clicked'):
             self.ui.thumbnailList.page_clicked.connect(self.on_thumbnail_clicked)
+            self.ui.thumbnailList.page_clicked.connect(self.ui.pdfView.scroll_to_page)
 
         # Page input
         if hasattr(self.ui, 'm_pageInput'):
