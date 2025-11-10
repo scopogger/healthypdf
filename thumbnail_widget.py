@@ -73,7 +73,7 @@ class ThumbnailRenderWorker(QRunnable):
     """Worker for rendering thumbnails in background"""
 
     def __init__(self, doc_path: str, page_num: int, callback, render_id: str,
-                 thumbnail_size: int = 150, rotation: int = 0, password: str = ""):
+                 thumbnail_size: int = 100, rotation: int = 0, password: str = ""):
         super().__init__()
         self.doc_path = doc_path
         self.page_num = page_num
@@ -191,7 +191,7 @@ class ThumbnailWidget(QWidget):
         self.display_order: List[int] = []  # List of original page indices in display order
 
         # Thumbnail size (can be controlled by slider) and font
-        self.thumbnail_size = 150  # Larger default size
+        self.thumbnail_size = 100  # Larger default size
         self.page_number_font_size = 10
 
         # Setup UI

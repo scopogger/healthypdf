@@ -107,7 +107,7 @@ class SettingsManager:
 
     def get_thumbnail_size(self):
         """Get thumbnail size setting"""
-        return self.settings.value("thumbnails/size", 150, type=int)
+        return self.settings.value("thumbnails/size", 100, type=int)
 
     def save_zoom_level(self, zoom: float):
         """Save last zoom level"""

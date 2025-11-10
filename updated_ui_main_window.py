@@ -179,8 +179,8 @@ class UiMainWindow(object):
         self.sidePanelContentLayout.setContentsMargins(0, 0, 0, 0)
 
         # Set size constraints for the side panel content
-        self.sidePanelContent.setMinimumWidth(150)
-        self.sidePanelContent.setMaximumWidth(300)
+        self.sidePanelContent.setMinimumWidth(120)
+        self.sidePanelContent.setMaximumWidth(350)
         self.sidePanelContent.setSizePolicy(QSizePolicy.Preferred, QSizePolicy.Expanding)
 
         # Setup tabs
@@ -204,7 +204,7 @@ class UiMainWindow(object):
             # Set initial sizes: 25px for tab buttons, 150px for content, rest for PDF view
             initial_total_width = 1400  # Default window width
             tab_buttons_width = 25
-            sidebar_content_width = 150  # Minimum allowed width
+            sidebar_content_width = 120  # Minimum allowed width
             pdf_view_width = initial_total_width - tab_buttons_width - sidebar_content_width
 
             # Set the initial sizes
@@ -228,7 +228,7 @@ class UiMainWindow(object):
                 current_sizes = self.splitter.sizes()
                 if current_sizes[1] == 0:  # Sidebar is hidden
                     tab_buttons_width = 25
-                    sidebar_content_width = 150
+                    sidebar_content_width = 120
                     remaining_width = sum(current_sizes) - tab_buttons_width - sidebar_content_width
                     self.splitter.setSizes([tab_buttons_width, sidebar_content_width, remaining_width])
         else:
@@ -254,7 +254,7 @@ class UiMainWindow(object):
                 current_sizes = self.splitter.sizes()
                 if current_sizes[1] == 0:  # Sidebar is hidden
                     tab_buttons_width = 25
-                    sidebar_content_width = 150
+                    sidebar_content_width = 120
                     remaining_width = sum(current_sizes) - tab_buttons_width - sidebar_content_width
                     self.splitter.setSizes([tab_buttons_width, sidebar_content_width, remaining_width])
         else:
