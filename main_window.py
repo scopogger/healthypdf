@@ -490,11 +490,11 @@ class MainWindow(QMainWindow):
                 self.ui.m_pageInput.setText(str(current_display_page))
 
     def ask_save_changes(self) -> int:
-        """Ask user if they want to save changes"""
+        """Спросить пользователя, хочет ли он сохранить изменения"""
         return QMessageBox.question(
             self,
-            "Unsaved Changes",
-            "The document has unsaved changes. Do you want to save them?",
+            "Несохранённые изменения",
+            "В документе есть несохранённые изменения. Хотите ли сохранить их?",
             QMessageBox.Save | QMessageBox.Discard | QMessageBox.Cancel,
             QMessageBox.Save
         )

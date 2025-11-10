@@ -329,6 +329,14 @@ class PDFViewer(QScrollArea):
             self.deleted_pages = set()
             self.page_rotations = {}
 
+            # Dynamic placeholder management
+            self.visible_page_limit = 20  # Initial number of placeholders to create
+            self.max_loaded_pages = 15  # Maximum rendered pages in memory
+            self.total_page_count = len(self.pages_info)  # Store total pages
+
+            # Create initial batch of placeholders
+            self.create_placeholder_widgets(limit=self.visible_page_limit)
+
             # Scroll to top
             self.verticalScrollBar().setValue(0)
 
@@ -336,21 +344,15 @@ class PDFViewer(QScrollArea):
             self.update()
             self.repaint()
 
-            # Create placeholder widgets (but only for the first N pages for performance)
-            MAX_PLACEHOLDERS = 10
-            self.visible_page_limit = MAX_PLACEHOLDERS
-            self.create_placeholder_widgets(limit=MAX_PLACEHOLDERS)
+            # Delay initial page loading to prevent freeze
+            QTimer.singleShot(100, self.update_visible_pages)
 
-            # Prevent huge load during initial update
-            self.max_loaded_pages = 15  # Keep at most 15 pages rendered in memory
+            # After document is successfully opened and placeholder widgets are created
+            if self.document:
+                # Delay initial fit-to-width to ensure UI is fully rendered
+                QTimer.singleShot(200, self.fit_to_width)
 
-            # Limit the number of pages actually loaded/rendered into memory
-            self.max_loaded_pages = 15  # number of pages to keep rendered at once
-
-            # Defer visible-page update slightly to allow the UI to breathe
-            QTimer.singleShot(200, self.update_visible_pages)
-
-            print(f"Document opened successfully: {page_count} pages")
+            print(f"Document opened successfully: {self.total_page_count} pages")
             return True
 
         except Exception as e:
@@ -588,28 +590,62 @@ class PDFViewer(QScrollArea):
         return display
 
     def create_placeholder_widgets(self, limit: Optional[int] = None):
-        """Create placeholder widgets, optionally limited to a number of pages."""
-        if not hasattr(self, 'pages_info') or not self.pages_info:
-            return
+        """Create lightweight placeholder PageWidget instances with dynamic loading support."""
+        print(f"Creating placeholder widgets, limit: {limit}")
 
-        # Remove any old widgets first
+        # Clear existing widgets first
         while self.pages_layout.count():
             item = self.pages_layout.takeAt(0)
             if item.widget():
                 item.widget().deleteLater()
 
         self.page_widgets = []
-        page_count = len(self.pages_info)
-        if limit:
-            page_count = min(limit, page_count)
 
-        for i in range(page_count):
-            info = self.pages_info[i]
-            placeholder = self._create_page_placeholder(info)
-            self.pages_layout.addWidget(placeholder)
-            self.page_widgets.append(placeholder)
+        # Determine how many placeholders to create
+        total_pages = len(self.pages_info)
+        if limit is not None:
+            pages_to_create = min(limit, total_pages)
+        else:
+            pages_to_create = total_pages
+
+        print(f"Creating {pages_to_create} placeholder widgets out of {total_pages} total pages")
+
+        for i in range(pages_to_create):
+            page_info = self.pages_info[i]
+
+            # Calculate proper display size
+            display_size = self._calculate_display_size(page_info)
+            display_w = display_size.width()
+            display_h = display_size.height()
+
+            display_num = self.get_display_page_number(i)
+            page_widget = PageWidget(display_w, display_h)
+
+            # Set size constraints
+            page_widget.setMinimumSize(display_w, display_h)
+            page_widget.setMaximumSize(display_w, display_h)
+
+            page_widget.base_label.setText(f"Страница {display_num}\nЗагрузка...")
+            page_widget.base_label.setAlignment(Qt.AlignCenter)
+
+            page_widget.setProperty("orig_page_num", page_info.page_num)
+            page_widget.setProperty("layout_index", i)  # Store layout index for easy reference
+
+            # Connect overlay change signal
+            try:
+                page_widget.overlay.annotation_changed.connect(
+                    lambda pw=page_widget, orig=page_info.page_num: self._save_vector_immediate(pw, orig)
+                )
+            except Exception as e:
+                print(f"[PDFViewer] create_placeholder_widgets: connect failed for orig {page_info.page_num}: {e}")
+
+            self.page_widgets.append(page_widget)
+            self.pages_layout.addWidget(page_widget, 0, Qt.AlignCenter)
 
         print(f"Created {len(self.page_widgets)} placeholder widgets")
+
+        # Update container size based on ALL pages (not just created ones)
+        self.update_container_full_size()
 
         # Force layout update
         self.pages_container.adjustSize()
@@ -770,75 +806,160 @@ class PDFViewer(QScrollArea):
         self.scroll_timer.start(200)
 
     def update_visible_pages(self):
-        """Optimized but reliable visible page management (no freeze, no blank pages)"""
-        if not self.document or not self.page_widgets:
+        """Ultra-conservative visible page management with dynamic placeholder loading"""
+        if not self.document:
             return
 
         viewport_rect = self.viewport().rect()
         scroll_y = self.verticalScrollBar().value()
-        viewport_center_y = scroll_y + viewport_rect.height() // 2
-
         visible_layout_indices: Set[int] = set()
         current_center_layout_index = None
+        viewport_center_y = scroll_y + viewport_rect.height() // 2
 
-        # --- Detect visible pages with small buffer ---
+        # First pass: find visible pages and check if we need to load more placeholders
+        needs_more_placeholders = False
+        furthest_visible_index = -1
+
         for i, widget in enumerate(self.page_widgets):
-            orig = self.pages_info[i].page_num
+            orig = self.pages_info[i].page_num if i < len(self.pages_info) else None
             if orig in self.deleted_pages:
                 continue
 
-            # Positions relative to the viewport
             widget_y = widget.y() - scroll_y
             widget_bottom = widget_y + widget.height()
 
-            # Mark pages that are visible or near the viewport
-            if widget_bottom >= -300 and widget_y <= viewport_rect.height() + 300:
+            # Check if page is visible
+            if widget_bottom >= -100 and widget_y <= viewport_rect.height() + 100:
                 visible_layout_indices.add(i)
                 widget_center_y = widget.y() + widget.height() // 2
-                if (
-                        current_center_layout_index is None
-                        or abs(widget_center_y - viewport_center_y)
-                        < abs(
-                    self.page_widgets[current_center_layout_index].y()
-                    + self.page_widgets[current_center_layout_index].height() // 2
-                    - viewport_center_y
-                )
-                ):
+                if current_center_layout_index is None or abs(widget_center_y - viewport_center_y) < abs(
+                        self.page_widgets[current_center_layout_index].y() + self.page_widgets[
+                            current_center_layout_index].height() // 2 - viewport_center_y):
                     current_center_layout_index = i
 
-        # --- Safety: fallback if nothing detected (top of document etc.) ---
-        if not visible_layout_indices and self.page_widgets:
-            visible_layout_indices = {0}
-            current_center_layout_index = 0
+                # Track the furthest visible index
+                furthest_visible_index = max(furthest_visible_index, i)
 
-        # --- Limit number of pages to load in memory ---
-        max_load = getattr(self, "max_loaded_pages", 15)
+        # Check if we're near the end of currently loaded placeholders and need to load more
+        if (furthest_visible_index >= 0 and
+                len(self.page_widgets) < len(self.pages_info) and
+                furthest_visible_index >= len(self.page_widgets) - 5):  # Load more when 5 pages from end
+            needs_more_placeholders = True
 
-        # Expand slightly around visible pages for smoother scrolling
-        if current_center_layout_index is not None:
-            half = max_load // 2
-            start = max(0, current_center_layout_index - half)
-            end = min(len(self.page_widgets), current_center_layout_index + half + 1)
-            expanded_indices = set(range(start, end))
-            visible_layout_indices |= expanded_indices
+        # Load more placeholders if needed
+        if needs_more_placeholders:
+            self.load_more_placeholders()
 
-        # --- Free pages that are no longer in view ---
+        # Second pass: manage rendering of visible pages (your existing code)
+        # limit to centre + one neighbor
+        if len(visible_layout_indices) > 2 and current_center_layout_index is not None:
+            visible_layout_indices = {current_center_layout_index}
+            if current_center_layout_index > 0:
+                left = current_center_layout_index - 1
+                if self.pages_info[left].page_num not in self.deleted_pages:
+                    visible_layout_indices.add(left)
+            if current_center_layout_index < len(self.page_widgets) - 1:
+                right = current_center_layout_index + 1
+                if self.pages_info[right].page_num not in self.deleted_pages:
+                    visible_layout_indices.add(right)
+
+        # clear those that are no longer visible
         for layout_idx in self.last_visible_layout_indices - visible_layout_indices:
             if 0 <= layout_idx < len(self.page_widgets):
                 self.clear_page_widget(layout_idx)
 
-        # --- Load or restore pages now in view ---
+        # load visible
         for layout_idx in visible_layout_indices:
             if 0 <= layout_idx < len(self.page_widgets):
                 self.load_page_if_needed(layout_idx)
 
-        # --- Bookkeeping and signal emission ---
         self.last_visible_layout_indices = visible_layout_indices.copy()
+
         if current_center_layout_index is not None:
             orig_center = self.pages_info[current_center_layout_index].page_num
             self.page_changed.emit(orig_center)
 
         gc.collect()
+
+    def load_more_placeholders(self):
+        """Load more placeholder widgets when scrolling near the end"""
+        current_count = len(self.page_widgets)
+        total_pages = len(self.pages_info)
+
+        if current_count >= total_pages:
+            return  # All pages already loaded
+
+        # Calculate how many more to load (batch size)
+        batch_size = min(20, total_pages - current_count)  # Load 20 more or whatever remains
+
+        print(f"Loading {batch_size} more placeholders ({current_count} -> {current_count + batch_size})")
+
+        start_index = current_count
+        end_index = current_count + batch_size
+
+        for i in range(start_index, end_index):
+            if i >= len(self.pages_info):
+                break
+
+            page_info = self.pages_info[i]
+
+            # Calculate proper display size
+            display_size = self._calculate_display_size(page_info)
+            display_w = display_size.width()
+            display_h = display_size.height()
+
+            display_num = self.get_display_page_number(i)
+            page_widget = PageWidget(display_w, display_h)
+
+            # Set size constraints
+            page_widget.setMinimumSize(display_w, display_h)
+            page_widget.setMaximumSize(display_w, display_h)
+
+            page_widget.base_label.setText(f"Страница {display_num}\nЗагрузка...")
+            page_widget.base_label.setAlignment(Qt.AlignCenter)
+
+            page_widget.setProperty("orig_page_num", page_info.page_num)
+            page_widget.setProperty("layout_index", i)
+
+            # Connect overlay change signal
+            try:
+                page_widget.overlay.annotation_changed.connect(
+                    lambda pw=page_widget, orig=page_info.page_num: self._save_vector_immediate(pw, orig)
+                )
+            except Exception as e:
+                print(f"[PDFViewer] load_more_placeholders: connect failed for orig {page_info.page_num}: {e}")
+
+            self.page_widgets.append(page_widget)
+            self.pages_layout.addWidget(page_widget, 0, Qt.AlignCenter)
+
+        # Update container size to account for new widgets
+        self.update_container_full_size()
+
+        print(f"Loaded {batch_size} more placeholders, total: {len(self.page_widgets)}")
+
+    def update_container_full_size(self):
+        """Update container size to account for ALL pages (even not-yet-created ones)"""
+        total_pages = len(self.pages_info)
+        total_height = 0
+        spacing = self.pages_layout.spacing()
+
+        # Calculate total height based on all pages
+        for i in range(total_pages):
+            page_info = self.pages_info[i]
+            display_size = self._calculate_display_size(page_info)
+            total_height += display_size.height()
+            if i < total_pages - 1:
+                total_height += spacing
+
+        # Add margins
+        margins = self.pages_layout.contentsMargins()
+        total_height += margins.top() + margins.bottom()
+
+        # Set container minimum size to ensure scrollbar works correctly
+        self.pages_container.setMinimumHeight(total_height)
+
+        # Force layout update
+        self.pages_container.adjustSize()
 
     def clear_page_widget(self, layout_index: int):
         if layout_index >= len(self.page_widgets) or layout_index >= len(self.pages_info):
@@ -1751,14 +1872,39 @@ class PDFViewer(QScrollArea):
 
     # ---------------- Fit helpers ----------------
     def fit_to_width(self):
-        """Fit document to width"""
+        """Fit current page to width of the PDF viewer panel"""
         if not self.document or not self.page_widgets:
             return
-        viewport_width = self.viewport().width() - 50
-        if self.pages_info:
-            page_width = self.pages_info[0].width
-            new_zoom = viewport_width / page_width
-            self.set_zoom(new_zoom)
+
+        # Get the current viewport width
+        viewport_width = self.viewport().width() - 20  # Subtract padding
+
+        if viewport_width <= 0:
+            return
+
+        # Get the CURRENT page's info, not the first page
+        current_original_page = self.get_current_page()
+        current_layout_idx = self.layout_index_for_original(current_original_page)
+
+        if current_layout_idx is None or current_layout_idx >= len(self.pages_info):
+            return
+
+        # Use the current page's width for calculation
+        current_page_info = self.pages_info[current_layout_idx]
+        page_width = current_page_info.width
+
+        if page_width <= 0:
+            return
+
+        # Calculate zoom level to fit current page width to viewport width
+        new_zoom = viewport_width / page_width
+
+        # Set reasonable limits
+        new_zoom = max(0.1, min(5.0, new_zoom))
+
+        print(f"Fit to width: current page {current_original_page}, "
+              f"viewport={viewport_width}, page_width={page_width:.1f}, zoom={new_zoom:.3f}")
+        self.set_zoom(new_zoom)
 
     def fit_to_height(self):
         """Fit document to height"""
