@@ -27,7 +27,7 @@ def setup_application():
 
     # Set application properties
     app.setApplicationName("PDF Editor")
-    app.setApplicationVersion("2.0")
+    app.setApplicationVersion("0.8.1")
     app.setApplicationDisplayName("PDF Editor")
     app.setOrganizationName("PDF Tools")
     app.setOrganizationDomain("sng.ru")
