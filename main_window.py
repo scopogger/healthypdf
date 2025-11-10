@@ -491,13 +491,29 @@ class MainWindow(QMainWindow):
 
     def ask_save_changes(self) -> int:
         """Спросить пользователя, хочет ли он сохранить изменения"""
-        return QMessageBox.question(
-            self,
-            "Несохранённые изменения",
-            "В документе есть несохранённые изменения. Хотите ли сохранить их?",
-            QMessageBox.Save | QMessageBox.Discard | QMessageBox.Cancel,
-            QMessageBox.Save
-        )
+        msg_box = QMessageBox(self)
+        msg_box.setWindowTitle("Несохранённые изменения")
+        msg_box.setText("В документе есть несохранённые изменения. Хотите ли сохранить их?")
+        msg_box.setIcon(QMessageBox.Question)
+
+        # Создаем кнопки с русским текстом
+        save_btn = msg_box.addButton("Сохранить", QMessageBox.AcceptRole)
+        discard_btn = msg_box.addButton("Не сохранять", QMessageBox.DestructiveRole)
+        cancel_btn = msg_box.addButton("Отмена", QMessageBox.RejectRole)
+
+        # Устанавливаем кнопку по умолчанию
+        msg_box.setDefaultButton(save_btn)
+
+        msg_box.exec()
+
+        # Возвращаем соответствующий стандартный код кнопки
+        clicked_button = msg_box.clickedButton()
+        if clicked_button == save_btn:
+            return QMessageBox.Save
+        elif clicked_button == discard_btn:
+            return QMessageBox.Discard
+        else:  # cancel_btn
+            return QMessageBox.Cancel
 
     def update_window_title(self):
         """Update window title to reflect modification status"""
@@ -534,13 +550,29 @@ class MainWindow(QMainWindow):
             # user requested to exit drawing mode — check unsaved annotations
             if hasattr(self.ui.pdfView, 'any_annotations_dirty') and self.ui.pdfView.any_annotations_dirty():
                 from PySide6.QtWidgets import QMessageBox
-                choice = QMessageBox.question(
-                    self,
-                    "Save drawings?",
-                    "Save drawings to the document? (Save = persist, Discard = remove)",
-                    QMessageBox.Save | QMessageBox.Discard | QMessageBox.Cancel,
-                    QMessageBox.Save
-                )
+                msg_box = QMessageBox(self)
+                msg_box.setWindowTitle("Сохранить рисунки?")
+                msg_box.setText("Сохранить рисунки в документе? (Сохранить = оставить, Не сохранять = удалить)")
+                msg_box.setIcon(QMessageBox.Question)
+
+                # Создаем кнопки с русским текстом
+                save_btn = msg_box.addButton("Сохранить", QMessageBox.AcceptRole)
+                discard_btn = msg_box.addButton("Не сохранять", QMessageBox.DestructiveRole)
+                cancel_btn = msg_box.addButton("Отмена", QMessageBox.RejectRole)
+
+                # Устанавливаем кнопку по умолчанию
+                msg_box.setDefaultButton(save_btn)
+
+                msg_box.exec()
+
+                clicked_button = msg_box.clickedButton()
+                if clicked_button == save_btn:
+                    choice = QMessageBox.Save
+                elif clicked_button == discard_btn:
+                    choice = QMessageBox.Discard
+                else:
+                    choice = QMessageBox.Cancel
+
                 if choice == QMessageBox.Save:
                     # mark modified so normal Save will persist drawings
                     # we set is_modified so Save action is enabled

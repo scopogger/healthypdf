@@ -1433,6 +1433,23 @@ class ActionsHandler:
                 f"Не удалось добавить номера страниц: {str(e)}"
             )
 
+    def russian_message_box(self, title, text):
+        """Создает MessageBox с русскими кнопками"""
+        msg_box = QMessageBox(self.main_window)
+        msg_box.setWindowTitle(title)
+        msg_box.setText(text)
+        msg_box.setIcon(QMessageBox.Question)
+
+        # Добавляем кнопки с русским текстом
+        save_btn = msg_box.addButton("Сохранить", QMessageBox.YesRole)
+        discard_btn = msg_box.addButton("Не сохранять", QMessageBox.NoRole)
+        cancel_btn = msg_box.addButton("Отмена", QMessageBox.RejectRole)
+
+        msg_box.setDefaultButton(save_btn)
+        msg_box.exec()
+
+        return msg_box.clickedButton()
+
     def email_document(self):
         """Отправить текущий PDF документ по email с опциями"""
         current_path = getattr(self.main_window, 'current_document_path', '')
@@ -1442,17 +1459,14 @@ class ActionsHandler:
 
         # Обработка несохраненных изменений
         if getattr(self.main_window, 'is_document_modified', False):
-            reply = QMessageBox.question(
-                self.main_window,
+            clicked_button = self.russian_message_box(
                 "Несохраненные изменения",
-                "В документе есть несохраненные изменения. Хотите сохранить перед отправкой?",
-                QMessageBox.Save | QMessageBox.Discard | QMessageBox.Cancel,
-                QMessageBox.Save
+                "В документе есть несохраненные изменения. Хотите сохранить перед отправкой?"
             )
 
-            if reply == QMessageBox.Cancel:
+            if clicked_button.text() == "Отмена":
                 return
-            elif reply == QMessageBox.Save:
+            elif clicked_button.text() == "Сохранить":
                 if not self.save_file():
                     return
 
