@@ -476,7 +476,7 @@ class UiMainWindow(object):
         self.menuFile.addAction(self.actionEmail)
         self.menuFile.addAction(self.actionCompress)
         self.menuFile.addAction(self.actionSave_Page_As_Image)
-        self.menuFile.addAction(self.actionEnumeratePages)
+        # self.menuFile.addAction(self.actionEnumeratePages)
         self.menuFile.addAction(self.actionPasswordDoc)
         self.menuFile.addAction(self.actionAboutPdf)
         self.menuFile.addSeparator()

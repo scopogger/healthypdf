@@ -81,6 +81,8 @@ class ActionsHandler:
             self.ui.actionPasswordDoc.triggered.connect(self.toggle_password_for_current_document)
         if hasattr(self.ui, 'actionAddFile'):
             self.ui.actionAddFile.triggered.connect(self.add_file_to_document)
+        if hasattr(self.ui, 'actionEmail'):
+            self.ui.actionEmail.triggered.connect(self.email_document)
 
     def connect_navigation_actions(self):
         """Connect navigation actions"""
@@ -1347,6 +1349,207 @@ class ActionsHandler:
             return qVersion()
         except:
             return "Неизвестно"
+
+    def enumerate_pages(self):
+        """Add page numbers to all pages"""
+        pv = getattr(self.ui, 'pdfView', None)
+        if not pv or not hasattr(pv, 'document') or pv.document is None:
+            QMessageBox.warning(
+                self.main_window,
+                "Нет документа",
+                "Пожалуйста, сначала откройте PDF-файл."
+            )
+            return
+
+        # Position dialog
+        position_map = {
+            "По центру снизу": "center",
+            "Внизу слева": "left",
+            "Внизу справа": "right"
+        }
+
+        position_display, ok = QInputDialog.getItem(
+            self.main_window,
+            "Выбрать расположение",
+            "Выберите расположение для номеров страниц:",
+            list(position_map.keys()),
+            0,
+            False
+        )
+        if not ok:
+            return
+
+        position = position_map[position_display]
+
+        # Font size dialog
+        font_size, ok = QInputDialog.getInt(
+            self.main_window,
+            "Размер шрифта",
+            "Введите размер шрифта:",
+            12, 8, 24
+        )
+        if not ok:
+            return
+
+        try:
+            # Add page numbers (doesn't save immediately)
+            if hasattr(pv, 'add_page_numbers'):
+                success = pv.add_page_numbers(position, font_size)
+
+                if success:
+                    # Mark as modified
+                    if hasattr(self.main_window, 'on_document_modified'):
+                        self.main_window.on_document_modified(True)
+                    else:
+                        self.main_window.is_document_modified = True
+
+                    if hasattr(self.main_window, 'update_ui_state'):
+                        self.main_window.update_ui_state()
+                    if hasattr(self.main_window, 'update_window_title'):
+                        self.main_window.update_window_title()
+
+                    QMessageBox.information(
+                        self.main_window,
+                        "Успех",
+                        "Нумерация страниц добавлена.\nИспользуйте 'Сохранить' или 'Сохранить как' для применения изменений."
+                    )
+                else:
+                    QMessageBox.critical(
+                        self.main_window,
+                        "Ошибка",
+                        "Не удалось добавить номера страниц."
+                    )
+            else:
+                QMessageBox.critical(
+                    self.main_window,
+                    "Ошибка",
+                    "Функция нумерации страниц недоступна."
+                )
+
+        except Exception as e:
+            QMessageBox.critical(
+                self.main_window,
+                "Ошибка",
+                f"Не удалось добавить номера страниц: {str(e)}"
+            )
+
+    def email_document(self):
+        """Отправить текущий PDF документ по email с опциями"""
+        current_path = getattr(self.main_window, 'current_document_path', '')
+        if not current_path:
+            QMessageBox.warning(self.main_window, "Нет документа", "Пожалуйста, сначала откройте PDF файл.")
+            return
+
+        # Обработка несохраненных изменений
+        if getattr(self.main_window, 'is_document_modified', False):
+            reply = QMessageBox.question(
+                self.main_window,
+                "Несохраненные изменения",
+                "В документе есть несохраненные изменения. Хотите сохранить перед отправкой?",
+                QMessageBox.Save | QMessageBox.Discard | QMessageBox.Cancel,
+                QMessageBox.Save
+            )
+
+            if reply == QMessageBox.Cancel:
+                return
+            elif reply == QMessageBox.Save:
+                if not self.save_file():
+                    return
+
+        # Запрос опций email
+        subject, ok = QInputDialog.getText(
+            self.main_window,
+            "Тема письма",
+            "Введите тему письма:",
+            text=os.path.basename(current_path)
+        )
+
+        if not ok:
+            return
+
+        # Запрос текста письма
+        body, ok = QInputDialog.getMultiLineText(
+            self.main_window,
+            "Текст письма",
+            "Введите текст письма (опционально):",
+            f"В приложении PDF документ: {os.path.basename(current_path)}"
+        )
+
+        if not ok:
+            return
+
+        try:
+            if sys.platform == "win32":
+                self._email_windows_enhanced(subject, body, current_path)
+            elif sys.platform == "linux":
+                self._email_linux_enhanced(subject, body, current_path)
+            else:
+                self._email_generic_enhanced(subject, body, current_path)
+
+        except Exception as e:
+            QMessageBox.critical(
+                self.main_window,
+                "Ошибка отправки",
+                f"Не удалось подготовить email:\n{str(e)}"
+            )
+
+    def _email_windows_enhanced(self, subject, body, file_path):
+        """Улучшенная отправка email в Windows с текстом письма"""
+        try:
+            import win32com.client as win32
+            ol_app = win32.Dispatch('Outlook.Application')
+            mail_item = ol_app.CreateItem(0)
+            mail_item.Subject = subject
+            mail_item.Body = body
+            mail_item.Attachments.Add(file_path)
+            mail_item.Display()
+        except Exception as e:
+            print(f"Outlook недоступен: {e}")
+            self._email_generic_enhanced(subject, body, file_path)
+
+    def _email_linux_enhanced(self, subject, body, file_path):
+        """Улучшенная отправка email в Linux"""
+        r7_organizer_path = "/opt/r7-office/organizer/r7organizer"
+        if os.path.exists(r7_organizer_path):
+            try:
+                import subprocess
+                # R7 Office может не поддерживать текст в командной строке, используем универсальный вариант
+                self._email_generic_enhanced(subject, body, file_path)
+                return
+            except Exception as e:
+                print(f"Ошибка R7 Office: {e}")
+
+        self._email_generic_enhanced(subject, body, file_path)
+
+    def _email_generic_enhanced(self, subject, body, file_path):
+        """Улучшенный универсальный вариант для всех платформ"""
+        from urllib.parse import quote
+        import webbrowser
+
+        mailto_link = f"mailto:?subject={quote(subject)}&body={quote(body)}"
+
+        try:
+            webbrowser.open(mailto_link)
+
+            # Показать инструкции по вложению
+            QMessageBox.information(
+                self.main_window,
+                "Вложение к письму",
+                f"Ваш почтовый клиент должен открыться с указанной темой и текстом.\n\n"
+                f"Если Ваш файл не прикрепился, Вы можете сделать это вручную (\n{file_path}\n\n)"
+                f"Файл расположен по адресу:\n{os.path.dirname(file_path)}"
+            )
+        except Exception as e:
+            QMessageBox.information(
+                self.main_window,
+                "Отправка документа по email",
+                f"Чтобы отправить этот документ:\n\n"
+                f"1. Откройте ваш почтовый клиент\n"
+                f"2. Создайте новое сообщение\n"
+                f"3. Тема: {subject}\n"
+                f"4. Текст: {body}\n"
+                f"5. Прикрепите этот файл:\n{file_path}"
+            )
 
     def move_page_up(self):
         self._move_page_generic('move_page_up')

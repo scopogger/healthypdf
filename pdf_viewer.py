@@ -1530,21 +1530,134 @@ class PDFViewer(QScrollArea):
 
         return True
 
+    def add_page_numbers(self, position: str = "center", font_size: int = 12, color: tuple = (0, 0, 0)):
+        """
+        Add page numbers to all visible pages using vector annotations for immediate visibility.
+        The numbers will be permanently saved when save_changes() is called.
+        Position options: 'center', 'left', 'right'
+        """
+        if not self.document:
+            return False
+
+        try:
+            import tempfile
+            import shutil
+
+            # Create a temporary modified document
+            temp_doc = fitz.open()
+
+            # Build the document with page numbers
+            for info in self.pages_info:
+                orig_page = info.page_num
+                if orig_page in self.deleted_pages:
+                    continue
+
+                # Get source page and apply rotation
+                src_page = self.document[orig_page]
+                rotation = self.page_rotations.get(orig_page, 0)
+                if rotation != 0:
+                    src_page.set_rotation(rotation)
+
+                # Create new page in temp doc
+                rect = src_page.rect
+                new_page = temp_doc.new_page(width=rect.width, height=rect.height)
+
+                # Copy page content
+                pix = src_page.get_pixmap(alpha=False)
+                base_bytes = pix.tobytes("png")
+                new_page.insert_image(rect, stream=base_bytes)
+
+                # Calculate display page number
+                layout_idx = self.layout_index_for_original(orig_page)
+                display_num = self.get_display_page_number(layout_idx)
+                text = str(display_num)
+
+                # Calculate position
+                text_width = fitz.get_text_length(text, fontname="helv", fontsize=font_size)
+
+                if position == "center":
+                    x = (rect.width - text_width) / 2
+                elif position == "left":
+                    x = 20
+                else:  # right
+                    x = rect.width - text_width - 20
+
+                y = rect.height - 20
+
+                # Insert text
+                new_page.insert_text(
+                    (x, y),
+                    text,
+                    fontsize=font_size,
+                    color=color
+                )
+
+            # Save temp doc to a temp file
+            fd, temp_path = tempfile.mkstemp(suffix=".pdf")
+            os.close(fd)
+            temp_doc.save(temp_path)
+            temp_doc.close()
+
+            # Close current document
+            if self.document:
+                self.document.close()
+
+            # Replace with numbered document
+            self.document = fitz.open(temp_path)
+            if self.document.needs_pass and self.document_password:
+                self.document.authenticate(self.document_password)
+
+            # Update doc_path to temp file (will be replaced on save)
+            old_doc_path = self.doc_path
+            self.doc_path = temp_path
+
+            # Store original path for save operations
+            if not hasattr(self, '_original_doc_path'):
+                self._original_doc_path = old_doc_path
+
+            # Mark as modified
+            self.is_modified = True
+            self.document_modified.emit(True)
+
+            # Clear cache and refresh all visible pages
+            self.page_cache.clear()
+            for layout_idx in range(len(self.page_widgets)):
+                self.clear_page_widget(layout_idx)
+
+            # Force immediate refresh
+            QTimer.singleShot(100, self.update_visible_pages)
+
+            return True
+
+        except Exception as e:
+            print(f"Error adding page numbers: {e}")
+            import traceback
+            traceback.print_exc()
+            return False
+
     def move_page_up(self):
         return self._move_page(-1)
 
     def move_page_down(self):
         return self._move_page(1)
 
-    def save_changes(self, file_path: str = None) -> bool:
+    def save_changes(self, file_path: str = None, os=None) -> bool:
         """Save changes to file: build page_order by iterating layout and using ORIGINAL page numbers.
         This version inserts the original page content and then overlays annotation PNG (if present) on top.
         """
         if not self.document or not self.is_modified:
             return True
         try:
-            save_path = file_path if file_path else self.doc_path
+            # Determine save path - use original if we have it (for enumeration case)
+            if file_path:
+                save_path = file_path
+            elif hasattr(self, '_original_doc_path') and self._original_doc_path:
+                save_path = self._original_doc_path
+            else:
+                save_path = self.doc_path
+
             new_doc = fitz.open()
+
             # page_order: list of original page numbers in current layout (skip deleted originals)
             page_order = []
             for i in range(self.pages_layout.count()):
@@ -1560,11 +1673,18 @@ class PDFViewer(QScrollArea):
 
             for orig_page_num in page_order:
                 if 0 <= orig_page_num < len(self.document):
-                    # create a new page with original size
+                    # Get source page
                     src_page = self.document[orig_page_num]
+
+                    # Apply rotation if it exists BEFORE rendering
+                    rotation = self.page_rotations.get(orig_page_num, 0)
+                    if rotation != 0:
+                        src_page.set_rotation(rotation)
+
                     rect = src_page.rect
                     new_page = new_doc.new_page(width=rect.width, height=rect.height)
-                    # render original page to pixmap and insert as background image
+
+                    # Render original page with rotation applied to pixmap
                     pix = src_page.get_pixmap(alpha=False)
                     base_bytes = pix.tobytes("png")
                     new_page.insert_image(rect, stream=base_bytes)
@@ -1688,12 +1808,26 @@ class PDFViewer(QScrollArea):
                 new_doc.save(save_path)
                 new_doc.close()
 
+            # clean up temp file and restore path
+            if hasattr(self, '_original_doc_path') and self._original_doc_path:
+                # Remove temp file if it exists
+                if self.doc_path != self._original_doc_path:
+                    try:
+                        import os
+                        if os.path.exists(self.doc_path):
+                            os.remove(self.doc_path)
+                    except Exception as e:
+                        print(f"Failed to remove temp file: {e}")
+
+                # Restore original path
+                self.doc_path = self._original_doc_path
+                delattr(self, '_original_doc_path')
+
             # Remove stored annotation bytes for pages we saved (or just clear all for simplicity)
             try:
                 # If we have a local page_order list used during save, we can delete per-page:
                 # for orig in page_order:
                 #     self.page_annotations.pop(orig, None)
-                # Simpler: clear all in-memory annotation bytes after successful save
 
                 # after saving succeeded for the document:
                 try:
@@ -1809,10 +1943,10 @@ class PDFViewer(QScrollArea):
         panel.setStyleSheet("QFrame { background: rgba(255,255,255,0.92); border: 1px solid #bbb; padding:4px; }")
         layout = QVBoxLayout(panel)
         layout.setContentsMargins(4, 4, 4, 4)
-        brush_btn = QPushButton("Brush", panel)
-        rect_btn = QPushButton("Rect", panel)
-        color_btn = QPushButton("Black/White", panel)
-        clear_btn = QPushButton("Clear page", panel)
+        brush_btn = QPushButton("Кисточка", panel)
+        rect_btn = QPushButton("Прямоугольник", panel)
+        color_btn = QPushButton("Чёрный/Белый", panel)
+        clear_btn = QPushButton("Очистить холст", panel)
         layout.addWidget(brush_btn)
         layout.addWidget(rect_btn)
         layout.addWidget(color_btn)
