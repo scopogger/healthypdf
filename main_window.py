@@ -530,7 +530,6 @@ class MainWindow(QMainWindow):
     def on_page_changed(self, orig_page_num: int):
         """pdfView now emits ORIGINAL page numbers; thumbnail widget likely expects original page ids"""
         if hasattr(self.ui.thumbnailList, 'set_current_page'):
-            # thumbnailList probably expects original page number; if it expects layout index adjust accordingly
             try:
                 self.ui.thumbnailList.set_current_page(orig_page_num)
             except Exception:

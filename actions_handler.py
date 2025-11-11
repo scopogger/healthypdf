@@ -564,7 +564,7 @@ class ActionsHandler:
                 self._mark_not_modified()
                 return True
 
-        QMessageBox.critical(self.main_window, "Save Error", "Failed to save the document.")
+        QMessageBox.critical(self.main_window, "Ошибка сохранения", "Не удалось сохранить документ.")
         return False
 
     def save_file_as(self) -> bool:
