@@ -20,8 +20,9 @@ def setup_application():
                                  nargs='?', type=str)
     options = argument_parser.parse_args()
 
-    # Default theme should be Light (this is an exception for Windows 10 and 11 PySide6 GUIs)
-    sys.argv += ['-platform', 'windows:darkmode=1']
+    if sys.platform == "win32":
+        # Default theme should be Light (this is an exception for Windows 10 and 11 PySide6 GUIs)
+        sys.argv += ['-platform', 'windows:darkmode=1']
 
     app = QApplication(sys.argv)
 

@@ -11,7 +11,6 @@ import os
 from thumbnail_widget import ThumbnailWidget
 from pdf_viewer import PDFViewer
 
-# Try to import resources, but don't fail if it's not available
 try:
     import resources
 except ImportError:

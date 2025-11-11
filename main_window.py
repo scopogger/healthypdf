@@ -27,7 +27,7 @@ class MainWindow(QMainWindow):
 
         # UI setup
         self.ui = UiMainWindow()
-        self.ui.setup_ui(self, "en")
+        self.ui.setup_ui(self, 'ru')
 
         # Document state
         self.current_document_path = ""
