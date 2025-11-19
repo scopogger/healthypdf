@@ -15,9 +15,9 @@ import fitz  # PyMuPDF
 
 
 class ThumbnailCache:
-    """Cache for thumbnail images with size-aware storage"""
+    """LRU Cache for thumbnail images with size-aware storage"""
 
-    def __init__(self, max_size: int = 50):  # Reduced from 100 to 50
+    def __init__(self, max_size: int = 20):
         self.max_size = max_size
         # Store raw thumbnails WITHOUT page numbers
         self.cache: OrderedDict[tuple, QPixmap] = OrderedDict()  # (page_num, size) -> pixmap
@@ -37,7 +37,8 @@ class ThumbnailCache:
             self.cache.move_to_end(key)
         else:
             self.cache[key] = pixmap
-            if len(self.cache) > self.max_size:
+            # LRU eviction when cache exceeds max size
+            while len(self.cache) > self.max_size:
                 oldest = next(iter(self.cache))
                 # Properly clean up the oldest pixmap
                 oldest_pixmap = self.cache[oldest]
@@ -162,8 +163,6 @@ class ThumbnailRenderWorker(QRunnable):
 
 
 class ThumbnailWidget(QWidget):
-    """Thumbnail widget for displaying page previews with resizable thumbnails"""
-
     page_clicked = Signal(int)
 
     def __init__(self, parent=None):
@@ -174,7 +173,7 @@ class ThumbnailWidget(QWidget):
         self.document = None
         self.doc_path = ""
         self.document_password = ""
-        self.thumbnail_cache = ThumbnailCache()
+        self.thumbnail_cache = ThumbnailCache(max_size=20)  # LRU cache with 20 items
         self.thread_pool = QThreadPool()
         self.thread_pool.setMaxThreadCount(1)
 
@@ -193,6 +192,10 @@ class ThumbnailWidget(QWidget):
         # Thumbnail size (can be controlled by slider) and font
         self.thumbnail_size = 100  # Larger default size
         self.page_number_font_size = 10
+
+        # LRU tracking for visible thumbnails
+        self.visible_thumbnails: OrderedDict[int, bool] = OrderedDict()  # page_num -> True (for LRU)
+        self.max_visible_thumbnails = 20  # Maximum thumbnails to keep rendered
 
         # Setup UI
         self.setup_ui()
@@ -285,6 +288,7 @@ class ThumbnailWidget(QWidget):
         self.document_password = password
         self.page_rotations.clear()
         self.deleted_pages.clear()
+        self.visible_thumbnails.clear()
 
         if document:
             # Initialize display order with original page indices
@@ -367,6 +371,7 @@ class ThumbnailWidget(QWidget):
         self.display_order.clear()
         self.page_rotations.clear()
         self.deleted_pages.clear()
+        self.visible_thumbnails.clear()
 
         # Reset document references
         self.document = None
@@ -501,6 +506,7 @@ class ThumbnailWidget(QWidget):
 
         # Clear cache (different size needed)
         self.thumbnail_cache.clear()
+        self.visible_thumbnails.clear()
 
         # Update grid and item sizes
         self.update_grid_size()
@@ -531,7 +537,7 @@ class ThumbnailWidget(QWidget):
                     item.setIcon(QIcon(placeholder))
 
     def load_visible_thumbnails(self):
-        """Load thumbnails for visible items only"""
+        """Load thumbnails for visible items only with LRU management"""
         if self.document is None or self.thumbnail_list.count() == 0:
             return
 
@@ -562,13 +568,30 @@ class ThumbnailWidget(QWidget):
         start = max(0, first_visible - buffer_size)
         end = min(self.thumbnail_list.count(), last_visible + buffer_size + 1)
 
+        # Update LRU tracking for visible thumbnails
+        visible_pages = set()
         for i in range(start, end):
             if i < self.thumbnail_list.count():
                 item = self.thumbnail_list.item(i)
                 if item and not item.isHidden():
                     original_page = item.data(Qt.UserRole)
                     if original_page is not None and original_page not in self.deleted_pages:
-                        self.load_thumbnail(original_page)
+                        visible_pages.add(original_page)
+                        # Update LRU - move to end (most recently used)
+                        if original_page in self.visible_thumbnails:
+                            self.visible_thumbnails.move_to_end(original_page)
+                        else:
+                            self.visible_thumbnails[original_page] = True
+
+        # LRU eviction: remove least recently used thumbnails beyond our limit
+        while len(self.visible_thumbnails) > self.max_visible_thumbnails:
+            oldest_page, _ = self.visible_thumbnails.popitem(last=False)
+            # Clear from cache but keep the item (it will show placeholder)
+            self.thumbnail_cache.remove_page(oldest_page)
+
+        # Load thumbnails for visible pages
+        for original_page in visible_pages:
+            self.load_thumbnail(original_page)
 
     def load_thumbnail(self, original_page_num: int):
         """Load thumbnail for specific page (by original page number)"""
@@ -624,8 +647,14 @@ class ThumbnailWidget(QWidget):
             if render_id in self.active_workers:
                 del self.active_workers[render_id]
 
-        # Store RAW pixmap in cache
+        # Store RAW pixmap in cache (LRU will manage the cache size)
         self.thumbnail_cache.put_raw(original_page_num, size, raw_pixmap)
+
+        # Update LRU tracking
+        if original_page_num in self.visible_thumbnails:
+            self.visible_thumbnails.move_to_end(original_page_num)
+        else:
+            self.visible_thumbnails[original_page_num] = True
 
         # Find and update the item
         for i in range(self.thumbnail_list.count()):
@@ -717,6 +746,7 @@ class ThumbnailWidget(QWidget):
 
         # Remove from cache and display order
         self.thumbnail_cache.remove_page(original_page_num)
+        self.visible_thumbnails.pop(original_page_num, None)
 
         # Remove from display order
         if original_page_num in self.display_order:
@@ -730,6 +760,7 @@ class ThumbnailWidget(QWidget):
 
         # Remove from cache to force reload
         self.thumbnail_cache.remove_page(original_page_num)
+        self.visible_thumbnails.pop(original_page_num, None)
 
         # Find and update the item
         for i in range(self.thumbnail_list.count()):
@@ -775,6 +806,9 @@ class ThumbnailWidget(QWidget):
                 self.thumbnail_list.addItem(item)
 
         # Note: do NOT append deleted pages as hidden items at the end.
+        # Clear LRU tracking since we have a new order
+        self.visible_thumbnails.clear()
+
         # Trigger loading of visible thumbnails
         self.load_timer.start(50)
 

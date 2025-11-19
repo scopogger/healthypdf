@@ -111,10 +111,6 @@ class PageRenderWorker(QRunnable):
 
             page = doc[self.page_num]
 
-            if self.cancelled:
-                doc.close()
-                return
-
             # Apply rotation
             if self.rotation != 0:
                 page.set_rotation(self.rotation)
@@ -122,10 +118,6 @@ class PageRenderWorker(QRunnable):
             # Use zoom to create matrix - this determines the actual pixel dimensions
             matrix = fitz.Matrix(self.zoom, self.zoom)
             pix = page.get_pixmap(matrix=matrix, alpha=False, colorspace=fitz.csRGB, clip=None)
-
-            if self.cancelled:
-                doc.close()
-                return
 
             # Convert to QPixmap
             img_data = pix.tobytes("ppm")
@@ -286,24 +278,26 @@ class PDFViewer(QScrollArea):
             self.close_document()
             self.zoom_level = 1.0
 
+            self.document = fitz.open(file_path)
+
             # Handle password authentication
             password = self.authenticate_document(file_path)
             if password is None:
-                temp_doc = fitz.open(file_path)
-                if temp_doc.needs_pass:
-                    temp_doc.close()
+                # temp_doc = fitz.open(file_path)
+                if self.document.needs_pass:
+                    self.document.close()
                     print("Password required but not provided")
                     return False
-                temp_doc.close()
+                # temp_doc.close()
 
             self.document_password = password or ""
 
             # Quick document info extraction WITHOUT loading pages
-            temp_doc = fitz.open(file_path)
-            if temp_doc.needs_pass:
-                temp_doc.authenticate(self.document_password)
+            # temp_doc = fitz.open(file_path)
+            if self.document.needs_pass:
+                self.document.authenticate(self.document_password)
 
-            page_count = len(temp_doc)
+            page_count = len(self.document)
             print(f"Document has {page_count} pages")
 
             self.doc_path = file_path
@@ -311,16 +305,16 @@ class PDFViewer(QScrollArea):
 
             # Extract page info - store dimensions as floats for precision
             for page_num in range(page_count):
-                rect = temp_doc[page_num].rect
+                rect = self.document[page_num].rect
                 self.pages_info.append(PageInfo(
                     page_num=page_num,
                     width=float(rect.width),
                     height=float(rect.height)
                 ))
-            temp_doc.close()
+            # temp_doc.close()
 
             # keep a persistent document handle for operations
-            self.document = fitz.open(file_path)
+            # 14-11-2025 self.document = fitz.open(file_path)
             if self.document.needs_pass:
                 self.document.authenticate(self.document_password)
 
@@ -2039,6 +2033,22 @@ class PDFViewer(QScrollArea):
         print(f"Fit to width: current page {current_original_page}, "
               f"viewport={viewport_width}, page_width={page_width:.1f}, zoom={new_zoom:.3f}")
         self.set_zoom(new_zoom)
+
+        QTimer.singleShot(100, self.center_horizontal_scrollbar)
+
+    def center_horizontal_scrollbar(self):
+        """Center the horizontal scrollbar after zoom operations"""
+        if not self.document or not self.page_widgets:
+            return
+
+        h_scrollbar = self.horizontalScrollBar()
+        if not h_scrollbar.isVisible():
+            return
+
+        max_scroll = h_scrollbar.maximum()
+        center_scroll = max_scroll // 2
+
+        h_scrollbar.setValue(center_scroll)
 
     def fit_to_height(self):
         """Fit document to height"""
