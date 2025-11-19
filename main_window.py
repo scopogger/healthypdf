@@ -400,14 +400,17 @@ class MainWindow(QMainWindow):
             if hasattr(self.ui, action_name):
                 getattr(self.ui, action_name).setEnabled(has_document)
 
-        # Update view actions
+        # Update view actions - fit-to-width is now checkable
         view_actions = [
-            'actionZoom_In', 'actionZoom_Out',
-            'actionFitToWidth', 'actionFitToHeight'
+            'actionZoom_In', 'actionZoom_Out', 'actionFitToHeight'
         ]
         for action_name in view_actions:
             if hasattr(self.ui, action_name):
                 getattr(self.ui, action_name).setEnabled(has_document)
+
+        # Fit to width is always enabled when document is open
+        if hasattr(self.ui, 'actionFitToWidth'):
+            self.ui.actionFitToWidth.setEnabled(has_document)
 
     def get_current_display_page_number(self) -> int:
         """Get the current page's display number (1-based) using pdfView.pages_info and deleted_pages"""

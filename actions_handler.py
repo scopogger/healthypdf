@@ -9,7 +9,7 @@ from typing import List, Optional
 from PySide6.QtWidgets import (
     QFileDialog, QMessageBox, QProgressDialog, QApplication, QInputDialog, QLineEdit
 )
-from PySide6.QtCore import Qt
+from PySide6.QtCore import Qt, QObject
 from PySide6.QtGui import QAction, QPainter, QImage
 from PySide6.QtPrintSupport import QPrinter, QPrintDialog
 from PySide6.QtGui import QPageLayout
@@ -31,7 +31,7 @@ def messagebox_info(parent, title, message):
     QMessageBox.information(parent, title, message)
 
 
-class ActionsHandler:
+class ActionsHandler(QObject):
     """Wire up menus/toolbars and provide app actions compatible with the *new* UI
     while preserving behavior from the *old* implementation where possible.
 
@@ -41,9 +41,12 @@ class ActionsHandler:
     """
 
     def __init__(self, main_window):
+        super().__init__()
         self.main_window = main_window
         self.ui = main_window.ui
         self.recent_file_actions: list[QAction] = []
+
+        self.fit_to_width_enabled = False
 
         # Connect everything
         self.connect_all_actions()
@@ -126,7 +129,9 @@ class ActionsHandler:
         if hasattr(self.ui, 'actionZoom_Out'):
             self.ui.actionZoom_Out.triggered.connect(self.zoom_out)
         if hasattr(self.ui, 'actionFitToWidth'):
-            self.ui.actionFitToWidth.triggered.connect(self.fit_to_width)
+            # Make it checkable and connect toggled signal
+            self.ui.actionFitToWidth.setCheckable(True)
+            self.ui.actionFitToWidth.toggled.connect(self.on_fit_to_width_toggled)
         if hasattr(self.ui, 'actionFitToHeight'):
             self.ui.actionFitToHeight.triggered.connect(self.fit_to_height)
         if hasattr(self.ui, 'actionRotateViewClockwise'):
@@ -619,6 +624,13 @@ class ActionsHandler:
             if reply == QMessageBox.Save and not self.save_file():
                 return
 
+        # Reset fit-to-width state when closing file
+        self.fit_to_width_enabled = False
+        if hasattr(self.ui, 'actionFitToWidth'):
+            self.ui.actionFitToWidth.setChecked(False)
+        # Remove event filter
+        self.main_window.removeEventFilter(self)
+
         pv = getattr(self.ui, 'pdfView', None)
         if hasattr(pv, 'close_document'):
             pv.close_document()
@@ -850,6 +862,38 @@ class ActionsHandler:
             pv.fit_to_height()
         self._update_zoom_selector()
 
+    def on_fit_to_width_toggled(self, checked):
+        """Handle fit-to-width toggle"""
+        self.fit_to_width_enabled = checked
+
+        if checked:
+            # Enable fit-to-width mode
+            self.fit_to_width()
+
+            # Connect resize event to maintain fit-to-width
+            if hasattr(self.main_window, 'installEventFilter'):
+                self.main_window.installEventFilter(self)
+
+        else:
+            # Remove event filter
+            self.main_window.removeEventFilter(self)
+
+            # Update zoom selector to reflect current state
+        self._update_zoom_selector()
+
+    def eventFilter(self, obj, event):
+        """Handle resize events to maintain fit-to-width"""
+        from PySide6.QtCore import QEvent
+
+        if (self.fit_to_width_enabled and
+                event.type() == QEvent.Resize and
+                obj == self.main_window):
+            # Small delay to ensure resize is complete
+            from PySide6.QtCore import QTimer
+            QTimer.singleShot(50, self.fit_to_width)
+
+        return super().eventFilter(obj, event)
+
     def rotate_view_clockwise(self):
         pv = getattr(self.ui, 'pdfView', None)
         if hasattr(pv, 'rotate_view'):
@@ -888,7 +932,8 @@ class ActionsHandler:
                 except Exception:
                     panel_width = 150
                 panel_width = max(150, min(300, int(panel_width or 150)))
-                self.ui.splitter.setSizes([tab_buttons_width, panel_width, max(400, total - tab_buttons_width - panel_width)])
+                self.ui.splitter.setSizes(
+                    [tab_buttons_width, panel_width, max(400, total - tab_buttons_width - panel_width)])
         else:
             self.ui.sidePanelContent.hide()
             if hasattr(self.ui, 'splitter'):

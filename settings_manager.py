@@ -12,7 +12,7 @@ class SettingsManager:
     MAX_RECENT_FILES = 10
 
     def __init__(self):
-        self.settings = QSettings("YourCompany", "PDFEditor")
+        self.settings = QSettings("SNG_COMPANY", "PDFEditor")
 
     def save_window_state(self, size: QSize, position: QPoint, maximized: bool):
         """Save window state"""
