@@ -1,70 +1,29 @@
-# thumbnail_widget_optimized.py
 import fitz  # PyMuPDF
 import gc
-import sys
 import threading
 from collections import OrderedDict
 from typing import Optional, Dict, List
 
 from PySide6.QtWidgets import (
     QWidget, QVBoxLayout, QListWidget, QListWidgetItem,
-    QSlider, QScrollBar, QApplication
+    QSlider
 )
 from PySide6.QtCore import (
-    Qt, Signal, QSize, QTimer, QRunnable, QThreadPool, QObject, QPoint
-)
-from PySide6.QtGui import QIcon, QPixmap, QPainter, QColor, QFont, QImage
-
+    Qt, Signal, QSize, QTimer, QRunnable, QThreadPool, QObject)
+from PySide6.QtGui import QIcon, QPixmap, QPainter, QColor, QImage
 
 # --- CONFIGURATION & MEMORY PROFILE ---
-
-class ThumbnailConfig:
-    """Determines cache sizes based on system RAM."""
-
-    BUFFER_SIZES = {
-        'low_memory': 2,
-        'normal': 5,
-        'high_memory': 12
-    }
-
-    MAX_CACHE_SIZES = {
-        'low_memory': 20,
-        'normal': 50,
-        'high_memory': 150
-    }
-
-    @classmethod
-    def detect_memory_profile(cls):
-        try:
-            import psutil
-            memory_gb = psutil.virtual_memory().total / (1024 ** 3)
-            if memory_gb < 4:
-                return 'low_memory'
-            elif memory_gb < 8:
-                return 'normal'
-            else:
-                return 'high_memory'
-        except ImportError:
-            return 'normal'
-
-
-# Global config setup
-PROFILE_NAME = ThumbnailConfig.detect_memory_profile()
-BUFFER_SIZE = ThumbnailConfig.BUFFER_SIZES[PROFILE_NAME]
-MAX_CACHE_SIZE = ThumbnailConfig.MAX_CACHE_SIZES[PROFILE_NAME]
+BUFFER_SIZE = 15  # количество миниатюр которые должны быть загружены за пределами видимой области
+MAX_CACHE_SIZE = 20  # количество миниатюр которые хранятся в кэше
 DEFAULT_THUMB_SIZE = 150
-SCROLL_DEBOUNCE_MS = 100
-GC_INTERVAL = 20
-
-
-# --- WORKER & SIGNALS ---
+SCROLL_DEBOUNCE_MS = 100  # задержка обработки события прокрутки
 
 class WorkerSignals(QObject):
     result = Signal(int, object, int)  # page_num, qimage, thumb_size
 
 
 class ThumbnailRenderWorker(QRunnable):
-    """Background worker to render a single PDF page."""
+    """Worker for rendering thumbnails in background"""
 
     def __init__(self, doc_path, page_num, size, password="", rotation=0):
         super().__init__()
@@ -134,10 +93,8 @@ class ThumbnailManager(QObject):
         self.cache = OrderedDict()  # page_num -> QPixmap
         self.pending_requests = set()
         self.tasks = {}
-        self.load_counter = 0
 
-        # Thread safety
-        self.render_lock = threading.Lock()
+        self.render_lock = threading.Lock()  # чтобы несколько потоков одновременно не меняли одни данные
 
     def set_document(self, doc_path, password, total_pages):
         """Initialize with new document"""
@@ -147,7 +104,6 @@ class ThumbnailManager(QObject):
         self.total_pages = total_pages
         self.cache.clear()
         self.pending_requests.clear()
-        gc.collect()
 
     def cancel_all(self):
         """Cancel all pending render tasks"""
@@ -186,7 +142,7 @@ class ThumbnailManager(QObject):
         if not missing_pages:
             return
 
-        # Sort by distance from center for priority
+        # Sort by distance from center for priority и того-сего ну надеюсь будет работать
         center = (first_visible + last_visible) / 2
         missing_pages.sort(key=lambda p: abs(p - center))
 
@@ -226,11 +182,6 @@ class ThumbnailManager(QObject):
 
         # Emit signal for UI update
         self.thumbnail_loaded.emit(page_num, qimage, thumb_size)
-
-        # Periodic garbage collection
-        self.load_counter += 1
-        if self.load_counter % GC_INTERVAL == 0:
-            gc.collect()
 
     def _manage_cache_memory(self, required_range):
         """Manage cache memory using LRU eviction"""
@@ -278,28 +229,18 @@ class ThumbnailManager(QObject):
                 self.pending_requests.discard(page_num)
 
 
-# --- COMPATIBLE THUMBNAIL WIDGET ---
-
 class ThumbnailWidget(QWidget):
-    """
-    Optimized thumbnail widget that maintains compatibility with existing API
-    while using the new memory-efficient loading system.
-    """
-
     page_clicked = Signal(int)
 
     def __init__(self, parent=None):
         super().__init__(parent)
 
-        # Threading
         self.thread_pool = QThreadPool()
         self.thread_pool.setMaxThreadCount(max(1, QThreadPool.globalInstance().maxThreadCount() - 1))
 
-        # Manager
         self.manager = ThumbnailManager(self.thread_pool)
         self.manager.thumbnail_loaded.connect(self._on_thumbnail_loaded)
 
-        # Document state (compatible with existing code)
         self.document = None
         self.doc_path = ""
         self.document_password = ""
@@ -311,13 +252,7 @@ class ThumbnailWidget(QWidget):
         self.thumbnail_size = DEFAULT_THUMB_SIZE
         self.page_number_font_size = 10
 
-        # UI Setup (compatible with existing)
         self.setup_ui()
-
-        # Timers
-        self.scroll_timer = QTimer()
-        self.scroll_timer.setSingleShot(True)
-        self.scroll_timer.timeout.connect(self._process_visible_area)
 
         self.load_timer = QTimer()
         self.load_timer.setSingleShot(True)
@@ -327,12 +262,10 @@ class ThumbnailWidget(QWidget):
         self.placeholder_cache = {}
 
     def setup_ui(self):
-        """Setup UI compatible with existing thumbnail widget"""
         layout = QVBoxLayout(self)
         layout.setContentsMargins(2, 2, 2, 2)
         layout.setSpacing(2)
 
-        # List widget
         self.thumbnail_list = QListWidget()
         self.thumbnail_list.setViewMode(QListWidget.IconMode)
         self.thumbnail_list.setResizeMode(QListWidget.Adjust)
@@ -378,7 +311,7 @@ class ThumbnailWidget(QWidget):
         self.thumbnail_list.itemClicked.connect(self._on_item_clicked)
         self.thumbnail_list.currentItemChanged.connect(self._on_current_item_changed)
         self.thumbnail_list.verticalScrollBar().valueChanged.connect(
-            lambda: self.load_timer.start(50)
+            lambda: self.load_timer.start(SCROLL_DEBOUNCE_MS)
         )
 
         layout.addWidget(self.thumbnail_list)
@@ -386,10 +319,7 @@ class ThumbnailWidget(QWidget):
 
         self.setMinimumWidth(150)
 
-    # --- COMPATIBLE API METHODS ---
-
     def set_document(self, document, doc_path: str, password: str = ""):
-        """Compatible set_document method"""
         self.manager.cancel_all()
 
         self.document = document
@@ -399,7 +329,6 @@ class ThumbnailWidget(QWidget):
         self.deleted_pages.clear()
 
         if document:
-            # Get total pages from document
             try:
                 total_pages = len(document)
                 self.display_order = list(range(total_pages))
@@ -436,14 +365,14 @@ class ThumbnailWidget(QWidget):
         self._update_grid_size()
 
     def _create_placeholder_with_number(self, page_num: int) -> QPixmap:
-        """Create placeholder with page number (compatible style)"""
+        """Create placeholder with page number"""
         placeholder = QPixmap(self.thumbnail_size, self.thumbnail_size)
         placeholder.fill(Qt.white)
 
         painter = QPainter(placeholder)
         painter.setRenderHint(QPainter.Antialiasing)
 
-        # Draw page number bar at bottom (compatible style)
+        # Draw page number bar at bottom
         h = placeholder.height()
         bar_h = max(18, int(h * 0.14))
         painter.fillRect(0, h - bar_h, placeholder.width(), bar_h, QColor(0, 0, 0, 150))
@@ -463,7 +392,7 @@ class ThumbnailWidget(QWidget):
         return placeholder
 
     def _get_display_number(self, page_num: int) -> Optional[int]:
-        """Get display number for page (compatible with existing logic)"""
+        """Get display number for page"""
         if page_num in self.deleted_pages:
             return None
 
@@ -481,7 +410,6 @@ class ThumbnailWidget(QWidget):
         return count if page_num not in self.deleted_pages else None
 
     def clear_thumbnails(self):
-        """Compatible clear method"""
         self.manager.cancel_all()
         self.thumbnail_list.clear()
         self.placeholder_cache.clear()
@@ -493,10 +421,7 @@ class ThumbnailWidget(QWidget):
         self.page_rotations.clear()
         self.deleted_pages.clear()
 
-        gc.collect()
-
     def set_current_page(self, page_num: int):
-        """Compatible set_current_page method"""
         for i in range(self.thumbnail_list.count()):
             item = self.thumbnail_list.item(i)
             if item and item.data(Qt.UserRole) == page_num:
@@ -505,7 +430,6 @@ class ThumbnailWidget(QWidget):
                 break
 
     def hide_page_thumbnail(self, page_num: int):
-        """Compatible hide_page_thumbnail method"""
         self.deleted_pages.add(page_num)
         self.manager.remove_page(page_num)
 
@@ -520,7 +444,6 @@ class ThumbnailWidget(QWidget):
             self.display_order.remove(page_num)
 
     def rotate_page_thumbnail(self, page_num: int, rotation: int):
-        """Compatible rotate_page_thumbnail method"""
         current_rotation = self.page_rotations.get(page_num, 0)
         new_rotation = (current_rotation + rotation) % 360
         self.page_rotations[page_num] = new_rotation
@@ -540,7 +463,6 @@ class ThumbnailWidget(QWidget):
         self.load_timer.start(100)
 
     def update_thumbnails_order(self, visible_order: List[int]):
-        """Compatible update_thumbnails_order method"""
         self.display_order = visible_order.copy()
         self.thumbnail_list.clear()
 
@@ -590,13 +512,13 @@ class ThumbnailWidget(QWidget):
 
         return result
 
-    # --- OPTIMIZED LOADING LOGIC ---
-
     def _process_visible_area(self):
         """Process currently visible area for thumbnail loading"""
         first_visible, last_visible = self._calculate_visible_indices()
         if first_visible is not None and last_visible is not None:
             self.manager.update_visible_range(first_visible, last_visible)
+        # else:
+        #     self.manager.update_visible_range(0, min(9, self.thumbnail_list.count() - 1))
 
     def _calculate_visible_indices(self):
         """Calculate visible indices in the list"""
@@ -618,7 +540,7 @@ class ThumbnailWidget(QWidget):
     def _on_thumbnail_loaded(self, page_num: int, qimage: QImage, thumb_size: int):
         """Handle loaded thumbnail from manager"""
         if thumb_size != self.thumbnail_size:
-            return  # Ignore if size doesn't match current setting
+            return
 
         # Convert to pixmap and add overlay
         pixmap = QPixmap.fromImage(qimage)
@@ -631,10 +553,9 @@ class ThumbnailWidget(QWidget):
                 item.setIcon(QIcon(final_pixmap))
                 break
 
-    # --- COMPATIBLE EVENT HANDLERS ---
-
     def on_size_changed(self, value):
-        """Compatible size change handler"""
+        self.placeholder_cache.clear()
+
         if value == self.thumbnail_size:
             return
 
@@ -667,7 +588,7 @@ class ThumbnailWidget(QWidget):
                 item.setSizeHint(QSize(item_width, item_height))
 
     def _refresh_all_thumbnails(self):
-        """Refresh all thumbnails (e.g., after size change)"""
+        """Refresh all thumbnails (типа после size_change)"""
         for i in range(self.thumbnail_list.count()):
             item = self.thumbnail_list.item(i)
             if item:
