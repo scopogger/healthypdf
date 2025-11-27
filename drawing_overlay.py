@@ -1,4 +1,3 @@
-# drawing_overlay.py
 from PySide6.QtWidgets import QWidget, QLabel, QVBoxLayout
 from PySide6.QtGui import QPainter, QPen, QColor, QPixmap, QMouseEvent, QPaintEvent
 from PySide6.QtCore import Qt, QRect, QPoint, QBuffer, Signal, QSize
