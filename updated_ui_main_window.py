@@ -8,7 +8,7 @@ from PySide6.QtPdf import QPdfDocument, QPdfBookmarkModel
 from PySide6.QtPdfWidgets import QPdfView
 import sys
 import os
-from thumbnail_widget import ThumbnailWidget
+from thumbnail_widget import ThumbnailContainerWidget
 from pdf_viewer import PDFViewer
 
 try:
@@ -291,8 +291,8 @@ class UiMainWindow(object):
         self.pagesTabLayout.setContentsMargins(0, 0, 0, 0)
         self.pagesTabLayout.setSpacing(0)
 
-        # Mount the custom thumbnail widget (it contains its own slider)
-        self.thumbnailWidget = ThumbnailWidget(self.pagesTab)
+        # Mount the new thumbnail container widget
+        self.thumbnailWidget = ThumbnailContainerWidget(self.pagesTab)
         self.pagesTabLayout.addWidget(self.thumbnailWidget)
 
         # Expose inner controls under old names, so other code keeps working

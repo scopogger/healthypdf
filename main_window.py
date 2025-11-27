@@ -12,7 +12,7 @@ from PySide6.QtGui import QKeySequence, QDragEnterEvent, QDropEvent
 
 from updated_ui_main_window import UiMainWindow
 from pdf_viewer import PDFViewer
-from thumbnail_widget import ThumbnailWidget
+from thumbnail_widget import ThumbnailContainerWidget
 from actions_handler import ActionsHandler
 from settings_manager import settings_manager
 
@@ -54,9 +54,6 @@ class MainWindow(QMainWindow):
 
     def setup_pdf_components(self):
         """Setup PDF viewer and thumbnail components"""
-        # The UI already creates PDFViewer and ThumbnailWidget instances
-        # We just need to get references to them
-
         # PDF viewer should already be created by updated_ui_main_window.py
         if hasattr(self.ui, 'pdfView') and isinstance(self.ui.pdfView, PDFViewer):
             self.pdf_viewer = self.ui.pdfView
@@ -71,12 +68,12 @@ class MainWindow(QMainWindow):
                 self.ui.splitter.addWidget(self.pdf_viewer)
 
         # Thumbnail widget should already be created by updated_ui_main_window.py
-        if hasattr(self.ui, 'thumbnailList') and isinstance(self.ui.thumbnailList, ThumbnailWidget):
+        if hasattr(self.ui, 'thumbnailList') and isinstance(self.ui.thumbnailList, ThumbnailContainerWidget):
             self.thumbnail_widget = self.ui.thumbnailList
         else:
             # Fallback: create new thumbnail widget if not found
-            print("Warning: ThumbnailWidget not found in UI, creating new one")
-            self.thumbnail_widget = ThumbnailWidget()
+            print("Warning: ThumbnailContainerWidget not found in UI, creating new one")
+            self.thumbnail_widget = ThumbnailContainerWidget()
             self.ui.thumbnailList = self.thumbnail_widget
 
     def load_window_settings(self):
@@ -125,13 +122,15 @@ class MainWindow(QMainWindow):
             else:
                 self.ui.pagesButton.setChecked(True)
                 self.ui.toggle_pages_tab()
-
-        # Load thumbnail size
-        thumbnail_size = settings_manager.get_thumbnail_size()
-        if hasattr(self.ui.thumbnailList, 'set_thumbnail_size'):
-            self.ui.thumbnailList.set_thumbnail_size(thumbnail_size)
-        elif hasattr(self.ui.thumbnailList, 'thumbnail_size'):
-            self.ui.thumbnailList.thumbnail_size = thumbnail_size
+        # The new ThumbnailContainerWidget uses fixed thumbnail size (100px)
+        # => passssssss vvv
+        #
+        # # Load thumbnail size
+        # thumbnail_size = settings_manager.get_thumbnail_size()
+        # if hasattr(self.ui.thumbnailList, 'set_thumbnail_size'):
+        #     self.ui.thumbnailList.set_thumbnail_size(thumbnail_size)
+        # elif hasattr(self.ui.thumbnailList, 'thumbnail_size'):
+        #     self.ui.thumbnailList.thumbnail_size = thumbnail_size
 
     def save_window_settings(self):
         """Save window settings"""
@@ -159,9 +158,9 @@ class MainWindow(QMainWindow):
 
         settings_manager.save_panel_state(panel_visible, panel_width, active_tab)
 
-        # Save thumbnail size
-        if hasattr(self.ui.thumbnailList, 'thumbnail_size'):
-            settings_manager.save_thumbnail_size(self.ui.thumbnailList.thumbnail_size)
+        # # Save thumbnail size
+        # if hasattr(self.ui.thumbnailList, 'thumbnail_size'):
+        #     settings_manager.save_thumbnail_size(self.ui.thumbnailList.thumbnail_size)
 
     def on_bookmark_clicked(self, index):
         """Handle bookmark selection with single click - adapted from old code"""
