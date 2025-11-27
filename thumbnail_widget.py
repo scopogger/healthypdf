@@ -1,3 +1,5 @@
+import gc
+import os
 import math
 import threading
 from typing import Optional, Dict, List
@@ -5,7 +7,7 @@ from collections import OrderedDict
 
 from PySide6.QtWidgets import (
     QWidget, QVBoxLayout, QSlider, QLabel, QScrollArea, QFrame,
-    QInputDialog, QMessageBox, QSizePolicy, QSpacerItem, QScrollBar
+    QInputDialog, QMessageBox, QSizePolicy, QSpacerItem
 )
 from PySide6.QtCore import Qt, Signal, QSize, QTimer, QRunnable, QThreadPool, QRect
 from PySide6.QtGui import QPixmap, QIcon, QPainter, QColor, QFont, QMouseEvent, QPaintEvent, QPen
@@ -14,48 +16,53 @@ import fitz  # PyMuPDF
 
 
 class ThumbnailCache:
-    """Кэш для миниатюр страниц с LRU-вытеснением"""
+    """LRU Cache for thumbnail images with size-aware storage"""
 
     def __init__(self, max_size: int = 20):
         self.max_size = max_size
-        # Храним сырые миниатюры БЕЗ номеров страниц
-        self.cache: OrderedDict[tuple, QPixmap] = OrderedDict()  # (номер_страницы, размер) -> пиксмап
+        # Store raw thumbnails WITHOUT page numbers
+        self.cache: OrderedDict[tuple, QPixmap] = OrderedDict()  # (page_num, size) -> pixmap
 
     def get_raw(self, page_num: int, size: int) -> Optional[QPixmap]:
-        """Достаем сырую миниатюру без номера страницы"""
+        """Get raw thumbnail without page number overlay"""
         key = (page_num, size)
         if key in self.cache:
-            self.cache.move_to_end(key)  # Перемещаем в конец как недавно использованную
+            self.cache.move_to_end(key)
             return self.cache[key]
         return None
 
     def put_raw(self, page_num: int, size: int, pixmap: QPixmap):
-        """Сохраняем сырую миниатюру без номера страницы"""
+        """Store raw thumbnail without page number overlay"""
         key = (page_num, size)
         if key in self.cache:
             self.cache.move_to_end(key)
         else:
             self.cache[key] = pixmap
-            # Вытесняем старые миниатюры если кэш переполнен
+            # LRU eviction when cache exceeds max size
             while len(self.cache) > self.max_size:
-                oldest = next(iter(self.cache))  # Самая старая запись
+                oldest = next(iter(self.cache))
+                # Properly clean up the oldest pixmap
                 oldest_pixmap = self.cache[oldest]
                 if not oldest_pixmap.isNull():
                     oldest_pixmap = QPixmap()
                 del self.cache[oldest]
+                gc.collect()
 
     def clear(self):
-        """Полная очистка кэша"""
+        """Thoroughly clear all cached thumbnails"""
         keys_to_delete = list(self.cache.keys())
         for key in keys_to_delete:
             pixmap = self.cache[key]
+            # Proper pixmap cleanup
             if not pixmap.isNull():
-                self.cache[key] = QPixmap()  # Освобождаем память
+                # Force Qt to release the pixmap data
+                self.cache[key] = QPixmap()
             del self.cache[key]
         self.cache.clear()
+        gc.collect()
 
     def remove_page(self, page_num: int):
-        """Удаляем все миниатюры для конкретной страницы"""
+        """Remove all cached thumbnails for a specific page"""
         keys_to_remove = [key for key in self.cache.keys() if key[0] == page_num]
         for key in keys_to_remove:
             pixmap = self.cache[key]
@@ -65,7 +72,7 @@ class ThumbnailCache:
 
 
 class ThumbnailRenderWorker(QRunnable):
-    """Воркер для рендеринга миниатюр в фоне"""
+    """Worker for rendering thumbnails in background"""
 
     def __init__(self, doc_path: str, page_num: int, callback, render_id: str,
                  thumbnail_size: int = 100, rotation: int = 0, password: str = ""):
@@ -80,11 +87,9 @@ class ThumbnailRenderWorker(QRunnable):
         self.password = password
 
     def cancel(self):
-        """Отменяем рендеринг"""
         self.cancelled = True
 
     def run(self):
-        """Основной метод рендеринга"""
         if self.cancelled:
             return
 
@@ -92,7 +97,7 @@ class ThumbnailRenderWorker(QRunnable):
         try:
             doc = fitz.open(self.doc_path)
 
-            # Обрабатываем защиту паролем
+            # Handle password protection
             if doc.needs_pass and self.password:
                 if not doc.authenticate(self.password):
                     doc.close()
@@ -110,7 +115,7 @@ class ThumbnailRenderWorker(QRunnable):
             if self.rotation != 0:
                 page.set_rotation(self.rotation)
 
-            # Вычисляем масштаб для нужного размера миниатюры
+            # Calculate scale for desired thumbnail size
             rect = page.rect
             scale = min(self.thumbnail_size / rect.width, self.thumbnail_size / rect.height)
             matrix = fitz.Matrix(scale, scale)
@@ -129,28 +134,28 @@ class ThumbnailRenderWorker(QRunnable):
             pixmap = QPixmap()
             pixmap.loadFromData(img_data)
 
-            # Закрываем документ и чистим память
+            # Close document and clean up PyMuPDF objects
             doc.close()
             doc = None
 
-            # Принудительная очистка
+            # Force cleanup
             del pix
             del matrix
             del page
 
             if not self.cancelled:
-                # Передаем сырую пиксмап БЕЗ номера страницы
+                # Pass raw pixmap WITHOUT page number
                 self.callback(self.page_num, pixmap, self.render_id, self.thumbnail_size)
             else:
-                # Чистим если отменили
+                # Clean up pixmap if cancelled
                 if not pixmap.isNull():
                     pixmap = QPixmap()
 
         except Exception as e:
             if not self.cancelled:
-                print(f"Ошибка рендеринга миниатюры {self.page_num}: {e}")
+                print(f"Error rendering thumbnail {self.page_num}: {e}")
         finally:
-            # Всегда закрываем документ
+            # Ensure document is always closed
             if doc is not None:
                 try:
                     doc.close()
@@ -159,9 +164,10 @@ class ThumbnailRenderWorker(QRunnable):
 
 
 class ThumbnailWidget(QWidget):
-    """Виджет для одной миниатюры страницы"""
+    """Individual thumbnail widget for a single page"""
 
-    clicked = Signal(int)  # Сигнал с номером оригинальной страницы
+    clicked = Signal(int)  # Emits original page number
+    selected = Signal(int)  # Emits original page number when selected
 
     def __init__(self, page_info, layout_index: int, zoom: float = 1.0, parent=None):
         super().__init__(parent)
@@ -170,7 +176,7 @@ class ThumbnailWidget(QWidget):
         self.zoom = zoom
         self.is_selected = False
 
-        # Вычисляем размер на основе размеров страницы и зума
+        # Calculate size based on page dimensions and zoom
         self.base_width = page_info.width
         self.base_height = page_info.height
         self.thumbnail_size = int(max(self.base_width, self.base_height) * zoom)
@@ -186,32 +192,36 @@ class ThumbnailWidget(QWidget):
                 border: 2px solid #90caf9;
                 background-color: #f0f8ff;
             }
+            ThumbnailWidget:selected {
+                border: 2px solid #0078d4;
+                background-color: #e3f2fd;
+            }
         """)
 
-        # Пиксмап миниатюры
+        # Thumbnail pixmap
         self.thumbnail_pixmap = None
         self.placeholder_pixmap = self._create_placeholder()
 
     def _create_placeholder(self) -> QPixmap:
-        """Создаем заглушку с номером страницы"""
+        """Create a placeholder pixmap with page number"""
         pixmap = QPixmap(self.thumbnail_size, self.thumbnail_size)
         pixmap.fill(Qt.white)
 
         painter = QPainter(pixmap)
         painter.setRenderHint(QPainter.Antialiasing)
 
-        # Рисуем рамку страницы
+        # Draw page border
         painter.setPen(QPen(QColor(200, 200, 200), 1))
         painter.drawRect(0, 0, self.thumbnail_size - 1, self.thumbnail_size - 1)
 
-        # Рисуем номер страницы
+        # Draw page number
         painter.setPen(QColor(100, 100, 100))
         font = QFont()
         font.setPointSize(10)
         font.setBold(True)
         painter.setFont(font)
 
-        # Вычисляем номер для отображения (начинается с 1)
+        # Calculate display number (1-based)
         display_num = self.layout_index + 1
         painter.drawText(pixmap.rect(), Qt.AlignCenter, str(display_num))
         painter.end()
@@ -219,141 +229,106 @@ class ThumbnailWidget(QWidget):
         return pixmap
 
     def set_thumbnail(self, pixmap: QPixmap):
-        """Устанавливаем пиксмап миниатюры"""
+        """Set the thumbnail pixmap"""
         self.thumbnail_pixmap = pixmap
         self.update()
 
     def set_selected(self, selected: bool):
-        """Устанавливаем состояние выделения"""
+        """Set selection state"""
         self.is_selected = selected
         self.update()
 
     def paintEvent(self, event: QPaintEvent):
-        """Рисуем миниатюру"""
+        """Paint the thumbnail"""
         painter = QPainter(self)
         painter.setRenderHint(QPainter.Antialiasing)
 
-        # Рисуем фон в зависимости от состояния
+        # Draw background based on state
         if self.is_selected:
-            painter.fillRect(self.rect(), QColor(227, 242, 253))  # Выделенный
+            painter.fillRect(self.rect(), QColor(227, 242, 253))
         elif self.underMouse():
-            painter.fillRect(self.rect(), QColor(240, 248, 255))  # При наведении
+            painter.fillRect(self.rect(), QColor(240, 248, 255))
         else:
-            painter.fillRect(self.rect(), QColor(248, 248, 248))  # Обычный
+            painter.fillRect(self.rect(), QColor(248, 248, 248))
 
-        # Рисуем рамку в зависимости от состояния
+        # Draw border based on state
         border_rect = QRect(2, 2, self.width() - 4, self.height() - 4)
         if self.is_selected:
-            painter.setPen(QPen(QColor(0, 120, 212), 2))  # Синяя для выделения
+            painter.setPen(QPen(QColor(0, 120, 212), 2))
         elif self.underMouse():
-            painter.setPen(QPen(QColor(144, 202, 249), 2))  # Светло-синяя при наведении
+            painter.setPen(QPen(QColor(144, 202, 249), 2))
         else:
-            painter.setPen(QPen(QColor(200, 200, 200), 2))  # Серая обычная
+            painter.setPen(QPen(QColor(200, 200, 200), 2))
         painter.drawRoundedRect(border_rect, 4, 4)
 
-        # Рисуем изображение миниатюры по центру
+        # Draw thumbnail image centered
         thumb_rect = QRect(6, 6, self.thumbnail_size, self.thumbnail_size)
         if self.thumbnail_pixmap and not self.thumbnail_pixmap.isNull():
-            # Масштабируем пиксмап с сохранением пропорций
+            # Scale pixmap to fit while maintaining aspect ratio
             scaled_pixmap = self.thumbnail_pixmap.scaled(
                 self.thumbnail_size, self.thumbnail_size,
                 Qt.KeepAspectRatio, Qt.SmoothTransformation
             )
-            # Центрируем
+            # Center the pixmap
             x = thumb_rect.center().x() - scaled_pixmap.width() // 2
             y = thumb_rect.center().y() - scaled_pixmap.height() // 2
             painter.drawPixmap(x, y, scaled_pixmap)
         else:
-            # Рисуем заглушку
+            # Draw placeholder
             painter.drawPixmap(thumb_rect, self.placeholder_pixmap)
 
         painter.end()
 
     def mousePressEvent(self, event: QMouseEvent):
-        """Обрабатываем клик мыши"""
+        """Handle mouse click"""
         if event.button() == Qt.LeftButton:
             self.clicked.emit(self.page_info.page_num)
         super().mousePressEvent(event)
 
     def enterEvent(self, event):
-        """Мышь вошла в виджет"""
+        """Handle mouse enter"""
         self.update()
         super().enterEvent(event)
 
     def leaveEvent(self, event):
-        """Мышь вышла из виджета"""
+        """Handle mouse leave"""
         self.update()
         super().leaveEvent(event)
 
 
-class ThumbnailContainerWidget(QWidget):
-    """Контейнер для миниатюр с прокруткой"""
-
-    page_clicked = Signal(int)
+class ThumbnailContainer(QWidget):
+    """Container widget that holds ThumbnailWidgetStack and handles scrolling"""
 
     def __init__(self, parent=None):
         super().__init__(parent)
+        self.layout = QVBoxLayout(self)
+        self.layout.setContentsMargins(0, 0, 0, 0)
 
-        # Создаем область прокрутки
+        # Create scroll area
         self.scroll_area = QScrollArea()
         self.scroll_area.setWidgetResizable(True)
-        self.scroll_area.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)  # Без горизонтальной прокрутки
-        self.scroll_area.setVerticalScrollBarPolicy(Qt.ScrollBarAsNeeded)  # Вертикальная по необходимости
-        self.scroll_area.setFrameShape(QFrame.NoFrame)
+        self.scroll_area.setHorizontalScrollBarPolicy(Qt.ScrollBarAsNeeded)
+        self.scroll_area.setVerticalScrollBarPolicy(Qt.ScrollBarAsNeeded)
 
-        # Создаем контейнер для миниатюр
-        self.container_widget = QWidget()
-        self.thumbnail_layout = ThumbnailWidgetStack(self.container_widget)
+        # Create container for thumbnails
+        self.thumbnail_container = QWidget()
+        self.thumbnail_stack = ThumbnailWidgetStack(self.thumbnail_container)
 
-        # Устанавливаем контейнер в область прокрутки
-        self.scroll_area.setWidget(self.container_widget)
+        self.scroll_area.setWidget(self.thumbnail_container)
+        self.layout.addWidget(self.scroll_area)
 
-        # Основной лейаут
-        layout = QVBoxLayout(self)
-        layout.setContentsMargins(0, 0, 0, 0)
-        layout.setSpacing(0)
-        layout.addWidget(self.scroll_area)
+        # Connect scroll signal
+        self.scroll_area.verticalScrollBar().valueChanged.connect(self._on_scroll)
 
-        # Подключаем сигналы
-        self.thumbnail_layout.page_clicked.connect(self.page_clicked)
-
-        # Устанавливаем минимальные размеры
-        self.setMinimumWidth(150)
-        self.setMinimumHeight(200)  # Нормальная минимальная высота
-
-    def set_document(self, document, doc_path: str, password: str = ""):
-        """Устанавливаем документ для миниатюр"""
-        self.thumbnail_layout.set_document(document, doc_path, password)
-
-    def set_current_page(self, original_page_num: int):
-        """Выделяем миниатюру для указанной страницы"""
-        self.thumbnail_layout.set_current_page(original_page_num)
-
-    def set_zoom(self, zoom: float):
-        """Устанавливаем уровень зума"""
-        self.thumbnail_layout.setZoom(zoom)
-
-    def hide_page_thumbnail(self, original_page_num: int):
-        """Скрываем миниатюру удаленной страницы"""
-        self.thumbnail_layout.hide_page_thumbnail(original_page_num)
-
-    def rotate_page_thumbnail(self, original_page_num: int, rotation: int):
-        """Поворачиваем миниатюру страницы"""
-        self.thumbnail_layout.rotate_page_thumbnail(original_page_num, rotation)
-
-    def update_thumbnails_order(self, visible_order: List[int]):
-        """Обновляем порядок отображения"""
-        self.thumbnail_layout.update_thumbnails_order(visible_order)
-
-    def clear_thumbnails(self):
-        """Очищаем все миниатюры"""
-        self.thumbnail_layout.clear_thumbnails()
+    def _on_scroll(self, value):
+        """Handle scroll events"""
+        self.thumbnail_stack.handle_scroll(value)
 
 
 class ThumbnailWidgetStack(QVBoxLayout):
-    """Основной контейнер для миниатюр, похожий на PageWidgetStack"""
+    """Main thumbnail container using QVBoxLayout similar to PageWidgetStack"""
 
-    page_clicked = Signal(int)  # Сигнал с номером оригинальной страницы
+    page_clicked = Signal(int)  # Emits original page number
 
     def __init__(self, mainWidget: QWidget, spacing: int = 5, all_margins: int = 5, map_step: int = 10):
         super(ThumbnailWidgetStack, self).__init__(mainWidget)
@@ -361,72 +336,70 @@ class ThumbnailWidgetStack(QVBoxLayout):
         self.setAlignment(Qt.AlignmentFlag.AlignTop | Qt.AlignmentFlag.AlignHCenter)
         self.setContentsMargins(all_margins, all_margins, all_margins, all_margins)
 
-        # Документ и кэширование
+        # Document and caching
         self.document = None
         self.doc_path = ""
         self.document_password = ""
         self.thumbnail_cache = ThumbnailCache(max_size=20)
         self.thread_pool = QThreadPool()
-        self.thread_pool.setMaxThreadCount(1)  # Один поток для рендеринга
+        self.thread_pool.setMaxThreadCount(1)
 
-        # Отслеживаем активные задачи рендеринга
+        # Track active render tasks
         self.active_workers: Dict[str, ThumbnailRenderWorker] = {}
         self.current_render_id = 0
         self.render_lock = threading.Lock()
 
-        # Отслеживаем модификации страниц
+        # Page modifications tracking
         self.page_rotations = {}
         self.deleted_pages = set()
 
-        # Данные миниатюр
-        self.pages_info: list = []  # Список информации о страницах
+        # Thumbnail data
+        self.pages_info: list = []  # List of PageInfo objects
         self.countTotalPagesInfo: int = 0
         self.thumbnail_widgets: list[ThumbnailWidget] = []
 
-        # Управление лейаутом
+        # Layout management
         self.spacer: QSpacerItem = QSpacerItem(0, 0)
         self.isSpacer = False
 
-        # Зум и размеры
-        self.zoom = 0.15  # Стандартный зум для миниатюр
+        # Zoom and sizing
+        self.zoom = 0.15  # Default thumbnail zoom factor
         self._map_step: int = map_step
         self._map_max: int = (self._map_step * 2) + 1
         self._map_size_tail = 3
 
-        # Отслеживание видимых миниатюр для ленивой загрузки
+        # Scroll tracking
+        self.last_scroll_position = 0
+        self.scroll_timer = QTimer()
+        self.scroll_timer.setSingleShot(True)
+        self.scroll_timer.timeout.connect(self._on_scroll_timeout)
+
+        # Visible tracking for lazy loading
         self.visible_thumbnails: OrderedDict[int, bool] = OrderedDict()
         self.max_visible_thumbnails = 20
 
-        # Таймер для отложенной загрузки
+        # Timer for delayed loading
         self.load_timer = QTimer()
         self.load_timer.setSingleShot(True)
         self.load_timer.timeout.connect(self.load_visible_thumbnails)
 
-        # Текущее выделение
+        # Current selection
         self.current_selected_widget = None
 
-        # Подключаем скроллбар к ленивой загрузке
-        scroll_area = self.get_scroll_area()
-        if scroll_area:
-            scroll_bar = scroll_area.verticalScrollBar()
-            if scroll_bar:
-                scroll_bar.valueChanged.connect(self._on_scroll)
+    def handle_scroll(self, scroll_position: int):
+        """Handle scroll events - this is where needCalculateByScrollHeight is called"""
+        self.last_scroll_position = scroll_position
+        self.scroll_timer.start(50)  # Delay to avoid too frequent calculations
 
-    def get_scroll_area(self):
-        """Получаем родительскую область прокрутки если есть"""
-        parent = self.parent()
-        while parent:
-            if isinstance(parent, QScrollArea):
-                return parent
-            parent = parent.parent()
-        return None
-
-    def _on_scroll(self, value):
-        """Обрабатываем скроллинг для ленивой загрузки"""
-        self.load_timer.start(50)
+    def _on_scroll_timeout(self):
+        """Process scroll after a short delay"""
+        if self.needCalculateByScrollHeight(self.last_scroll_position):
+            current_index = self.getCurrPageIndexByHeightScroll(self.last_scroll_position)
+            if current_index >= 0:
+                self.calculateMapPagesByIndex(current_index)
 
     def set_document(self, document, doc_path: str, password: str = ""):
-        """Устанавливаем документ для отображения миниатюр"""
+        """Set the document to display thumbnails for"""
         self.cancel_all_renders()
         self.clear_thumbnails()
 
@@ -438,12 +411,11 @@ class ThumbnailWidgetStack(QVBoxLayout):
         self.visible_thumbnails.clear()
 
         if document:
-            # Создаем список информации о страницах
+            # Create page info list
             self.pages_info = []
             for page_num in range(len(document)):
                 page = document[page_num]
                 rect = page.rect
-                # Создаем объект с информацией о странице
                 page_info = type('PageInfo', (), {
                     'page_num': page_num,
                     'width': rect.width,
@@ -454,42 +426,45 @@ class ThumbnailWidgetStack(QVBoxLayout):
 
             self.countTotalPagesInfo = len(self.pages_info)
 
-            # Инициализируем первой партией миниатюр
+            # Initialize with first batch of thumbnails
             self.calculateMapPagesByIndex(0)
 
     def clear_thumbnails(self):
-        """Очищаем все миниатюры и сбрасываем состояние"""
+        """Clear all thumbnails and reset state"""
         self.cancel_all_renders()
 
-        # Удаляем все виджеты
+        # Remove all widgets
         for widget in self.thumbnail_widgets:
             self.removeWidget(widget)
             widget.deleteLater()
 
         self.thumbnail_widgets.clear()
 
-        # Очищаем кэш
+        # Clear cache
         self.thumbnail_cache.clear()
 
-        # Очищаем данные
+        # Clear data
         self.pages_info.clear()
         self.countTotalPagesInfo = 0
         self.deleted_pages.clear()
         self.page_rotations.clear()
         self.visible_thumbnails.clear()
 
-        # Удаляем спейсер
+        # Remove spacer
         if self.isSpacer:
             self.removeItem(self.spacer)
             self.isSpacer = False
 
-        # Сбрасываем ссылки на документ
+        # Reset document references
         self.document = None
         self.doc_path = ""
         self.document_password = ""
 
+        # Force garbage collection
+        gc.collect()
+
     def cancel_all_renders(self):
-        """Отменяем все активные задачи рендеринга"""
+        """Cancel all active rendering tasks"""
         with self.render_lock:
             for worker_id, worker in list(self.active_workers.items()):
                 worker.cancel()
@@ -497,10 +472,10 @@ class ThumbnailWidgetStack(QVBoxLayout):
         self.thread_pool.waitForDone()
 
     def setZoom(self, newZoom):
-        """Устанавливаем уровень зума для миниатюр"""
+        """Set zoom level for thumbnails"""
         self.zoom = newZoom
 
-        # Обновляем шаг карты на основе зума
+        # Update map step based on zoom
         if newZoom < 0.1:
             newStep = round(3.2 - 2.95 * math.log(newZoom))
         else:
@@ -509,7 +484,7 @@ class ThumbnailWidgetStack(QVBoxLayout):
         self._map_step = newStep + 3
         self._map_size_tail = newStep
 
-        # Обновляем все существующие виджеты
+        # Update all existing widgets
         for widget in self.thumbnail_widgets:
             page_info = self.pages_info[widget.layout_index]
             thumbnail_size = int(max(page_info.width, page_info.height) * self.zoom)
@@ -518,24 +493,24 @@ class ThumbnailWidgetStack(QVBoxLayout):
             widget.placeholder_pixmap = widget._create_placeholder()
             widget.update()
 
-        # Перезагружаем миниатюры с новым размером
+        # Reload thumbnails with new size
         self.load_timer.start(200)
 
     def getThumbnailWidgetByIndex(self, index: int) -> ThumbnailWidget:
-        """Получаем виджет миниатюры по индексу лейаута"""
+        """Get thumbnail widget by layout index"""
         widgets = list(filter(lambda x: x.layout_index == index, self.thumbnail_widgets))
         if len(widgets) == 0:
             return None
         return widgets[0]
 
     def getPageInfoByIndex(self, index: int):
-        """Получаем информацию о странице по индексу"""
+        """Get page info by index"""
         if 0 <= index < len(self.pages_info):
             return self.pages_info[index]
         return None
 
     def getTotalHeightByCountPages(self, count: int):
-        """Вычисляем общую высоту для указанного количества страниц"""
+        """Calculate total height for given number of pages"""
         spacing = self.spacing()
         total_height = self.contentsMargins().top() + spacing
 
@@ -551,7 +526,7 @@ class ThumbnailWidgetStack(QVBoxLayout):
         return total_height
 
     def getCurrPageIndexByHeightScroll(self, heightScroll):
-        """Получаем индекс текущей страницы на основе высоты скролла"""
+        """Get current page index based on scroll height"""
         spacing = self.spacing()
         total_height = self.contentsMargins().top() + spacing
 
@@ -570,7 +545,7 @@ class ThumbnailWidgetStack(QVBoxLayout):
         return -1
 
     def needCalculateByScrollHeight(self, scroll: int):
-        """Проверяем нужно ли пересчитывать на основе позиции скролла"""
+        """Check if we need to recalculate based on scroll position"""
         index = self.getCurrPageIndexByHeightScroll(scroll)
         if index == -1:
             return False
@@ -589,7 +564,7 @@ class ThumbnailWidgetStack(QVBoxLayout):
         return not (topTail <= indexInList <= bottomTail)
 
     def calculateMapPagesByIndex(self, index: int):
-        """Вычисляем какие миниатюры показывать на основе текущего индекса"""
+        """Calculate which thumbnails to show based on current index"""
         if self.countTotalPagesInfo == 0:
             return
 
@@ -598,7 +573,7 @@ class ThumbnailWidgetStack(QVBoxLayout):
         cur_max = index + min(self._map_step, self.countTotalPagesInfo - index - 1)
 
         try:
-            # Создаем или получаем виджеты для текущего диапазона
+            # Create or get widgets for the current range
             for i in range(cur_min, cur_max + 1):
                 if i in self.deleted_pages:
                     continue
@@ -616,21 +591,21 @@ class ThumbnailWidgetStack(QVBoxLayout):
                     new_widget.clicked.connect(self._on_thumbnail_clicked)
                     map_pages.append(new_widget)
 
-            # Находим виджеты для удаления и добавления
+            # Find widgets to remove and add
             widgets_to_delete = list((set(self.thumbnail_widgets) - set(map_pages)))
             widgets_to_add = list((set(map_pages) - set(self.thumbnail_widgets)))
 
-            # Удаляем старые виджеты
+            # Remove old widgets
             for widget in widgets_to_delete:
                 self.removeWidget(widget)
                 self.thumbnail_widgets.remove(widget)
                 widget.deleteLater()
 
-            # Добавляем новые виджеты
+            # Add new widgets
             for widget in widgets_to_add:
                 self.thumbnail_widgets.append(widget)
 
-                # Вставляем в правильную позицию
+                # Insert in correct position
                 insert_index = 0
                 for i, existing_widget in enumerate(self.thumbnail_widgets):
                     if existing_widget.layout_index > widget.layout_index:
@@ -643,20 +618,20 @@ class ThumbnailWidgetStack(QVBoxLayout):
                 else:
                     self.addWidget(widget)
 
-            # Обновляем спейсер
+            # Update spacer
             if self.thumbnail_widgets and self.thumbnail_widgets[0].layout_index > 0:
                 self.addSpacer(self.getTotalHeightByCountPages(self.thumbnail_widgets[0].layout_index))
             else:
                 self.removeSpacer()
 
-            # Загружаем миниатюры для видимых виджетов
+            # Load thumbnails for visible widgets
             self.load_timer.start(100)
 
         except Exception as e:
-            print(f"Ошибка расчета карты миниатюр: {e}")
+            print(f"Error calculating thumbnail map: {e}")
 
     def addSpacer(self, height):
-        """Добавляем спейсер в лейаут"""
+        """Add spacer to layout"""
         try:
             if self.isSpacer:
                 self.removeItem(self.spacer)
@@ -664,24 +639,24 @@ class ThumbnailWidgetStack(QVBoxLayout):
             self.insertSpacerItem(0, self.spacer)
             self.isSpacer = True
         except Exception as e:
-            print(f"Ошибка добавления спейсера: {e}")
+            print(f"Error adding spacer: {e}")
 
     def removeSpacer(self):
-        """Удаляем спейсер из лейаута"""
+        """Remove spacer from layout"""
         try:
             if not self.isSpacer:
                 return
             self.removeItem(self.spacer)
             self.isSpacer = False
         except Exception as e:
-            print(f"Ошибка удаления спейсера: {e}")
+            print(f"Error removing spacer: {e}")
 
     def load_visible_thumbnails(self):
-        """Загружаем миниатюры для текущих видимых виджетов"""
+        """Load thumbnails for currently visible widgets"""
         if not self.thumbnail_widgets:
             return
 
-        # Обновляем отслеживание видимых страниц
+        # Update LRU tracking
         visible_pages = set()
         for widget in self.thumbnail_widgets:
             original_page = widget.page_info.page_num
@@ -691,21 +666,21 @@ class ThumbnailWidgetStack(QVBoxLayout):
             else:
                 self.visible_thumbnails[original_page] = True
 
-        # LRU вытеснение
+        # LRU eviction
         while len(self.visible_thumbnails) > self.max_visible_thumbnails:
             oldest_page, _ = self.visible_thumbnails.popitem(last=False)
             self.thumbnail_cache.remove_page(oldest_page)
 
-        # Загружаем миниатюры для видимых страниц
+        # Load thumbnails for visible pages
         for original_page in visible_pages:
             self.load_thumbnail(original_page)
 
     def load_thumbnail(self, original_page_num: int):
-        """Загружаем миниатюру для конкретной страницы"""
+        """Load thumbnail for specific page"""
         if original_page_num >= len(self.pages_info):
             return
 
-        # Находим виджет для этой страницы
+        # Find the widget for this page
         widget = None
         for thumb_widget in self.thumbnail_widgets:
             if thumb_widget.page_info.page_num == original_page_num:
@@ -715,22 +690,22 @@ class ThumbnailWidgetStack(QVBoxLayout):
         if not widget:
             return
 
-        # Проверяем кэш сначала
+        # Check cache first
         thumbnail_size = int(max(widget.base_width, widget.base_height) * self.zoom)
         cached_raw = self.thumbnail_cache.get_raw(original_page_num, thumbnail_size)
         if cached_raw:
             widget.set_thumbnail(cached_raw)
             return
 
-        # Генерируем уникальный ID рендеринга
+        # Generate unique render ID
         with self.render_lock:
             self.current_render_id += 1
             render_id = f"thumb_{self.current_render_id}_{original_page_num}_{thumbnail_size}"
 
-        # Получаем поворот для этой страницы
+        # Get rotation for this page
         rotation = self.page_rotations.get(original_page_num, 0)
 
-        # Создаем воркер
+        # Create worker
         worker = ThumbnailRenderWorker(
             self.doc_path,
             original_page_num,
@@ -747,31 +722,31 @@ class ThumbnailWidgetStack(QVBoxLayout):
         self.thread_pool.start(worker)
 
     def on_thumbnail_rendered(self, original_page_num: int, raw_pixmap: QPixmap, render_id: str, size: int):
-        """Обрабатываем результат рендеринга миниатюры"""
+        """Handle rendered thumbnail result"""
         with self.render_lock:
             if render_id in self.active_workers:
                 del self.active_workers[render_id]
 
-        # Сохраняем в кэш
+        # Store in cache
         self.thumbnail_cache.put_raw(original_page_num, size, raw_pixmap)
 
-        # Обновляем отслеживание
+        # Update LRU tracking
         if original_page_num in self.visible_thumbnails:
             self.visible_thumbnails.move_to_end(original_page_num)
 
-        # Находим и обновляем виджет
+        # Find and update the widget
         for widget in self.thumbnail_widgets:
             if widget.page_info.page_num == original_page_num:
                 widget.set_thumbnail(raw_pixmap)
                 break
 
     def _on_thumbnail_clicked(self, original_page_num: int):
-        """Обрабатываем клик по миниатюре"""
-        # Очищаем предыдущее выделение
+        """Handle thumbnail click"""
+        # Clear previous selection
         if self.current_selected_widget:
             self.current_selected_widget.set_selected(False)
 
-        # Устанавливаем новое выделение
+        # Set new selection
         for widget in self.thumbnail_widgets:
             if widget.page_info.page_num == original_page_num:
                 widget.set_selected(True)
@@ -781,31 +756,31 @@ class ThumbnailWidgetStack(QVBoxLayout):
         self.page_clicked.emit(original_page_num)
 
     def set_current_page(self, original_page_num: int):
-        """Выделяем миниатюру для указанной оригинальной страницы"""
-        # Очищаем предыдущее выделение
+        """Highlight the thumbnail for the given original page number"""
+        # Clear previous selection
         if self.current_selected_widget:
             self.current_selected_widget.set_selected(False)
 
-        # Устанавливаем новое выделение
+        # Set new selection
         for widget in self.thumbnail_widgets:
             if widget.page_info.page_num == original_page_num:
                 widget.set_selected(True)
                 self.current_selected_widget = widget
 
-                # Убеждаемся что эта миниатюра в текущей карте
+                # Ensure this thumbnail is in the current map
                 if widget.layout_index not in [w.layout_index for w in self.thumbnail_widgets]:
                     self.calculateMapPagesByIndex(widget.layout_index)
                 break
 
     def hide_page_thumbnail(self, original_page_num: int):
-        """Скрываем миниатюру удаленной страницы"""
+        """Hide thumbnail for deleted page"""
         self.deleted_pages.add(original_page_num)
 
-        # Удаляем из кэша и отслеживания
+        # Remove from cache and tracking
         self.thumbnail_cache.remove_page(original_page_num)
         self.visible_thumbnails.pop(original_page_num, None)
 
-        # Удаляем виджет если он существует
+        # Remove widget if it exists
         widget_to_remove = None
         for widget in self.thumbnail_widgets:
             if widget.page_info.page_num == original_page_num:
@@ -817,25 +792,26 @@ class ThumbnailWidgetStack(QVBoxLayout):
             self.thumbnail_widgets.remove(widget_to_remove)
             widget_to_remove.deleteLater()
 
-            # Пересчитываем лейаут
+            # Recalculate layout
             if self.thumbnail_widgets:
                 self.calculateMapPagesByIndex(self.thumbnail_widgets[0].layout_index)
 
     def rotate_page_thumbnail(self, original_page_num: int, rotation: int):
-        """Поворачиваем миниатюру страницы и перезагружаем ее"""
+        """Rotate a page thumbnail and reload it"""
         current_rotation = self.page_rotations.get(original_page_num, 0)
         new_rotation = (current_rotation + rotation) % 360
         self.page_rotations[original_page_num] = new_rotation
 
-        # Удаляем из кэша для принудительной перезагрузки
+        # Remove from cache to force reload
         self.thumbnail_cache.remove_page(original_page_num)
         self.visible_thumbnails.pop(original_page_num, None)
 
-        # Перезагружаем миниатюру
+        # Reload the thumbnail
         QTimer.singleShot(100, lambda: self.load_thumbnail(original_page_num))
 
     def update_thumbnails_order(self, visible_order: List[int]):
-        """Обновляем порядок отображения и перезагружаем все миниатюры"""
-        # пока просто пересчитываем на основе первой видимой страницы (хз)
+        """Update display order and refresh all thumbnails"""
+        # This would need to be implemented based on your specific reordering needs
+        # For now, we'll just recalculate based on the first visible page
         if visible_order:
             self.calculateMapPagesByIndex(visible_order[0])

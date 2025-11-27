@@ -76,7 +76,11 @@ class MainWindow(QMainWindow):
         else:
             # Fallback: create new thumbnail widget if not found
             print("Warning: ThumbnailWidget not found in UI, creating new one")
-            self.thumbnail_widget = ThumbnailWidgetStack()
+
+            # Создаем контейнерный виджет
+            container_widget = QWidget()
+            # Теперь создаем ThumbnailWidgetStack с контейнером
+            self.thumbnail_widget = ThumbnailWidgetStack(container_widget)
             self.ui.thumbnailList = self.thumbnail_widget
 
     def load_window_settings(self):
