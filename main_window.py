@@ -12,7 +12,7 @@ from PySide6.QtGui import QKeySequence, QDragEnterEvent, QDropEvent
 
 from updated_ui_main_window import UiMainWindow
 from pdf_viewer import PDFViewer
-from thumbnail_widget import ThumbnailWidget
+from thumbnail_widget import ThumbnailWidgetStack
 from actions_handler import ActionsHandler
 from settings_manager import settings_manager
 
@@ -71,12 +71,12 @@ class MainWindow(QMainWindow):
                 self.ui.splitter.addWidget(self.pdf_viewer)
 
         # Thumbnail widget should already be created by updated_ui_main_window.py
-        if hasattr(self.ui, 'thumbnailList') and isinstance(self.ui.thumbnailList, ThumbnailWidget):
+        if hasattr(self.ui, 'thumbnailList') and isinstance(self.ui.thumbnailList, ThumbnailWidgetStack):
             self.thumbnail_widget = self.ui.thumbnailList
         else:
             # Fallback: create new thumbnail widget if not found
             print("Warning: ThumbnailWidget not found in UI, creating new one")
-            self.thumbnail_widget = ThumbnailWidget()
+            self.thumbnail_widget = ThumbnailWidgetStack()
             self.ui.thumbnailList = self.thumbnail_widget
 
     def load_window_settings(self):
