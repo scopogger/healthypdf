@@ -53,6 +53,7 @@ class ZoomSelector(QWidget):
 class UiMainWindow(object):
     def __init__(self):
         # Initialize all UI components to None
+        self.sidePanelContentLayout = None
         self.thumbnailWidget = None
         self.menuEdit = None
         self.m_pageLabel = None
@@ -176,6 +177,47 @@ class UiMainWindow(object):
         self.sidePanelContent = QWidget(self.splitter)
         self.sidePanelContentLayout = QVBoxLayout(self.sidePanelContent)
         self.sidePanelContentLayout.setContentsMargins(0, 0, 0, 0)
+        self.sidePanelContent.setObjectName("sidePanelContent")  # Add object name for specific targeting
+
+        # Set darker background for side panel and its tabs
+        self.sidePanelContent.setStyleSheet("""
+                #sidePanelContent {
+                    background-color: #e8e8e8;
+                    border: none;
+                }
+                #bookmarkTab, #pagesTab {
+                    background-color: #e8e8e8;
+                }
+                QTreeView#bookmarkView {
+                    background-color: #f0f0f0;
+                    border: none;
+                    alternate-background-color: #e8e8e8;
+                }
+                /* Style the thumbnail container and its scroll area */
+                ThumbnailContainerWidget {
+                    background-color: #e8e8e8;
+                }
+                QScrollArea {
+                    background-color: #e8e8e8;
+                    border: none;
+                }
+                QScrollArea > QWidget > QWidget {
+                    background-color: #e8e8e8;  /* The container widget inside scroll area */
+                }
+                QScrollBar:vertical {
+                    background-color: #d0d0d0;
+                    width: 8px;
+                    margin: 0px;
+                }
+                QScrollBar::handle:vertical {
+                    background-color: #a0a0a0;
+                    border-radius: 6px;
+                    min-height: 20px;
+                }
+                QScrollBar::handle:vertical:hover {
+                    background-color: #909090;
+                }
+            """)
 
         # Set size constraints for the side panel content
         self.sidePanelContent.setMinimumWidth(120)

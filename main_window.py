@@ -122,6 +122,7 @@ class MainWindow(QMainWindow):
             else:
                 self.ui.pagesButton.setChecked(True)
                 self.ui.toggle_pages_tab()
+
         # The new ThumbnailContainerWidget uses fixed thumbnail size (100px)
         # => passssssss vvv
         #
