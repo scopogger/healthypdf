@@ -32,17 +32,88 @@ class ThumbnailWidget(QWidget):
         self.thumbnail_info = thumbnail_info
         self.layout_index = layout_index
         self.zoom = zoom
-
         self.page = page
-
         self.thumbnail_size = 100
+
+        # Добавляем состояния
+        self.is_selected = False
+        self.is_hovered = False
 
         self.setFixedSize(self.thumbnail_size + 12, self.thumbnail_size + 12)
         self.setCursor(Qt.PointingHandCursor)
 
+        # Включаем отслеживание мыши для hover эффекта
+        self.setMouseTracking(True)
+
         # Thumbnail pixmap
         self.thumbnail_pixmap: Optional[QPixmap] = None
         self.is_loaded = False
+
+    def set_selected(self, selected: bool):
+        if self.is_selected != selected:
+            self.is_selected = selected
+            self.update()
+
+    def enterEvent(self, event):
+        """Курсор навёлся"""
+        self.is_hovered = True
+        self.update()
+        super().enterEvent(event)
+
+    def leaveEvent(self, event):
+        """Курсор отвёлся"""
+        self.is_hovered = False
+        self.update()
+        super().leaveEvent(event)
+
+    def paintEvent(self, event: QPaintEvent):
+        painter = QPainter(self)
+        painter.setRenderHint(QPainter.Antialiasing)
+
+        # Определяем цвета в зависимости от состояния
+        if self.is_selected:
+            border_color = QColor("#0078d4")
+            background_color = QColor("#e3f2fd")
+            border_width = 2
+        elif self.is_hovered:
+            border_color = QColor("#90caf9")
+            background_color = QColor("#f0f8ff")
+            border_width = 2
+        else:
+            border_color = QColor(200, 200, 200)
+            background_color = QColor(240, 240, 240)
+            border_width = 1
+
+        # Рисуем фон с закругленными углами
+        painter.setPen(Qt.NoPen)
+        painter.setBrush(background_color)
+        painter.drawRoundedRect(self.rect().adjusted(1, 1, -1, -1), 6, 6)
+
+        # Рисуем белый прямоугольник для миниатюры
+        content_rect = self.rect().adjusted(4, 4, -4, -4)
+        painter.setBrush(Qt.white)
+        painter.setPen(QPen(QColor(200, 200, 200), 1))
+        painter.drawRect(content_rect)
+
+        if self.thumbnail_pixmap and not self.thumbnail_pixmap.isNull():
+            # Center the thumbnail
+            x = (self.width() - self.thumbnail_pixmap.width()) // 2
+            y = (self.height() - self.thumbnail_pixmap.height()) // 2
+            painter.drawPixmap(x, y, self.thumbnail_pixmap)
+        else:
+            # Draw placeholder
+            painter.setPen(Qt.black)
+            display_num = self.layout_index + 1
+            f = painter.font()
+            f.setBold(True)
+            f.setPointSize(10)
+            painter.setFont(f)
+            painter.drawText(content_rect, Qt.AlignCenter, str(display_num))
+
+        # Рисуем border в зависимости от состояния
+        painter.setPen(QPen(border_color, border_width))
+        painter.setBrush(Qt.NoBrush)
+        painter.drawRoundedRect(self.rect().adjusted(1, 1, -1, -1), 6, 6)
 
     def load_thumbnail(self):
         """Load thumbnail from document"""
@@ -176,6 +247,8 @@ class ThumbnailWidgetStack(QVBoxLayout):
         # Track loaded thumbnails
         self.loaded_thumbnails = set()
         self.current_doc: Document = None
+
+        self.current_selected_widget: Optional[ThumbnailWidget] = None
 
     def set_document_stack(self, document: Document):
         """Set the document to display thumbnails for"""
@@ -368,9 +441,7 @@ class ThumbnailWidgetStack(QVBoxLayout):
                         zoom=self.zoom
                     )
                     # Connect click signal
-                    newWidget.clicked.connect(self.page_clicked.emit)
-
-                    # Load thumbnail if document is available
+                    newWidget.clicked.connect(self._on_thumbnail_clicked)
                     map_thumbnails.append(newWidget)
 
             # Find thumbnails to remove and add
@@ -411,12 +482,25 @@ class ThumbnailWidgetStack(QVBoxLayout):
         except Exception as e:
             raise Exception(f"Error calculating thumbnail map: {e}")
 
+    def _on_thumbnail_clicked(self, page_num: int):
+        """Обработчик клика по миниатюре"""
+        self.set_current_page(page_num)
+        self.page_clicked.emit(page_num)
+
     def set_current_page(self, page_num: int):
         """Highlight the thumbnail for the given page number"""
+        # Снимаем выделение с предыдущего виджета
+        if self.current_selected_widget:
+            self.current_selected_widget.set_selected(False)
+
+        # Находим и выделяем новый виджет
         for widget in self.thumbnail_widgets:
             if widget.thumbnail_info.page_num == page_num:
-                widget.update()
+                widget.set_selected(True)
+                self.current_selected_widget = widget
                 break
+        else:
+            self.current_selected_widget = None
 
     def rotate_page_thumbnail(self, page_num: int, rotation: int):
         """Rotate a page thumbnail"""
@@ -512,6 +596,8 @@ class ThumbnailContainerWidget(QScrollArea):
         self.scroll_timer = QTimer()
         self.scroll_timer.setSingleShot(True)
         self.scroll_timer.timeout.connect(self.calculate_in_need)
+
+        # self.container_widget.setMinimumHeight(2000)  # For testing the scrolling
 
     def _on_scroll(self):
         """Handle scroll events to update visible thumbnails"""

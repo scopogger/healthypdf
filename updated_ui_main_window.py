@@ -176,48 +176,14 @@ class UiMainWindow(object):
         # Create side panel content widget
         self.sidePanelContent = QWidget(self.splitter)
         self.sidePanelContentLayout = QVBoxLayout(self.sidePanelContent)
-        self.sidePanelContentLayout.setContentsMargins(0, 0, 0, 0)
+        self.sidePanelContentLayout.setContentsMargins(1, 1, 1, 1)
         self.sidePanelContent.setObjectName("sidePanelContent")  # Add object name for specific targeting
 
-        # Set darker background for side panel and its tabs
         self.sidePanelContent.setStyleSheet("""
-                #sidePanelContent {
-                    background-color: #e8e8e8;
-                    border: none;
-                }
-                #bookmarkTab, #pagesTab {
-                    background-color: #e8e8e8;
-                }
-                QTreeView#bookmarkView {
-                    background-color: #f0f0f0;
-                    border: none;
-                    alternate-background-color: #e8e8e8;
-                }
-                /* Style the thumbnail container and its scroll area */
-                ThumbnailContainerWidget {
-                    background-color: #e8e8e8;
-                }
-                QScrollArea {
-                    background-color: #e8e8e8;
-                    border: none;
-                }
-                QScrollArea > QWidget > QWidget {
-                    background-color: #e8e8e8;  /* The container widget inside scroll area */
-                }
-                QScrollBar:vertical {
-                    background-color: #d0d0d0;
-                    width: 8px;
-                    margin: 0px;
-                }
-                QScrollBar::handle:vertical {
-                    background-color: #a0a0a0;
-                    border-radius: 6px;
-                    min-height: 20px;
-                }
-                QScrollBar::handle:vertical:hover {
-                    background-color: #909090;
-                }
-            """)
+            #sidePanelContent {
+                background-color: #c8c8c8;
+            }
+        """)
 
         # Set size constraints for the side panel content
         self.sidePanelContent.setMinimumWidth(120)
@@ -312,12 +278,19 @@ class UiMainWindow(object):
         """Setup bookmarks tab content with QPdfBookmarkModel"""
         self.bookmarkTab = QWidget()
         self.verticalLayout_3 = QVBoxLayout(self.bookmarkTab)
-        self.verticalLayout_3.setContentsMargins(2, 2, 2, 2)
+        self.verticalLayout_3.setContentsMargins(0, 0, 0, 0)
         self.verticalLayout_3.setSpacing(0)
 
         self.bookmarkView = QTreeView(self.bookmarkTab)
         self.bookmarkView.setObjectName("bookmarkView")
         self.bookmarkView.setHeaderHidden(True)
+
+        self.bookmarkView.setStyleSheet("""
+                QTreeView {
+                    border: none;
+                    background-color: white;
+                }
+            """)
 
         # Set up the bookmark model (from old code)
         self.bookmark_model = QPdfBookmarkModel(self.bookmarkTab)
@@ -336,6 +309,8 @@ class UiMainWindow(object):
         # Mount the new thumbnail container widget
         self.thumbnailWidget = ThumbnailContainerWidget(self.pagesTab)
         self.pagesTabLayout.addWidget(self.thumbnailWidget)
+
+        self.thumbnailWidget.setStyleSheet("border: none;")
 
         # Expose inner controls under old names, so other code keeps working
         self.thumbnailList = self.thumbnailWidget
