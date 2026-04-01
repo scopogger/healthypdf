@@ -1,0 +1,233 @@
+from PySide6.QtWidgets import (
+    QDialog, QVBoxLayout, QHBoxLayout, QLabel, QLineEdit, QDialogButtonBox,
+    QCheckBox, QComboBox, QPushButton
+)
+from typing import List, Dict, Any
+
+PAGES_DIALOG_CONFIG: Dict[str, Dict[str, Any]] = {
+    "DELETE": {
+        "title": "Удаление страниц",
+        "instruction": "Введите номера страниц для удаления (например: 1,3,5-7,10):",
+        "placeholder": "1,3,5-7,10",
+        "error_prefix": "Ошибка при удалении: ",
+        "ok_button": "Удалить",
+    },
+    "BLANK": {
+        "title": "Выбор страниц",
+        "instruction": "Введите номера страниц для удаления (например: 1,3,5-7,10):",
+        "placeholder": "1,3,5-7,10",
+        "error_prefix": "Ошибка при выполнении действий: ",
+        "ok_button": "ОК",
+    },
+}
+
+
+class PagesRangeDialog(QDialog):
+    """Dialog for entering page ranges to process (e.g., '1,3,5-7,10')"""
+    def __init__(self, parent=None, dialog_type: str = "BLANK"):
+        super().__init__(parent)
+        config = PAGES_DIALOG_CONFIG.get(dialog_type.upper(), PAGES_DIALOG_CONFIG["BLANK"])
+        if not config:
+            raise ValueError(f"Неподдерживаемый тип операции: {dialog_type}. Используйте: {list(PAGES_DIALOG_CONFIG.keys())}")
+
+        self.setWindowTitle(config["title"])
+        self.setModal(True)
+
+        layout = QVBoxLayout()
+
+        label = QLabel(config["instruction"])
+        label.setWordWrap(True)
+        layout.addWidget(label)
+
+        self.input_line_edit = QLineEdit()
+        self.input_line_edit.setPlaceholderText(config["placeholder"])
+        layout.addWidget(self.input_line_edit)
+
+        self.error_label = QLabel("")
+        self.error_label.setStyleSheet("color: red;")
+        self.error_label.setVisible(False)
+        layout.addWidget(self.error_label)
+
+        buttons = QDialogButtonBox(QDialogButtonBox.Ok | QDialogButtonBox.Cancel)
+        buttons.button(QDialogButtonBox.Ok).setText(config["ok_button"])
+        buttons.accepted.connect(self.accept)
+        buttons.rejected.connect(self.reject)
+        layout.addWidget(buttons)
+
+        self.setLayout(layout)
+
+        self.total_pages = 0
+        if parent and hasattr(parent, 'ui') and hasattr(parent.ui, 'pdfView'):
+            self.total_pages = getattr(parent.ui.pdfView, 'get_total_page_count', lambda: 0)()
+        print(f"Total pages counted: {self.total_pages}")
+
+        current_page = 0
+        if parent and hasattr(parent, 'ui') and hasattr(parent.ui, 'pdfView'):
+            current_page = getattr(parent.ui.pdfView, 'get_current_page', lambda: 0)()
+        if current_page is not None and self.total_pages > 0:
+            self.input_line_edit.setText(f"{current_page + 1}")
+
+        # Store config for later use (e.g., validation)
+        self.config = config
+
+    def get_page_ranges(self) -> List[int]:
+        """Parse user input and return list of 0-based page indices to delete"""
+        text = self.input_line_edit.text().strip()
+        if not text:
+            return []
+
+        pages_to_delete = set()
+        parts = [p.strip() for p in text.split(',')]
+
+        try:
+            for part in parts:
+                if '-' in part:
+                    start, end = part.split('-', 1)
+                    start = int(start.strip())
+                    end = int(end.strip())
+                    if not (1 <= start <= self.total_pages and 1 <= end <= self.total_pages):
+                        raise ValueError(f"Страницы {start}-{end} вне диапазона страниц документа (1–{self.total_pages})")
+                    pages_to_delete.update(range(start - 1, end))  # convert to 0-based
+                else:
+                    page = int(part.strip())
+                    if not (1 <= page <= self.total_pages):
+                        raise ValueError(f"Страница {page} вне диапазона страниц документа (1–{self.total_pages})")
+                    pages_to_delete.add(page - 1)  # convert to 0-based
+        except ValueError as e:
+            self.error_label.setText(str(e))
+            self.error_label.setVisible(True)
+            raise ValueError(str(e))
+
+        return sorted(pages_to_delete)
+
+
+class ExportPagesDialog(QDialog):
+    """Dialog for configuring page export: range, format, and separate-files option."""
+    def __init__(self, parent=None, total_pages: int = 1, current_page: int = 1):
+        super().__init__(parent)
+        self.total_pages = total_pages
+        self.setWindowTitle("Извлечение страниц")
+        self.setModal(True)
+        self.setMinimumWidth(320)
+
+        layout = QVBoxLayout(self)
+        layout.setSpacing(10)
+
+        # ── Row 1: From / To ────────────────────────────────────────────
+        range_layout = QHBoxLayout()
+        range_layout.addWidget(QLabel("С:"))
+
+        self.from_input = QLineEdit()
+        self.from_input.setFixedWidth(55)
+        self.from_input.setText(str(current_page))
+        range_layout.addWidget(self.from_input)
+
+        range_layout.addWidget(QLabel("по:"))
+
+        self.to_input = QLineEdit()
+        self.to_input.setFixedWidth(55)
+        self.to_input.setText(str(total_pages))
+        range_layout.addWidget(self.to_input)
+
+        self.total_label = QLabel(f"из {total_pages}")
+        range_layout.addWidget(self.total_label)
+        range_layout.addStretch()
+        layout.addLayout(range_layout)
+
+        # ── Row 2: error label ───────────────────────────────────────────
+        self.error_label = QLabel("")
+        self.error_label.setStyleSheet("color: red;")
+        self.error_label.setVisible(False)
+        layout.addWidget(self.error_label)
+
+        # ── Row 3: Delete after export checkbox ─────────────────────────
+        self.delete_checkbox = QCheckBox("Удалить страницы после извлечения")
+        layout.addWidget(self.delete_checkbox)
+
+        # ── Row 4: Separate files checkbox ──────────────────────────────
+        self.separate_checkbox = QCheckBox("Сохранить страницы как отдельные файлы:")
+        layout.addWidget(self.separate_checkbox)
+
+        # ── Row 5: Format combo ─────────────────────────────────────────
+        # Maps the display label -> internal format key used during saving
+        self._fmt_map = [
+            ("PDF (документ)", "PDF"),
+            ("PNG (изобр.)", "PNG"),
+            ("PNG (изобр.)", "JPEG"),
+            ("BMP (изобр.)", "BMP"),
+        ]
+        fmt_layout = QHBoxLayout()
+        self.format_combo = QComboBox()
+        for label, _ in self._fmt_map:
+            self.format_combo.addItem(label)
+        self.format_combo.setEnabled(False)
+        fmt_layout.addSpacing(20)
+        fmt_layout.addWidget(self.format_combo)
+        fmt_layout.addStretch()
+        layout.addLayout(fmt_layout)
+
+        self.separate_checkbox.toggled.connect(self._on_separate_toggled)
+
+        # ── Row 5: Export / Cancel buttons ──────────────────────────────
+        btn_layout = QHBoxLayout()
+        btn_layout.addStretch()
+
+        self.export_btn = QPushButton(" Извлечь ")
+        self.export_btn.setDefault(True)
+        self.export_btn.clicked.connect(self._on_export_clicked)
+        btn_layout.addWidget(self.export_btn)
+
+        cancel_btn = QPushButton("Отмена")
+        cancel_btn.clicked.connect(self.reject)
+        btn_layout.addWidget(cancel_btn)
+
+        layout.addLayout(btn_layout)
+
+    # ------------------------------------------------------------------ #
+    def _on_separate_toggled(self, checked: bool):
+        self.format_combo.setEnabled(checked)
+        if not checked:
+            self.format_combo.setCurrentIndex(0)  # back to "PDF (документ)"
+
+    def _parse_range(self):
+        """Validate inputs and return (from_0, to_0) 0-based inclusive, or raise ValueError."""
+        try:
+            from_page = int(self.from_input.text().strip())
+            to_page = int(self.to_input.text().strip())
+        except ValueError:
+            raise ValueError("Введите целые числа в поля «С» и «по».")
+
+        if not (1 <= from_page <= self.total_pages):
+            raise ValueError(f"Начальная страница должна быть от 1 до {self.total_pages}.")
+        if not (1 <= to_page <= self.total_pages):
+            raise ValueError(f"Конечная страница должна быть от 1 до {self.total_pages}.")
+        if from_page > to_page:
+            raise ValueError("Начальная страница не может быть больше конечной.")
+
+        return from_page - 1, to_page - 1  # 0-based
+
+    def _on_export_clicked(self):
+        self.error_label.setVisible(False)
+        try:
+            self._parse_range()
+        except ValueError as e:
+            self.error_label.setText(str(e))
+            self.error_label.setVisible(True)
+            return
+        self.accept()
+
+    # ── Public getters ──────────────────────────────────────────────── #
+    def get_page_range(self) -> List[int]:
+        """Return sorted list of 0-based page indices."""
+        from_0, to_0 = self._parse_range()
+        return list(range(from_0, to_0 + 1))
+
+    def get_format(self) -> str:
+        """Return internal format key: 'PDF', 'PNG', 'JPEG', or 'BMP'."""
+        return self._fmt_map[self.format_combo.currentIndex()][1]
+
+    def is_separate_files(self) -> bool:
+        return self.separate_checkbox.isChecked()
+
+    def is_delete_after_export(self) -> bool:
+        return self.delete_checkbox.isChecked()

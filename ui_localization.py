@@ -1,4 +1,4 @@
-from PySide6.QtCore import QCoreApplication
+from PySide6.QtCore import QCoreApplication, Qt
 from PySide6.QtGui import QKeySequence
 
 
@@ -10,61 +10,62 @@ def translate_ui(self, main_window, language):
         main_window.setWindowTitle(QCoreApplication.translate("MainWindow", "PDF Editor", None))
 
         # File menu and actions
-        self.menuFile.setTitle(QCoreApplication.translate("MainWindow", "&File", None))
-        self.actionOpen.setText(QCoreApplication.translate("MainWindow", "&Open...", None))
-        self.actionSave.setText(QCoreApplication.translate("MainWindow", "&Save", None))
-        self.actionSaveAs.setText(QCoreApplication.translate("MainWindow", "Save &As...", None))
-        self.actionClosePdf.setText(QCoreApplication.translate("MainWindow", "&Close", None))
-        self.actionPrint.setText(QCoreApplication.translate("MainWindow", "&Print...", None))
-        self.actionEmail.setText(QCoreApplication.translate("MainWindow", "Send by &Email...", None))
-        self.actionCompress.setText(QCoreApplication.translate("MainWindow", "&Compress...", None))
-        self.actionAboutPdf.setText(QCoreApplication.translate("MainWindow", "Document &Properties...", None))
-        self.actionQuit.setText(QCoreApplication.translate("MainWindow", "&Quit", None))
-        self.actionSave_Page_As_Image.setText(QCoreApplication.translate("MainWindow", "Save Page as &Image...", None))
-        self.actionPasswordDoc.setText(QCoreApplication.translate("MainWindow", "Set Pass&word...", None))
-        self.actionEnumeratePages.setText(QCoreApplication.translate("MainWindow", "&Enumerate Pages...", None))
+        self.menuFile.setTitle(QCoreApplication.translate("MainWindow", "File", None))
+        self.actionOpen.setText(QCoreApplication.translate("MainWindow", "Open...", None))
+        self.actionClearRecentFiles.setText(QCoreApplication.translate("MainWindow", "Clear recent files", None))
+        self.actionSave.setText(QCoreApplication.translate("MainWindow", "Save", None))
+        self.actionSaveAs.setText(QCoreApplication.translate("MainWindow", "Save As...", None))
+        self.actionClosePdf.setText(QCoreApplication.translate("MainWindow", "Close document", None))
+        self.actionPrint.setText(QCoreApplication.translate("MainWindow", "Print...", None))
+        self.actionEmail.setText(QCoreApplication.translate("MainWindow", "Send by Email...", None))
+        self.actionCompress.setText(QCoreApplication.translate("MainWindow", "Compress...", None))
+        self.actionAboutPdf.setText(QCoreApplication.translate("MainWindow", "Document Properties...", None))
+        self.actionQuit.setText(QCoreApplication.translate("MainWindow", "Quit", None))
+        self.actionExport_Pages.setText(QCoreApplication.translate("MainWindow", "Export pages as...", None))
+        self.actionPasswordDoc.setText(QCoreApplication.translate("MainWindow", "Set Password...", None))
+        self.actionEnumeratePages.setText(QCoreApplication.translate("MainWindow", "Enumerate Pages...", None))
 
         # View menu and actions
-        self.menuView.setTitle(QCoreApplication.translate("MainWindow", "&View", None))
-        self.actionToggle_Panel.setText(QCoreApplication.translate("MainWindow", "Toggle &Sidepanel", None))
-        self.actionZoom_In.setText(QCoreApplication.translate("MainWindow", "Zoom &In", None))
-        self.actionZoom_Out.setText(QCoreApplication.translate("MainWindow", "Zoom &Out", None))
-        self.actionFitToWidth.setText(QCoreApplication.translate("MainWindow", "Fit to &Width", None))
-        self.actionFitToHeight.setText(QCoreApplication.translate("MainWindow", "Fit to &Height", None))
-        self.actionRotateViewClockwise.setText(QCoreApplication.translate("MainWindow", "Rotate View &Clockwise", None))
+        self.menuView.setTitle(QCoreApplication.translate("MainWindow", "View", None))
+        self.actionToggle_Panel.setText(QCoreApplication.translate("MainWindow", "Toggle Sidepanel", None))
+        self.actionZoom_In.setText(QCoreApplication.translate("MainWindow", "Zoom In", None))
+        self.actionZoom_Out.setText(QCoreApplication.translate("MainWindow", "Zoom Out", None))
+        self.actionFitToWidth.setText(QCoreApplication.translate("MainWindow", "Fit to Width", None))
+        self.actionFitToHeight.setText(QCoreApplication.translate("MainWindow", "Fit to Height", None))
+        self.actionRotateViewClockwise.setText(QCoreApplication.translate("MainWindow", "Rotate View Clockwise", None))
         self.actionRotateViewCounterclockwise.setText(
-            QCoreApplication.translate("MainWindow", "Rotate View &Counterclockwise", None))
+            QCoreApplication.translate("MainWindow", "Rotate View Counterclockwise", None))
 
         # View submenus
-        self.menuRotation.setTitle(QCoreApplication.translate("MainWindow", "&Rotation", None))
-        self.menuNavigation.setTitle(QCoreApplication.translate("MainWindow", "&Navigation", None))
-        self.menuZoom.setTitle(QCoreApplication.translate("MainWindow", "&Zoom", None))
+        self.menuRotation.setTitle(QCoreApplication.translate("MainWindow", "Rotation", None))
+        self.menuNavigation.setTitle(QCoreApplication.translate("MainWindow", "Navigation", None))
+        self.menuZoom.setTitle(QCoreApplication.translate("MainWindow", "Zoom", None))
 
         # Navigation actions
-        self.actionPrevious_Page.setText(QCoreApplication.translate("MainWindow", "&Previous Page", None))
-        self.actionNext_Page.setText(QCoreApplication.translate("MainWindow", "&Next Page", None))
-        self.actionJumpToFirstPage.setText(QCoreApplication.translate("MainWindow", "&First Page", None))
-        self.actionJumpToLastPage.setText(QCoreApplication.translate("MainWindow", "&Last Page", None))
+        self.actionPrevious_Page.setText(QCoreApplication.translate("MainWindow", "Previous Page", None))
+        self.actionNext_Page.setText(QCoreApplication.translate("MainWindow", "Next Page", None))
+        self.actionJumpToFirstPage.setText(QCoreApplication.translate("MainWindow", "First Page", None))
+        self.actionJumpToLastPage.setText(QCoreApplication.translate("MainWindow", "Last Page", None))
 
         # Edit menu and actions
-        self.menuEdit.setTitle(QCoreApplication.translate("MainWindow", "&Edit", None))
-        self.actionDeletePage.setText(QCoreApplication.translate("MainWindow", "&Delete Current Page", None))
+        self.menuEdit.setTitle(QCoreApplication.translate("MainWindow", "Edit", None))
+        self.actionDeletePage.setText(QCoreApplication.translate("MainWindow", "Delete Current Page", None))
         self.actionDeleteSpecificPages.setText(
-            QCoreApplication.translate("MainWindow", "Delete &Specific Pages...", None))
-        self.actionMovePageUp.setText(QCoreApplication.translate("MainWindow", "Move Page &Up", None))
-        self.actionMovePageDown.setText(QCoreApplication.translate("MainWindow", "Move Page &Down", None))
+            QCoreApplication.translate("MainWindow", "Delete Specific Pages...", None))
+        self.actionMovePageUp.setText(QCoreApplication.translate("MainWindow", "Move Page Up", None))
+        self.actionMovePageDown.setText(QCoreApplication.translate("MainWindow", "Move Page Down", None))
         self.actionRotateCurrentPageClockwise.setText(
-            QCoreApplication.translate("MainWindow", "Rotate Page Cloc&kwise", None))
+            QCoreApplication.translate("MainWindow", "Rotate Page Clockwise", None))
         self.actionRotateCurrentPageCounterclockwise.setText(
-            QCoreApplication.translate("MainWindow", "Rotate Page Counter&clockwise", None))
+            QCoreApplication.translate("MainWindow", "Rotate Page Counterclockwise", None))
         self.actionRotateSpecificPages.setText(
-            QCoreApplication.translate("MainWindow", "&Rotate Specific Pages...", None))
-        self.actionAddFile.setText(QCoreApplication.translate("MainWindow", "&Add File...", None))
-        self.actionDraw.setText(QCoreApplication.translate("MainWindow", "D&raw/Annotate", None))
+            QCoreApplication.translate("MainWindow", "Rotate Specific Pages...", None))
+        self.actionAddFile.setText(QCoreApplication.translate("MainWindow", "Add File...", None))
+        self.actionDraw.setText(QCoreApplication.translate("MainWindow", "Draw/Annotate", None))
 
         # Help menu and actions
-        self.menuHelp.setTitle(QCoreApplication.translate("MainWindow", "&Help", None))
-        self.actionAbout.setText(QCoreApplication.translate("MainWindow", "&About PDF Editor", None))
+        self.menuHelp.setTitle(QCoreApplication.translate("MainWindow", "Help", None))
+        self.actionAbout.setText(QCoreApplication.translate("MainWindow", "About PDF Editor", None))
 
         # Tab buttons
         self.bookmarksButton.setText(QCoreApplication.translate("MainWindow", "Bookmarks", None))
@@ -79,63 +80,64 @@ def translate_ui(self, main_window, language):
         main_window.setWindowTitle(QCoreApplication.translate("MainWindow", "PDF Редактор", None))
 
         # File menu and actions
-        self.menuFile.setTitle(QCoreApplication.translate("MainWindow", "&Файл", None))
-        self.actionOpen.setText(QCoreApplication.translate("MainWindow", "&Открыть...", None))
-        self.actionSave.setText(QCoreApplication.translate("MainWindow", "&Сохранить", None))
-        self.actionSaveAs.setText(QCoreApplication.translate("MainWindow", "Сохранить &как...", None))
-        self.actionClosePdf.setText(QCoreApplication.translate("MainWindow", "&Закрыть", None))
-        self.actionPrint.setText(QCoreApplication.translate("MainWindow", "&Печать...", None))
-        self.actionEmail.setText(QCoreApplication.translate("MainWindow", "Отправить по &почте...", None))
-        self.actionCompress.setText(QCoreApplication.translate("MainWindow", "&Сжать...", None))
-        self.actionAboutPdf.setText(QCoreApplication.translate("MainWindow", "&Свойства документа...", None))
-        self.actionQuit.setText(QCoreApplication.translate("MainWindow", "&Выход", None))
-        self.actionSave_Page_As_Image.setText(
-            QCoreApplication.translate("MainWindow", "Сохранить страницу как &изображение...", None))
+        self.menuFile.setTitle(QCoreApplication.translate("MainWindow", "Файл", None))
+        self.actionOpen.setText(QCoreApplication.translate("MainWindow", "Открыть...", None))
+        self.actionClearRecentFiles.setText(QCoreApplication.translate("MainWindow", "Очистить недавние файлы", None))
+        self.actionSave.setText(QCoreApplication.translate("MainWindow", "Сохранить", None))
+        self.actionSaveAs.setText(QCoreApplication.translate("MainWindow", "Сохранить как...", None))
+        self.actionClosePdf.setText(QCoreApplication.translate("MainWindow", "Закрыть документ", None))
+        self.actionPrint.setText(QCoreApplication.translate("MainWindow", "Печать...", None))
+        self.actionEmail.setText(QCoreApplication.translate("MainWindow", "Отправить по почте...", None))
+        self.actionCompress.setText(QCoreApplication.translate("MainWindow", "Сжать...", None))
+        self.actionAboutPdf.setText(QCoreApplication.translate("MainWindow", "Свойства документа...", None))
+        self.actionQuit.setText(QCoreApplication.translate("MainWindow", "Выход", None))
+        self.actionExport_Pages.setText(
+            QCoreApplication.translate("MainWindow", "Извлечь страницы как...", None))
         self.actionPasswordDoc.setText(QCoreApplication.translate("MainWindow", "Пароль...", None))
-        self.actionEnumeratePages.setText(QCoreApplication.translate("MainWindow", "&Нумерация страниц...", None))
+        self.actionEnumeratePages.setText(QCoreApplication.translate("MainWindow", "Нумерация страниц...", None))
 
         # View menu and actions
-        self.menuView.setTitle(QCoreApplication.translate("MainWindow", "&Вид", None))
-        self.actionToggle_Panel.setText(QCoreApplication.translate("MainWindow", "Переключить &боковую панель", None))
-        self.actionZoom_In.setText(QCoreApplication.translate("MainWindow", "&Увеличить", None))
-        self.actionZoom_Out.setText(QCoreApplication.translate("MainWindow", "&Уменьшить", None))
-        self.actionFitToWidth.setText(QCoreApplication.translate("MainWindow", "По &ширине", None))
-        self.actionFitToHeight.setText(QCoreApplication.translate("MainWindow", "По &высоте", None))
+        self.menuView.setTitle(QCoreApplication.translate("MainWindow", "Вид", None))
+        self.actionToggle_Panel.setText(QCoreApplication.translate("MainWindow", "Переключить боковую панель", None))
+        self.actionZoom_In.setText(QCoreApplication.translate("MainWindow", "Приблизить", None))
+        self.actionZoom_Out.setText(QCoreApplication.translate("MainWindow", "Отдалить", None))
+        self.actionFitToWidth.setText(QCoreApplication.translate("MainWindow", "Подогнать по ширине", None))
+        self.actionFitToHeight.setText(QCoreApplication.translate("MainWindow", "Подогнать по высоте", None))
         self.actionRotateViewClockwise.setText(
-            QCoreApplication.translate("MainWindow", "Повернуть вид по &часовой", None))
+            QCoreApplication.translate("MainWindow", "Повернуть вид по часовой", None))
         self.actionRotateViewCounterclockwise.setText(
-            QCoreApplication.translate("MainWindow", "Повернуть вид &против часовой", None))
+            QCoreApplication.translate("MainWindow", "Повернуть вид против часовой", None))
 
         # View submenus
-        self.menuRotation.setTitle(QCoreApplication.translate("MainWindow", "&Поворот", None))
-        self.menuNavigation.setTitle(QCoreApplication.translate("MainWindow", "&Навигация", None))
-        self.menuZoom.setTitle(QCoreApplication.translate("MainWindow", "&Масштаб", None))
+        self.menuRotation.setTitle(QCoreApplication.translate("MainWindow", "Поворот", None))
+        self.menuNavigation.setTitle(QCoreApplication.translate("MainWindow", "Навигация", None))
+        self.menuZoom.setTitle(QCoreApplication.translate("MainWindow", "Масштаб", None))
 
         # Navigation actions
-        self.actionPrevious_Page.setText(QCoreApplication.translate("MainWindow", "&Предыдущая страница", None))
-        self.actionNext_Page.setText(QCoreApplication.translate("MainWindow", "&Следующая страница", None))
-        self.actionJumpToFirstPage.setText(QCoreApplication.translate("MainWindow", "&Первая страница", None))
-        self.actionJumpToLastPage.setText(QCoreApplication.translate("MainWindow", "&Последняя страница", None))
+        self.actionPrevious_Page.setText(QCoreApplication.translate("MainWindow", "Предыдущая страница", None))
+        self.actionNext_Page.setText(QCoreApplication.translate("MainWindow", "Следующая страница", None))
+        self.actionJumpToFirstPage.setText(QCoreApplication.translate("MainWindow", "Первая страница", None))
+        self.actionJumpToLastPage.setText(QCoreApplication.translate("MainWindow", "Последняя страница", None))
 
         # Edit menu and actions
-        self.menuEdit.setTitle(QCoreApplication.translate("MainWindow", "&Правка", None))
-        self.actionDeletePage.setText(QCoreApplication.translate("MainWindow", "&Удалить текущую страницу", None))
+        self.menuEdit.setTitle(QCoreApplication.translate("MainWindow", "Правка", None))
+        self.actionDeletePage.setText(QCoreApplication.translate("MainWindow", "Удалить текущую страницу", None))
         self.actionDeleteSpecificPages.setText(
-            QCoreApplication.translate("MainWindow", "Удалить &определенные страницы...", None))
-        self.actionMovePageUp.setText(QCoreApplication.translate("MainWindow", "Переместить страницу &вверх", None))
-        self.actionMovePageDown.setText(QCoreApplication.translate("MainWindow", "Переместить страницу в&низ", None))
+            QCoreApplication.translate("MainWindow", "Удалить определенные страницы...", None))
+        self.actionMovePageUp.setText(QCoreApplication.translate("MainWindow", "Переместить страницу вверх", None))
+        self.actionMovePageDown.setText(QCoreApplication.translate("MainWindow", "Переместить страницу вниз", None))
         self.actionRotateCurrentPageClockwise.setText(
-            QCoreApplication.translate("MainWindow", "Повернуть страницу по ча&совой", None))
+            QCoreApplication.translate("MainWindow", "Повернуть страницу по часовой", None))
         self.actionRotateCurrentPageCounterclockwise.setText(
-            QCoreApplication.translate("MainWindow", "Повернуть страницу против ча&совой", None))
+            QCoreApplication.translate("MainWindow", "Повернуть страницу против часовой", None))
         self.actionRotateSpecificPages.setText(
-            QCoreApplication.translate("MainWindow", "&Повернуть определенные страницы...", None))
-        self.actionAddFile.setText(QCoreApplication.translate("MainWindow", "&Добавить файл...", None))
-        self.actionDraw.setText(QCoreApplication.translate("MainWindow", "&Рисование/Аннотации", None))
+            QCoreApplication.translate("MainWindow", "Повернуть определенные страницы...", None))
+        self.actionAddFile.setText(QCoreApplication.translate("MainWindow", "Добавить файл...", None))
+        self.actionDraw.setText(QCoreApplication.translate("MainWindow", "Рисование/Аннотации", None))
 
         # Help menu and actions
-        self.menuHelp.setTitle(QCoreApplication.translate("MainWindow", "&Справка", None))
-        self.actionAbout.setText(QCoreApplication.translate("MainWindow", "&О программе PDF Редактор", None))
+        self.menuHelp.setTitle(QCoreApplication.translate("MainWindow", "Справка", None))
+        self.actionAbout.setText(QCoreApplication.translate("MainWindow", "О программе PDF Редактор", None))
 
         # Tab buttons
         self.bookmarksButton.setText(QCoreApplication.translate("MainWindow", "Закладки", None))
@@ -195,8 +197,9 @@ def add_tooltips(self, language):
 
         self.actionZoom_In.setToolTip("Увеличить масштаб")
         self.actionZoom_Out.setToolTip("Уменьшить масштаб")
-        self.actionFitToWidth.setToolTip("Подогнать по ширине окна")
-        self.actionFitToHeight.setToolTip("Подогнать по высоте окна")
+        self.actionFitToWidth.setToolTip("Подогнать страницу по ширине окна")
+        self.actionFitToHeight.setToolTip("Подогнать страницу по высоте окна")
+        self.actionToggleFullscreen.setText("Во весь экран")
 
         self.actionRotateViewClockwise.setToolTip("Повернуть вид по часовой стрелке (временно)")
         self.actionRotateViewCounterclockwise.setToolTip("Повернуть вид против часовой стрелки (временно)")
@@ -230,11 +233,13 @@ def shortcuts_ui(self):
     self.actionJumpToLastPage.setShortcut(QCoreApplication.translate("MainWindow", "Ctrl+End", None))
 
     # View operations
-    self.actionZoom_In.setShortcut(QKeySequence.StandardKey.ZoomIn)  # Ctrl++
+    self.actionZoom_In.setShortcut(QCoreApplication.translate("MainWindow", "Ctrl+=", None))  # Ctrl++
+    # self.actionZoom_In.setShortcut(QKeySequence.StandardKey.ZoomIn)  # Ctrl++
     self.actionZoom_Out.setShortcut(QKeySequence.StandardKey.ZoomOut)  # Ctrl+-
     self.actionFitToWidth.setShortcut(QCoreApplication.translate("MainWindow", "Ctrl+1", None))
     self.actionFitToHeight.setShortcut(QCoreApplication.translate("MainWindow", "Ctrl+2", None))
     self.actionToggle_Panel.setShortcut(QCoreApplication.translate("MainWindow", "F9", None))
+    self.actionToggleFullscreen.setShortcut(QKeySequence(Qt.Key_F11))
 
     # Rotation shortcuts
     self.actionRotateViewClockwise.setShortcut(QCoreApplication.translate("MainWindow", "Ctrl+R", None))
@@ -245,6 +250,7 @@ def shortcuts_ui(self):
 
     # Page operations
     self.actionDeletePage.setShortcut(QCoreApplication.translate("MainWindow", "Del", None))
+    self.actionDeleteSpecificPages.setShortcut(QCoreApplication.translate("MainWindow", "Ctrl+Shift+Del", None))
     self.actionMovePageUp.setShortcut(QCoreApplication.translate("MainWindow", "Ctrl+Up", None))
     self.actionMovePageDown.setShortcut(QCoreApplication.translate("MainWindow", "Ctrl+Down", None))
 

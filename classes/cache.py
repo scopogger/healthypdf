@@ -24,19 +24,19 @@ class PageCache:
             self.cache[orig_page_num] = pixmap
             while len(self.cache) > self.max_size:
                 oldest = next(iter(self.cache))
-                # Properly clean up the QPixmap before deletion
+                # PROPERLY clean up the QPixmap before deletion
                 oldest_pixmap = self.cache[oldest]
                 if not oldest_pixmap.isNull():
-                    oldest_pixmap = QPixmap()  # Explicitly clean
+                    oldest_pixmap = QPixmap()  # Explicitly clear
                 del self.cache[oldest]
                 gc.collect()
 
-    def clean(self):
+    def clear(self):
         """Thoroughly clear all cached pixmaps"""
         for key in list(self.cache.keys()):
             pixmap = self.cache[key]
             if not pixmap.isNull():
-                pixmap = QPixmap()  # Explicitly clean
+                pixmap = QPixmap()  # Explicitly clear
             del self.cache[key]
         self.cache.clear()
         gc.collect()

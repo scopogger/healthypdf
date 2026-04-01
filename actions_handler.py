@@ -1,20 +1,22 @@
 import os
 import shutil
+import subprocess
 import sys
 import tempfile
 from datetime import datetime
-from typing import List, Optional
+from typing import List
+from classes.printing import PDFPrinter
+from classes.pages_range_dialog import PagesRangeDialog, ExportPagesDialog
+from classes.file_inserting import InsertFile
 
 # PySide6
 from PySide6.QtWidgets import (
-    QFileDialog, QMessageBox, QProgressDialog, QApplication, QInputDialog, QLineEdit
+    QFileDialog, QMessageBox, QProgressDialog, QApplication, QInputDialog, QLineEdit, QDialog, QVBoxLayout,
+    QRadioButton, QHBoxLayout, QLabel, QSpinBox, QDialogButtonBox, QPushButton, QComboBox
 )
-from PySide6.QtCore import Qt, QObject
-from PySide6.QtGui import QAction, QPainter, QImage
-from PySide6.QtPrintSupport import QPrinter, QPrintDialog
-from PySide6.QtGui import QPageLayout
+from PySide6.QtCore import Qt
+from PySide6.QtGui import QAction, QImage
 
-# Optional dependency used when we render to image for printing
 try:
     import fitz  # PyMuPDF
 except Exception:  # pragma: no cover
@@ -23,15 +25,11 @@ except Exception:  # pragma: no cover
 from settings_manager import settings_manager
 
 
-# -----------------------------
-# Helper
-# -----------------------------
-
 def messagebox_info(parent, title, message):
     QMessageBox.information(parent, title, message)
 
 
-class ActionsHandler(QObject):
+class ActionsHandler:
     """Wire up menus/toolbars and provide app actions compatible with the *new* UI
     while preserving behavior from the *old* implementation where possible.
 
@@ -41,17 +39,15 @@ class ActionsHandler(QObject):
     """
 
     def __init__(self, main_window):
-        super().__init__()
         self.main_window = main_window
         self.ui = main_window.ui
         self.recent_file_actions: list[QAction] = []
 
-        self.fit_to_width_enabled = False
+        # self.ui.actionFitToWidth.setCheckable(True)
+        # self.ui.actionFitToHeight.setCheckable(True)
 
-        # Connect everything
         self.connect_all_actions()
 
-        # Build recents submenu
         self.update_recent_files_menu()
 
     # -----------------------------
@@ -86,6 +82,8 @@ class ActionsHandler(QObject):
             self.ui.actionAddFile.triggered.connect(self.add_file_to_document)
         if hasattr(self.ui, 'actionEmail'):
             self.ui.actionEmail.triggered.connect(self.email_document)
+        if hasattr(self.ui, 'actionCompress'):
+            self.ui.actionCompress.triggered.connect(self.compress_pdf)
 
     def connect_navigation_actions(self):
         """Connect navigation actions"""
@@ -101,7 +99,9 @@ class ActionsHandler(QObject):
     def connect_page_actions(self):
         """Connect page manipulation actions"""
         if hasattr(self.ui, 'actionDeletePage'):
-            self.ui.actionDeletePage.triggered.connect(self.delete_current_page)
+            self.ui.actionDeletePage.triggered.connect(lambda checked=False: self.delete_pages(current_page=True))
+        if hasattr(self.ui, 'actionDeleteSpecificPages'):
+            self.ui.actionDeleteSpecificPages.triggered.connect(lambda checked=False: self.delete_pages(current_page=False))
         if hasattr(self.ui, 'actionMovePageUp'):
             self.ui.actionMovePageUp.triggered.connect(self.move_page_up)
         if hasattr(self.ui, 'actionMovePageDown'):
@@ -110,8 +110,8 @@ class ActionsHandler(QObject):
             self.ui.actionRotateCurrentPageClockwise.triggered.connect(self.rotate_page_clockwise)
         if hasattr(self.ui, 'actionRotateCurrentPageCounterclockwise'):
             self.ui.actionRotateCurrentPageCounterclockwise.triggered.connect(self.rotate_page_counterclockwise)
-        if hasattr(self.ui, 'actionSave_Page_As_Image'):
-            self.ui.actionSave_Page_As_Image.triggered.connect(self.save_current_page_as_image)
+        if hasattr(self.ui, 'actionExport_Pages'):
+            self.ui.actionExport_Pages.triggered.connect(self.export_pages)
         if hasattr(self.ui, 'actionEnumeratePages'):
             self.ui.actionEnumeratePages.triggered.connect(self.enumerate_pages)
 
@@ -129,9 +129,7 @@ class ActionsHandler(QObject):
         if hasattr(self.ui, 'actionZoom_Out'):
             self.ui.actionZoom_Out.triggered.connect(self.zoom_out)
         if hasattr(self.ui, 'actionFitToWidth'):
-            # Make it checkable and connect toggled signal
-            self.ui.actionFitToWidth.setCheckable(True)
-            self.ui.actionFitToWidth.toggled.connect(self.on_fit_to_width_toggled)
+            self.ui.actionFitToWidth.triggered.connect(self.fit_to_width)
         if hasattr(self.ui, 'actionFitToHeight'):
             self.ui.actionFitToHeight.triggered.connect(self.fit_to_height)
         if hasattr(self.ui, 'actionRotateViewClockwise'):
@@ -289,141 +287,21 @@ class ActionsHandler(QObject):
         """Append another PDF to the current document and display the merged result"""
         pv = getattr(self.ui, 'pdfView', None)
         if not pv or not getattr(pv, 'document', None):
-            QMessageBox.warning(self.main_window, "No Document", "Пожалуйста сначала откройте PDF документ.")
+            QMessageBox.warning(self.main_window, "Нет документа", "Пожалуйста сначала откройте PDF документ.")
             return
-
-        # Select file to merge
-        file_path, _ = QFileDialog.getOpenFileName(
-            self.main_window,
-            "Выберите PDF документ для добавления",
-            "",
-            "PDF Files (*.pdf)"
-        )
-        if not file_path:
-            return
-
-        try:
-            # Open the document to append
-            new_doc = fitz.open(file_path)
-        except Exception as e:
-            QMessageBox.critical(self.main_window, "Error", f"Failed to open file:\n{e}")
-            return
-
-        try:
-            # Handle password protection for the new document
-            if new_doc.needs_pass:
-                authed = False
-                for _ in range(3):
-                    pw, ok = QInputDialog.getText(self.main_window, "Password",
-                                                  f"Введите пароль для {os.path.basename(file_path)}:",
-                                                  QLineEdit.Password)
-                    if not ok:
-                        break
-                    if new_doc.authenticate(pw):
-                        authed = True
-                        break
-                if not authed:
-                    QMessageBox.critical(self.main_window, "Error", "Неверный пароль или операция была отменена.")
-                    new_doc.close()
-                    return
-
-            # Get current document
-            cur_doc = pv.document
-
-            # Create a new merged document
-            merged_doc = fitz.open()
-
-            # Insert all pages from current document
-            merged_doc.insert_pdf(cur_doc)
-
-            # Insert all pages from new document (append to end)
-            merged_doc.insert_pdf(new_doc)
-
-            # Save merged document to a temporary file
-            import tempfile
-            fd, temp_path = tempfile.mkstemp(suffix=".pdf")
-            os.close(fd)
-            merged_doc.save(temp_path)
-            merged_doc.close()
-            new_doc.close()
-
-            # Close current document properly
-            pv.close_document()
-
-            # Load the merged document
-            success = pv.open_document(temp_path)
-
-            if success:
-                # Update the document path to the temp file
-                pv.doc_path = temp_path
-
-                # Update thumbnails
-                if hasattr(self.ui, 'thumbnailList'):
-                    try:
-                        self.ui.thumbnailList.set_document(pv.document, pv.doc_path,
-                                                           getattr(pv, 'document_password', None))
-                    except Exception as e:
-                        print(f"Thumbnail update failed: {e}")
-
-                # Mark as modified and update UI
-                pv.is_modified = True
-                self.main_window.is_document_modified = True
-                self.main_window.update_ui_state()
-                self.main_window.update_page_info()
-
-                QMessageBox.information(self.main_window, "Success", "Files merged successfully!")
-            else:
-                QMessageBox.critical(self.main_window, "Error", "Failed to load merged document.")
-
-        except Exception as e:
-            try:
-                new_doc.close()
-            except:
-                pass
-            QMessageBox.critical(self.main_window, "Merge Error", f"Error during merge operation: {e}")
+        inserting = InsertFile(self.main_window, self.ui, pv)
+        inserting.add_file_to_document()
+        return
 
     # -----------------------------
     # Helpers for page visibility/order (compatible with old & new viewers)
     # -----------------------------
-    def get_visible_pages_as_original_indices(self) -> List[int]:
-        visible_pages: List[int] = []
-        pv = getattr(self.ui, 'pdfView', None)
-        if not pv:
-            return visible_pages
-        # Old viewer exposed pages_info + deleted_pages
-        if hasattr(pv, 'pages_info') and hasattr(pv, 'deleted_pages'):
-            for info in pv.pages_info:
-                if info.page_num not in pv.deleted_pages:
-                    visible_pages.append(info.page_num)
-            return visible_pages
-        # Fallback: assume all pages by count
-        total = self._get_total_pages()
-        if total:
-            visible_pages = list(range(total))
-        return visible_pages
-
     def get_visible_pages_in_layout_order(self) -> List[int]:
         pv = getattr(self.ui, 'pdfView', None)
         if not pv:
             return []
-        # Old viewer: walk the layout widgets to respect current order
-        if hasattr(pv, 'pages_layout') and hasattr(pv, 'page_widgets'):
-            order: List[int] = []
-            layout = pv.pages_layout
-            for i in range(layout.count()):
-                item = layout.itemAt(i)
-                if item and item.widget() and not item.widget().isHidden():
-                    widget = item.widget()
-                    for j, pw in enumerate(pv.page_widgets):
-                        if pw == widget:
-                            order.append(j)
-                            break
-            return order
-        # Newer viewer may keep a current layout list
-        if hasattr(pv, 'visible_layout_indices'):
-            return list(pv.visible_layout_indices)
-        # Fallback to natural order
-        total = self._get_total_pages()
+
+        total = pv.document.current_doc.page_count
         return list(range(total)) if total else []
 
     def _get_total_pages(self) -> int:
@@ -445,7 +323,7 @@ class ActionsHandler(QObject):
         return 0
 
     # -----------------------------
-    # Recent files (new UI submenu-aware)
+    # Recent files
     # -----------------------------
     def update_recent_files_menu(self):
         menu = getattr(self.ui, 'menuOpenRecent', None)
@@ -465,7 +343,7 @@ class ActionsHandler(QObject):
         max_items = getattr(settings_manager, 'MAX_RECENT_FILES', 10)
 
         if not recent_files:
-            action = QAction("No recent files", menu)
+            action = QAction("Нет недавних файлов", menu)
             action.setEnabled(False)
             menu.addAction(action)
             self.recent_file_actions.append(action)
@@ -487,16 +365,36 @@ class ActionsHandler(QObject):
             menu.addAction(clear_act)
 
     def open_recent_file(self, file_path: str):
-        if os.path.exists(file_path):
-            self.main_window.load_document(file_path)
-        else:
+        if not os.path.exists(file_path):
             QMessageBox.warning(
                 self.main_window,
-                "File Not Found",
-                f"The file '{file_path}' no longer exists."
+                "Файл не найден",
+                f"Файла '{file_path}' больше не существует."
             )
             settings_manager.remove_recent_file(file_path)
             self.update_recent_files_menu()
+            return
+
+        # Check if a document is currently open
+        pv = getattr(self.ui, 'pdfView', None)
+        has_open_doc = bool(pv and hasattr(pv, 'document') and pv.document is not None)
+
+        # If no doc is open -> just load (no prompt needed)
+        if not has_open_doc:
+            self.main_window.load_document(file_path)
+            return
+
+        # Ask the user how to open the file
+        choice = self._ask_open_window_choice()
+        if choice == "same":
+            # Load in current window
+            self.main_window.load_document(file_path)
+        elif choice == "new":
+            # Launch new instance
+            self._launch_new_instance(file_path)
+        else:
+            # User cancelled → do nothing (keep current doc)
+            pass
 
     def clear_recent_files(self):
         reply = QMessageBox.question(
@@ -505,7 +403,7 @@ class ActionsHandler(QObject):
             "Очистить список недавних файлов?",
             QMessageBox.Yes | QMessageBox.No,
             QMessageBox.No,
-        )
+            )
         if reply == QMessageBox.Yes:
             settings_manager.clear_recent_files()
             self.update_recent_files_menu()
@@ -513,6 +411,7 @@ class ActionsHandler(QObject):
     # -----------------------------
     # File operations
     # -----------------------------
+
     def open_file(self):
         if getattr(self.main_window, 'is_document_modified', False):
             reply = self.main_window.ask_save_changes()
@@ -528,11 +427,80 @@ class ActionsHandler(QObject):
             last_dir,
             "PDF Files (*.pdf)"
         )
-        if file_path:
-            settings_manager.save_last_directory(os.path.dirname(file_path))
-            settings_manager.add_recent_file(file_path)
-            self.update_recent_files_menu()
+        if not file_path:
+            return
+
+        # Save path and recent file (this happens regardless of window choice)
+        settings_manager.save_last_directory(os.path.dirname(file_path))
+        settings_manager.add_recent_file(file_path)
+        self.update_recent_files_menu()
+
+        # Check if a document is currently open
+        pv = getattr(self.ui, 'pdfView', None)
+        has_open_doc = bool(pv and hasattr(pv, 'document') and pv.document is not None)
+
+        if not has_open_doc:
+            # No document open -> just load normally
             self.main_window.load_document(file_path)
+            return
+
+        # Ask the user how to open the file
+        choice = self._ask_open_window_choice()
+        if choice == "same":
+            self.main_window.load_document(file_path)
+        elif choice == "new":
+            self._launch_new_instance(file_path)
+        else:
+            pass
+
+    def _ask_open_window_choice(self) -> str:
+        dialog = QDialog(self.main_window)
+        dialog.setWindowTitle("Открыть документ")
+        dialog.setModal(True)
+
+        layout = QVBoxLayout()
+
+        label = QLabel("Документ уже открыт. Как открыть новый файл?")
+        label.setWordWrap(True)
+        layout.addWidget(label)
+
+        same_radio = QRadioButton("Открыть в текущем окне")
+        same_radio.setChecked(True)
+        new_radio = QRadioButton("Открыть в новом окне")
+
+        layout.addWidget(same_radio)
+        layout.addWidget(new_radio)
+
+        buttons = QDialogButtonBox(QDialogButtonBox.Ok | QDialogButtonBox.Cancel)
+        buttons.accepted.connect(dialog.accept)
+        buttons.rejected.connect(dialog.reject)
+        layout.addWidget(buttons)
+
+        dialog.setLayout(layout)
+
+        if dialog.exec() != QDialog.Accepted:
+            return ""
+
+        return "same" if same_radio.isChecked() else "new"
+
+    def _launch_new_instance(self, file_path: str):
+        try:
+            # Get the path to the executable/script
+            if getattr(sys, 'frozen', False):
+                # Running as bundled app (PyInstaller)
+                app_path = sys.executable
+            else:
+                # Running as script
+                app_path = os.path.abspath(sys.argv[0])
+
+            # Re-run with the new file
+            subprocess.Popen([app_path, file_path], start_new_session=True)
+        except Exception as e:
+            QMessageBox.critical(
+                self.main_window,
+                "Ошибка запуска",
+                f"Не удалось запустить новое окно:\n{e}"
+            )
 
     def save_file(self) -> bool:
         # Prefer viewer-provided save if any
@@ -569,7 +537,7 @@ class ActionsHandler(QObject):
                 self._mark_not_modified()
                 return True
 
-        QMessageBox.critical(self.main_window, "Ошибка сохранения", "Не удалось сохранить документ.")
+        QMessageBox.critical(self.main_window, "Save Error", "Failed to save the document.")
         return False
 
     def save_file_as(self) -> bool:
@@ -578,7 +546,8 @@ class ActionsHandler(QObject):
             return False
 
         last_dir = settings_manager.get_last_directory()
-        base = os.path.splitext(os.path.basename(getattr(self.main_window, 'current_document_path', '') or 'document'))[0]
+        base = os.path.splitext(os.path.basename(getattr(self.main_window, 'current_document_path', '') or 'document'))[
+            0]
         default_name = f"{base}_modified.pdf" if base else "document.pdf"
         file_path, _ = QFileDialog.getSaveFileName(
             self.main_window,
@@ -613,7 +582,7 @@ class ActionsHandler(QObject):
             self.update_recent_files_menu()
             return True
 
-        QMessageBox.critical(self.main_window, "Save Error", "Failed to save the document.")
+        QMessageBox.critical(self.main_window, "Ошибка при сохранении", "Не удалось сохранить документ.")
         return False
 
     def close_file(self):
@@ -623,13 +592,6 @@ class ActionsHandler(QObject):
                 return
             if reply == QMessageBox.Save and not self.save_file():
                 return
-
-        # Reset fit-to-width state when closing file
-        self.fit_to_width_enabled = False
-        if hasattr(self.ui, 'actionFitToWidth'):
-            self.ui.actionFitToWidth.setChecked(False)
-        # Remove event filter
-        self.main_window.removeEventFilter(self)
 
         pv = getattr(self.ui, 'pdfView', None)
         if hasattr(pv, 'close_document'):
@@ -645,6 +607,10 @@ class ActionsHandler(QObject):
                         break
                     except Exception:
                         pass
+
+        m_document = getattr(self.ui, 'm_document', None)
+        if m_document:
+            m_document.close()
 
         self.main_window.current_document_path = ""
         self._mark_not_modified(update_title=True)
@@ -665,6 +631,8 @@ class ActionsHandler(QObject):
     # viewer implements its own print_document(), we prefer that.
     # -----------------------------
     def print_document(self):
+        # Проверка всех компонент
+
         pv = getattr(self.ui, 'pdfView', None)
         if hasattr(pv, 'print_document'):
             try:
@@ -680,89 +648,13 @@ class ActionsHandler(QObject):
         if fitz is None:
             QMessageBox.critical(
                 self.main_window,
-                "Print Error",
-                "Printing requires PyMuPDF (fitz). Please install it to enable printing."
+                "Ошибка печати",
+                "PyMuPDF (fitz) не установлен — операция недоступна."
             )
             return
 
-        # Configure printer and dialog
-        printer = QPrinter(QPrinter.HighResolution)
-        dialog = QPrintDialog(printer, self.main_window)
-        if dialog.exec() != QPrintDialog.Accepted:
-            return
-
-        visible_pages_layout = self.get_visible_pages_in_layout_order()
-        if not visible_pages_layout:
-            QMessageBox.warning(self.main_window, "No Pages to Print", "No visible pages to print.")
-            return
-
-        painter = QPainter()
-        if not painter.begin(printer):
-            QMessageBox.critical(self.main_window, "Print Error", "Cannot open print device.")
-            return
-
-        progress = QProgressDialog("Printing...", "Cancel", 0, len(visible_pages_layout), self.main_window)
-        progress.setWindowModality(Qt.WindowModal)
-        progress.show()
-
-        try:
-            for idx, layout_index in enumerate(visible_pages_layout):
-                progress.setValue(idx)
-                QApplication.processEvents()
-                if progress.wasCanceled():
-                    break
-
-                if idx > 0:
-                    printer.newPage()
-
-                # Map layout index to original index if viewer supports it
-                page_num = layout_index
-                if hasattr(pv, 'original_index_for_layout'):
-                    try:
-                        page_num = pv.original_index_for_layout(layout_index)
-                    except Exception:
-                        pass
-
-                page = pv.document[page_num]
-
-                # Apply temporary per-page rotation if the viewer tracks it
-                rotation = 0
-                if hasattr(pv, 'page_rotations'):
-                    rotation = pv.page_rotations.get(page_num, 0)
-                if rotation:
-                    try:
-                        page.set_rotation(rotation)
-                    except Exception:
-                        pass
-
-                # Orientation
-                pdf_rect = page.rect
-                is_landscape = pdf_rect.width > pdf_rect.height
-                page_layout = printer.pageLayout()
-                if is_landscape and page_layout.orientation() == QPageLayout.Portrait:
-                    printer.setPageLayout(QPageLayout(page_layout.pageSize(), QPageLayout.Landscape, page_layout.margins()))
-
-                # Render
-                zoom = 2
-                pix = page.get_pixmap(matrix=fitz.Matrix(zoom, zoom))
-                image = QImage(pix.samples, pix.width, pix.height, pix.stride, QImage.Format_RGB888)
-
-                paint_rect = printer.pageRect(QPrinter.DevicePixel)
-                scaled = image.scaled(paint_rect.size().toSize(), Qt.KeepAspectRatio, Qt.SmoothTransformation)
-
-                x = paint_rect.x() + (paint_rect.width() - scaled.width()) // 2
-                y = paint_rect.y() + (paint_rect.height() - scaled.height()) // 2
-                target = paint_rect.adjusted(
-                    x - paint_rect.x(), y - paint_rect.y(),
-                    -(paint_rect.width() - (x - paint_rect.x()) - scaled.width()),
-                    -(paint_rect.height() - (y - paint_rect.y()) - scaled.height()),
-                )
-                painter.drawImage(target, scaled)
-        except Exception as e:
-            QMessageBox.critical(self.main_window, "Print Error", f"Error occurred while printing: {e}")
-        finally:
-            painter.end()
-            progress.close()
+        PDFPrinter.print_pdf_with_settings(self.main_window, pv.document.current_doc)
+        return
 
     # -----------------------------
     # Navigation (respect layout order when available)
@@ -820,79 +712,49 @@ class ActionsHandler(QObject):
     # -----------------------------
     # View ops
     # -----------------------------
-    def _update_zoom_selector(self, zoom_value: Optional[float] = None):
-        selector = getattr(self.ui, 'm_zoomSelector', None)
-        pv = getattr(self.ui, 'pdfView', None)
-        if selector and hasattr(selector, 'set_zoom_value'):
-            if zoom_value is None:
-                for attr in ('zoom_factor', 'zoom_level'):
-                    if hasattr(pv, attr):
-                        zoom_value = getattr(pv, attr)
-                        break
-            if zoom_value is not None:
-                selector.set_zoom_value(float(zoom_value))
+    # def _update_zoom_selector(self, zoom_value: Optional[float] = None):
+    #     selector = getattr(self.ui, 'm_zoomSelector', None)
+    #     pv = getattr(self.ui, 'pdfView', None)
+    #     if selector and hasattr(selector, 'set_zoom_value'):
+    #         if zoom_value is None:
+    #             for attr in ('zoom_factor', 'zoom_level'):
+    #                 if hasattr(pv, attr):
+    #                     zoom_value = getattr(pv, attr)
+    #                     break
+    #         if zoom_value is not None:
+    #             selector.set_zoom_value(float(zoom_value))
 
     def zoom_in(self):
         pv = getattr(self.ui, 'pdfView', None)
+        pv.zoom_type = 0
         if hasattr(pv, 'zoom_in'):
             pv.zoom_in()
         elif hasattr(pv, 'set_zoom'):
             current = getattr(pv, 'zoom_level', 1.0)
             pv.set_zoom(min(5.0, current * 1.25))
-        self._update_zoom_selector()
+        # self._update_zoom_selector()
 
     def zoom_out(self):
         pv = getattr(self.ui, 'pdfView', None)
+        pv.zoom_type = 0
         if hasattr(pv, 'zoom_out'):
             pv.zoom_out()
         elif hasattr(pv, 'set_zoom'):
             current = getattr(pv, 'zoom_level', 1.0)
-            pv.set_zoom(max(0.1, current * 0.8))
-        self._update_zoom_selector()
+            pv.set_zoom(max(0.25, current * 0.8))
+        # self._update_zoom_selector()
 
     def fit_to_width(self):
         pv = getattr(self.ui, 'pdfView', None)
-        if hasattr(pv, 'fit_to_width'):
-            pv.fit_to_width()
-        self._update_zoom_selector()
+        # self.ui.actionFitToHeight.setChecked(False)
+        # pv.toggle_fit_to_width(self.ui.actionFitToWidth.isChecked())
+        pv.toggle_fit_to_width()
 
     def fit_to_height(self):
         pv = getattr(self.ui, 'pdfView', None)
-        if hasattr(pv, 'fit_to_height'):
-            pv.fit_to_height()
-        self._update_zoom_selector()
-
-    def on_fit_to_width_toggled(self, checked):
-        """Handle fit-to-width toggle"""
-        self.fit_to_width_enabled = checked
-
-        if checked:
-            # Enable fit-to-width mode
-            self.fit_to_width()
-
-            # Connect resize event to maintain fit-to-width
-            if hasattr(self.main_window, 'installEventFilter'):
-                self.main_window.installEventFilter(self)
-
-        else:
-            # Remove event filter
-            self.main_window.removeEventFilter(self)
-
-            # Update zoom selector to reflect current state
-        self._update_zoom_selector()
-
-    def eventFilter(self, obj, event):
-        """Handle resize events to maintain fit-to-width"""
-        from PySide6.QtCore import QEvent
-
-        if (self.fit_to_width_enabled and
-                event.type() == QEvent.Resize and
-                obj == self.main_window):
-            # Small delay to ensure resize is complete
-            from PySide6.QtCore import QTimer
-            QTimer.singleShot(50, self.fit_to_width)
-
-        return super().eventFilter(obj, event)
+        # self.ui.actionFitToWidth.setChecked(False)
+        # pv.toggle_fit_to_height(self.ui.actionFitToHeight.isChecked())
+        pv.toggle_fit_to_height()
 
     def rotate_view_clockwise(self):
         pv = getattr(self.ui, 'pdfView', None)
@@ -926,7 +788,7 @@ class ActionsHandler(QObject):
                 sizes = self.ui.splitter.sizes()
                 total = sum(sizes) if sizes else self.main_window.width()
                 tab_buttons_width = 25
-                # Try to restore preferred width from settings if present
+                # try to restore preferred width from settings if present
                 try:
                     _, panel_width, _ = settings_manager.load_panel_state()
                 except Exception:
@@ -941,205 +803,203 @@ class ActionsHandler(QObject):
                 self.ui.splitter.setSizes([25, 0, max(0, total - 25)])
 
     # -----------------------------
-    # Page edits
+    # page edits
     # -----------------------------
-    def delete_current_page(self):
+
+    def delete_pages(self, current_page: bool = True):
+        """Delete pages: either the current page only, or a user-specified range."""
         pv = getattr(self.ui, 'pdfView', None)
         if not pv or (hasattr(pv, 'document') and pv.document is None):
+            QMessageBox.warning(self.main_window, "Нет документа", "Сначала откройте PDF документ.")
             return
 
-        total = self._get_total_pages()
-        if total <= 1:
-            QMessageBox.warning(self.main_window, "Cannot Delete Page", "Cannot delete the last remaining page.")
+        cur_doc = pv.document.current_doc
+        total_pages = cur_doc.page_count
+        if total_pages <= 0:
+            QMessageBox.warning(self.main_window, "Ошибка", "Не удалось определить количество страниц.")
             return
 
-        # reply = QMessageBox.question(
-        #     self.main_window,
-        #     "Delete Page",
-        #     "Are you sure you want to delete the current page?",
-        #     QMessageBox.Yes | QMessageBox.No,
-        #     QMessageBox.No,
-        # )
-        # if reply != QMessageBox.Yes:
-        #     return
-
-        if hasattr(pv, 'get_current_page'):
-            current_page = pv.get_current_page()
-        else:
-            current_page = None
-
-        success = False
-        for method in ('delete_current_page',):
-            if hasattr(pv, method):
-                try:
-                    success = bool(getattr(pv, method)())
-                    break
-                except Exception:
-                    pass
-        if not success:
-            return
-
-        # Mark modified and update UI bits
-        if hasattr(self.main_window, 'on_document_modified'):
-            self.main_window.on_document_modified(True)
-        else:
-            self.main_window.is_document_modified = True
-        if hasattr(self.main_window, 'update_ui_state'):
-            self.main_window.update_ui_state()
-        if hasattr(self.main_window, 'update_window_title'):
-            self.main_window.update_window_title()
-
-        # Thumbnail updates
-        thumb = getattr(self.ui, 'thumbnailList', None)
-        if thumb:
-            if current_page is not None and hasattr(thumb, 'hide_page_thumbnail'):
-                try:
-                    thumb.hide_page_thumbnail(current_page)
-                except Exception:
-                    pass
-            for method in ('refresh_thumbnails', 'update_thumbnails_order'):
-                if hasattr(thumb, method):
-                    try:
-                        # When reordering, use original indices if we can
-                        if method == 'update_thumbnails_order':
-                            thumb.update_thumbnails_order(self.get_visible_pages_as_original_indices())
-                        else:
-                            getattr(thumb, method)()
-                    except Exception:
-                        pass
+        if current_page:
+            # Delete only the current page
             try:
-                if hasattr(pv, 'get_current_page') and hasattr(thumb, 'set_current_page'):
-                    thumb.set_current_page(pv.get_current_page())
-            except Exception:
-                pass
+                current_index = getattr(pv, 'get_current_page', lambda: 0)()
+                pages_to_delete = [current_index]
+                print(f"pages_to_delete: {pages_to_delete}")
+                success = pv.delete_pages_by_range(pages_to_delete)
+                if not success:
+                    raise RuntimeError("Ошибка при удалении страницы.")
+            except Exception as e:
+                QMessageBox.critical(
+                    self.main_window,
+                    "Ошибка удаления", f"Не удалось удалить текущую страницу:\n{e}")
+                return
+        else:
+            # ask user for page ranges
+            dialog = PagesRangeDialog(self.main_window, "DELETE")
+            if dialog.exec() != QDialog.Accepted:
+                return
 
-    def save_current_page_as_image(self):
-        """Сохранить текущую страницу как изображение с настройками качества"""
+            try:
+                pages_to_delete = dialog.get_page_ranges()
+            except ValueError as e:
+                QMessageBox.critical(self.main_window, "Ошибка ввода", f"Некорректные данные: {e}")
+                return
+
+            try:
+                # pdf_viewer.delete_pages_by_range() expects list of 0-based indices
+                success = pv.delete_pages_by_range(pages_to_delete)
+                if not success:
+                    raise RuntimeError("Ошибка при удалении страниц.")
+            except Exception as e:
+                QMessageBox.critical(self.main_window, "Ошибка удаления", f"Не удалось удалить страницы:\n{e}")
+                return
+
+        # refresh UI
+        self.ui.thumbnailList.refresh_thumbnails(pv.document)
+        return
+
+    def export_pages(self):
+        """Export a range of pages as a single PDF or as separate image/PDF files."""
         pv = getattr(self.ui, 'pdfView', None)
         if not pv or not hasattr(pv, 'document') or pv.document is None:
             QMessageBox.warning(self.main_window, "Нет документа", "Пожалуйста, сначала откройте PDF файл.")
             return
 
-        # Получить текущую страницу
-        current_original_page = pv.get_current_page()
-        if current_original_page is None:
-            QMessageBox.warning(self.main_window, "Ошибка", "Не удалось определить текущую страницу.")
+        cur_doc = pv.document.current_doc
+        total_pages = cur_doc.page_count
+        if total_pages <= 0:
+            QMessageBox.warning(self.main_window, "Ошибка", "Не удалось определить количество страниц.")
             return
 
-        # Запрос качества/уровня масштабирования
-        zoom_levels = {
-            "Среднее (72 DPI)": 1.0,
-            "Хорошее (150 DPI)": 2.0,
-            "Высокое (300 DPI)": 4.0,
-            "Очень высокое (600 DPI)": 8.0
-        }
+        current_page = getattr(pv, 'get_current_page', lambda: 0)()
 
-        quality, ok = QInputDialog.getItem(
+        dialog = ExportPagesDialog(
             self.main_window,
-            "Качество изображения",
-            "Выберите качество изображения:",
-            list(zoom_levels.keys()),
-            1,  # По умолчанию "Хорошее"
-            False
+            total_pages=total_pages,
+            current_page=current_page + 1,
         )
-
-        if not ok:
+        if dialog.exec() != QDialog.Accepted:
             return
-
-        zoom = zoom_levels[quality]
-
-        # Диалог сохранения файла
-        last_dir = settings_manager.get_last_directory()
-        default_name = f"страница_{current_original_page + 1}_{quality.replace(' ', '_').lower()}.png"
-
-        file_path, selected_filter = QFileDialog.getSaveFileName(
-            self.main_window,
-            f"Сохранить страницу как изображение ({quality})",
-            os.path.join(last_dir, default_name),
-            "Изображения PNG (*.png);;Изображения JPEG (*.jpg *.jpeg);;Изображения BMP (*.bmp);;Все файлы (*)"
-        )
-
-        if not file_path:
-            return
-
-        # Определить формат из расширения файла или выбранного фильтра
-        if selected_filter.startswith("PNG") or file_path.lower().endswith('.png'):
-            format = 'PNG'
-            quality_param = 100
-        elif selected_filter.startswith("JPEG") or file_path.lower().endswith(('.jpg', '.jpeg')):
-            format = 'JPEG'
-            quality_param = 95
-            if not file_path.lower().endswith(('.jpg', '.jpeg')):
-                file_path += '.jpg'
-        else:  # BMP или другие
-            format = 'BMP'
-            quality_param = 100
-            if not file_path.lower().endswith('.bmp'):
-                file_path += '.bmp'
 
         try:
-            # Показать прогресс
-            progress = QProgressDialog("Формирование страницы...", "Отмена", 0, 100, self.main_window)
-            progress.setWindowModality(Qt.WindowModal)
-            progress.show()
-            QApplication.processEvents()
+            pages_to_export = dialog.get_page_range()
+        except ValueError as e:
+            QMessageBox.warning(self.main_window, "Ошибка ввода", str(e))
+            return
 
-            # Получить страницу
-            page = pv.document[current_original_page]
+        if not pages_to_export:
+            return
 
-            # Применить поворот если есть
-            rotation = pv.page_rotations.get(current_original_page, 0)
-            if rotation != 0:
-                page.set_rotation(rotation)
+        separate = dialog.is_separate_files()
+        fmt = dialog.get_format()  # 'PDF', 'PNG', 'JPEG', 'BMP'
+        delete_after = dialog.is_delete_after_export()
 
-            # Создать матрицу для рендеринга
-            matrix = fitz.Matrix(zoom, zoom)
+        last_dir = settings_manager.get_last_directory()
+        doc_basename = os.path.splitext(
+            os.path.basename(getattr(self.main_window, 'current_document_path', '') or 'document')
+        )[0]
 
-            progress.setValue(50)
-            QApplication.processEvents()
+        # -- Ask for output folder
+        output_dir = QFileDialog.getExistingDirectory(
+            self.main_window,
+            "Выберите папку для сохранения",
+            last_dir,
+        )
+        if not output_dir:
+            return
+        settings_manager.save_last_directory(output_dir)
 
-            if progress.wasCanceled():
-                return
+        # -- Export
+        if not separate:
+            # Single merged PDF
+            default_name = f"{doc_basename}_export.pdf"
+            save_path = os.path.join(output_dir, default_name)
+            try:
+                new_doc = fitz.open()
+                for page_num in pages_to_export:
+                    new_doc.insert_pdf(cur_doc, from_page=page_num, to_page=page_num)
+                new_doc.save(save_path)
+                new_doc.close()
+                if delete_after:
+                    pv.delete_pages_by_range(pages_to_export)
+                    self.ui.thumbnailList.refresh_thumbnails(pv.document)
+                QMessageBox.information(
+                    self.main_window,
+                    "Успешно",
+                    f"Экспортировано {len(pages_to_export)} стр. в файл:\n{os.path.basename(save_path)}"
+                )
+            except Exception as e:
+                QMessageBox.critical(self.main_window, "Ошибка", f"Не удалось сохранить PDF:\n{e}")
+            return
 
-            # Преобразовать страницу в изображение
-            pix = page.get_pixmap(matrix=matrix, alpha=False, colorspace=fitz.csRGB)
+        # -- Separate files
+        zoom = 4.0  # 300 DPI (72 pt/in × 4 = 288, а это примерно 300 DPI)
+        fmt_ext = fmt.lower().replace('jpeg', 'jpg')
+        qt_fmt = fmt  # QImage.save() format string
 
-            progress.setValue(80)
-            QApplication.processEvents()
+        progress = QProgressDialog(
+            f"Экспорт {len(pages_to_export)} страниц...", "Отмена",
+            0, len(pages_to_export), self.main_window
+        )
+        progress.setWindowModality(Qt.WindowModal)
+        progress.show()
 
-            # Конвертировать в QImage
-            img_data = pix.tobytes("ppm")
-            image = QImage()
-            image.loadFromData(img_data)
+        successful, failed = 0, []
+        try:
+            for idx, page_num in enumerate(pages_to_export):
+                progress.setValue(idx)
+                QApplication.processEvents()
+                if progress.wasCanceled():
+                    break
 
-            if image.isNull():
-                QMessageBox.critical(self.main_window, "Ошибка", "Не удалось преобразовать страницу в изображение.")
-                return
+                try:
+                    if fmt == "PDF":
+                        filename = f"{doc_basename}_стр_{page_num + 1}.pdf"
+                        out_path = os.path.join(output_dir, filename)
+                        single = fitz.open()
+                        single.insert_pdf(cur_doc, from_page=page_num, to_page=page_num)
+                        single.save(out_path)
+                        single.close()
+                    else:
+                        page = pv.document.get_page(page_num)
+                        rotation = pv.page_rotations.get(page_num, 0)
+                        if rotation:
+                            page.set_rotation(rotation)
+                        matrix = fitz.Matrix(zoom, zoom)
+                        pix = page.get_pixmap(matrix=matrix, alpha=False, colorspace=fitz.csRGB)
+                        img_data = pix.tobytes("ppm")
+                        image = QImage()
+                        image.loadFromData(img_data)
+                        if image.isNull():
+                            raise RuntimeError("Не удалось получить изображение страницы.")
+                        filename = f"{doc_basename}_стр_{page_num + 1}.{fmt_ext}"
+                        out_path = os.path.join(output_dir, filename)
+                        quality = 95 if fmt == "JPEG" else -1
+                        if not image.save(out_path, qt_fmt, quality):
+                            raise RuntimeError("QImage.save() вернул False.")
+                    successful += 1
+                except Exception as e:
+                    failed.append(page_num + 1)
+                    print(f"Export error page {page_num + 1}: {e}")
 
-            progress.setValue(90)
-            QApplication.processEvents()
-
-            # Сохранить изображение
-            success = image.save(file_path, format, quality_param)
-
+        finally:
             progress.close()
 
-            if success:
-                QMessageBox.information(self.main_window, "Успешно",
-                                        f"Страница {current_original_page + 1} сохранена в качестве {quality}!\n\n"
-                                        f"Файл: {os.path.basename(file_path)}\n"
-                                        f"Размер: {image.width()} x {image.height()} пикселей")
-                settings_manager.save_last_directory(os.path.dirname(file_path))
-            else:
-                QMessageBox.critical(self.main_window, "Ошибка", "Не удалось сохранить файл изображения.")
-
-        except Exception as e:
-            try:
-                progress.close()
-            except:
-                pass
-            QMessageBox.critical(self.main_window, "Ошибка",
-                                 f"Не удалось сохранить страницу как изображение:\n{str(e)}")
+        if failed:
+            QMessageBox.warning(
+                self.main_window,
+                "Экспорт завершён с ошибками",
+                f"Успешно: {successful}\nОшибки на страницах: {', '.join(map(str, failed))}"
+            )
+        else:
+            if delete_after:
+                pv.delete_pages_by_range(pages_to_export)
+                self.ui.thumbnailList.refresh_thumbnails(pv.document)
+            QMessageBox.information(
+                self.main_window,
+                "Успешно",
+                f"Все {successful} файл(ов) сохранены в:\n{output_dir}"
+            )
 
     def show_pdf_info(self):
         """Показать детальную техническую информацию о текущем PDF документе"""
@@ -1154,8 +1014,8 @@ class ActionsHandler(QObject):
             doc_path = getattr(pv, 'doc_path', 'Неизвестно')
 
             # Сбор комплексной информации о PDF
-            info = doc.metadata
-            page_count = len(doc)
+            info = doc.current_doc.metadata
+            page_count = doc.get_page_count()  # len(doc)
 
             # Информация о файле
             file_size = "Неизвестно"
@@ -1166,17 +1026,17 @@ class ActionsHandler(QObject):
                 file_date = datetime.fromtimestamp(os.path.getmtime(doc_path)).strftime('%Y-%m-%d %H:%M:%S')
 
             # Технические свойства документа
-            is_encrypted = doc.is_encrypted
-            needs_pass = doc.needs_pass
-            can_save = not getattr(doc, 'can_save_incrementally', lambda: True)()
-            is_repaired = getattr(doc, 'is_repaired', False)
-            is_pdf = getattr(doc, 'is_pdf', True)
+            is_encrypted = doc.current_doc.is_encrypted
+            needs_pass = doc.current_doc.needs_pass
+            can_save = not getattr(doc.current_doc, 'can_save_incrementally', lambda: True)()
+            is_repaired = getattr(doc.current_doc, 'is_repaired', False)
+            is_pdf = getattr(doc.current_doc, 'is_pdf', True)
 
             # Check if document has bookmarks
             has_bookmarks = "Нет"
             try:
                 # Try to get bookmarks using PyMuPDF
-                toc = doc.get_toc()
+                toc = doc.current_doc.get_toc()
                 has_bookmarks = "Да" if toc else "Нет"
 
                 # If there are bookmarks, show how many
@@ -1191,8 +1051,8 @@ class ActionsHandler(QObject):
             encryption_info = ""
             if is_encrypted:
                 try:
-                    encrypt_method = getattr(doc, 'get_encryption_method', lambda: 'Неизвестно')()
-                    encrypt_bits = getattr(doc, 'get_encryption_strength', lambda: 0)()
+                    encrypt_method = getattr(doc.current_doc, 'get_encryption_method', lambda: 'Неизвестно')()
+                    encrypt_bits = getattr(doc.current_doc, 'get_encryption_strength', lambda: 0)()
                     encryption_info = f"{encrypt_method} ({encrypt_bits} бит)"
                 except:
                     encryption_info = "Зашифрован"
@@ -1202,12 +1062,12 @@ class ActionsHandler(QObject):
             deleted_pages = len(getattr(pv, 'deleted_pages', set()))
             rotated_pages = len(getattr(pv, 'page_rotations', {}))
 
-            # Получить размеры первой страницы для справки
+            # Получить размеры текущей страницы для справки
             page_dimensions = ""
             if page_count > 0:
                 try:
-                    first_page = doc[0]
-                    rect = first_page.rect
+                    current_page = doc.current_doc[pv.get_current_page()]
+                    rect = current_page.rect
                     page_dimensions = f"{rect.width:.1f} x {rect.height:.1f} пунктов"
                 except:
                     page_dimensions = "Неизвестно"
@@ -1232,18 +1092,9 @@ class ActionsHandler(QObject):
     • <b>Размер страницы (первая):</b> {page_dimensions}<br>
     <br>
 
-    <b>Безопасность:</b><br>
-    • <b>Зашифрован:</b> {'Да' if is_encrypted else 'Нет'}<br>
-    • <b>Защищен паролем:</b> {'Да' if needs_pass else 'Нет'}<br>
-    • <b>Метод шифрования:</b> {encryption_info}<br>
-    • <b>Восстановлен:</b> {'Да' if is_repaired else 'Нет'}<br>
-    <br>
-
     <b>Технические свойства:</b><br>
-    • <b>Версия PDF:</b> {getattr(doc, 'pdf_version', 'Неизвестно')}<br>
-    • <b>Инкрементное сохранение:</b> {'Нет' if can_save else 'Да'}<br>
+    • <b>Версия PDF:</b> {getattr(doc.current_doc, 'pdf_version', 'Неизвестно')}<br>
     • <b>Закладки:</b> {has_bookmarks}<br>
-    • <b>Корректный PDF:</b> {'Да' if is_pdf else 'Нет'}<br>
     <br>
 
     <b>Метаданные:</b><br>
@@ -1317,10 +1168,9 @@ class ActionsHandler(QObject):
             minute = int(date_str[10:12]) if len(date_str) >= 12 else 0
             second = int(date_str[12:14]) if len(date_str) >= 14 else 0
 
-            from datetime import datetime
-            date_obj = datetime(year, month, day, hour, minute, second)
+            # from datetime import datetime
+            # date_obj = datetime(year, month, day, hour, minute, second)
 
-            # Format in Russian
             months_ru = {
                 1: 'января', 2: 'февраля', 3: 'марта', 4: 'апреля',
                 5: 'мая', 6: 'июня', 7: 'июля', 8: 'августа',
@@ -1339,53 +1189,62 @@ class ActionsHandler(QObject):
             return pdf_date_str
 
     def show_about(self):
-        """Показать детальную информацию о приложении"""
-        # Вы можете определить эти константы версий в начале файла или класса
-        APP_NAME = "Редактор документов АльтPDF"
-        APP_VERSION = "0.8.1"
-        APP_DESCRIPTION = "Мощное кроссплатформенное приложение для просмотра и редактирования PDF документов"
+        """Показать информацию о приложении"""
+        APP_NAME = "Редактор PDF Альт"
+        APP_VERSION = "0.831"
+        APP_DESCRIPTION = "Приложение для просмотра и редактирования PDF-файлов для операционной системы Альт Рабочая станция."
 
         about_text = f"""
-    <b>{APP_NAME} v{APP_VERSION}</b>
-    <br><br>
-    {APP_DESCRIPTION}
-    <br><br>
-    <u>Основные возможности:</u>
-    • Просмотр и навигация по PDF документам
-    • Аннотации и инструменты рисования на страницах
-    • Манипуляции со страницами (поворот, удаление, перестановка)
-    • Экспорт страниц как изображений
-    • Управление парольной защитой
-    • Навигация с помощью миниатюр
-    • Расширенные опции масштабирования и подгонки
-    • Высококачественная печать
-    <br><br>
-    <u>Создано с использованием:</u>
-    • <b>PySide6</b> - Кроссплатформенный GUI фреймворк
-    • <b>PyMuPDF</b> - Высокопроизводительная обработка PDF
-    • <b>Python {sys.version_info.major}.{sys.version_info.minor}.{sys.version_info.micro}</b> - Язык программирования
-    <br><br>
-    <u>Библиотеки и зависимости:</u>
-    • Qt {self._get_qt_version()} - Фреймворк приложения
-    • Fitz - Движок рендеринга PDF
-    • Стандартные библиотеки Python
-    <br><br>
-    <u>Назначение приложения:</u>
-    Это приложение предоставляет комплексные возможности редактирования PDF для производственного использования, включая рисование в документах, управление страницами и конвертацию форматов.
-    <br><br>
-    <small>Создано с использованием современных Python библиотек для эффективной обработки PDF и интуитивного пользовательского опыта по заказу ПАО СургутНефтегаз.</small>
-    """
+        <b>{APP_NAME}</b><br>
+        <b>Версия:</b> {APP_VERSION}<br><br>
+        {APP_DESCRIPTION}<br><br>
+    
+        <b>Разработано с использованием:</b><br>
+        • <b>PySide6</b> — кроссплатформенный GUI фреймворк (обёртка Qt {self._get_qt_version()} для Python)<br>
+        • <b>PyMuPDF (Fitz)</b> — библиотека для высокопроизводительной работы с PDF-документами<br>
+        • <b>Python {sys.version_info.major}.{sys.version_info.minor}.{sys.version_info.micro}</b> — язык программирования<br>
+        • Стандартные библиотеки Python<br><br>
+    
+        <b>Редактор PDF Альт разработан </b>ОППО ГИСиСАПР<br>
+        ПУ «СургутАСУнефть», ПАО «Сургутнефтегаз».<br><br>
+    
+        При возникновении проблем обращаться в<br>
+        <b>Naumen Service Desk</b>:<br>
+        – ИТ-решение: <u>0085</u><br>
+        – ИС: <u>1873</u>
+        """
 
-        msg_box = QMessageBox(self.main_window)
-        msg_box.setWindowTitle(f"О программе {APP_NAME}")
-        msg_box.setTextFormat(Qt.RichText)
-        msg_box.setText(about_text)
+        msg_box = QDialog(self.main_window)
+        msg_box.setWindowTitle(f"О программе")
+        msg_box.setModal(True)
+        msg_box.setMinimumSize(570, 360)
+        msg_box.resize(570, 360)
+        layout = QVBoxLayout()
 
-        # Сделать диалог немного больше для размещения всего текста
-        msg_box.resize(500, 600)
+        label = QLabel(about_text)
+        label.setTextFormat(Qt.RichText)
+        label.setWordWrap(True)
+        label.setOpenExternalLinks(True)
+        label.setAlignment(Qt.AlignTop | Qt.AlignLeft)
+        # label.setStyleSheet("padding: 10px; font-size: 11pt;")
 
-        msg_box.setStandardButtons(QMessageBox.Ok)
+        layout.addWidget(label)
+
+        ok_button = QPushButton("OK")
+        ok_button.clicked.connect(msg_box.accept)
+        ok_button.setDefault(True)
+        layout.addWidget(ok_button, alignment=Qt.AlignRight)
+
+        msg_box.setLayout(layout)
         msg_box.exec()
+
+        # msg_box = QDialog(self.main_window)
+        # msg_box.setWindowTitle(f"О программе {APP_NAME}")
+        # msg_box.setTextFormat(Qt.RichText)
+        # msg_box.setText(about_text)
+        # msg_box.setIcon(QMessageBox.Information)
+        # msg_box.setStandardButtons(QMessageBox.Ok)
+        # msg_box.exec()
 
     def _get_qt_version(self):
         """Получить строку версии Qt"""
@@ -1478,7 +1337,204 @@ class ActionsHandler(QObject):
                 f"Не удалось добавить номера страниц: {str(e)}"
             )
 
-    def russian_message_box(self, title, text):
+    def get_ghostscript_path(self):
+        """Get Ghostscript executable path for compressing pdf-files"""
+
+        # possible_paths = [os.path.join(base_dir, "ghostscript", "gswin64c.exe"),
+        #                   os.path.join(base_dir, "gswin64c.exe"),
+        #                   os.path.join(".", "ghostscript", "gswin64c.exe")]
+        #
+        # for path in possible_paths:
+        #     if os.path.isfile(path):
+        #         return path
+
+        if sys.platform.startswith("win32"):  # Windows
+            if getattr(sys, 'frozen', False):
+                gs_path = sys._MEIPASS  # base --onedir path
+                base_dir = os.path.join(gs_path, "ghostscript")
+            else:
+                # for windows r"C:\Program Files\gs\gs10.04.0\bin\gswin64c.exe"
+                base_dir = r"C:/Scopogstall/DevEnv/repos/py/altpdf/gs/lib"  # os.path.dirname(os.path.abspath(__file__))
+            gs_exe_name = "gswin64c.exe"
+
+        else:  # Linux
+            if getattr(sys, 'frozen', False):
+                gs_path = sys._MEIPASS  # base --onedir path
+                base_dir = os.path.join(gs_path, "ghostscript")
+            else:
+                base_dir = "/usr/bin"  # /home/SGC.OIL.GAS/fatkhutdinov_vd/py_projects_2025/gs_folder/gs
+            gs_exe_name = "gs"
+
+        gs_path = os.path.join(base_dir, gs_exe_name)
+
+        # QMessageBox.warning(self.main_window, "Linux debug",
+        #                     f"Looking for GS in {gs_path}.")
+
+        return gs_path if os.path.isfile(gs_path) else None
+
+    def compress_pdf(self):
+        gs_path = self.get_ghostscript_path()  # r"C:\Program Files\gs\gs10.04.0\bin\gswin64c.exe"
+
+        if not gs_path:
+            QMessageBox.warning(self.main_window, "Ошибка сжатия",
+                                "Не найдена библиотека для сжатия файлов.")
+            return
+
+        current_path = getattr(self.main_window, 'current_document_path', '')
+        if not current_path:
+            QMessageBox.warning(self.main_window, "Нет документа", "Пожалуйста, сначала откройте PDF файл.")
+            return
+
+        # Обработка несохраненных изменений
+        if getattr(self.main_window, 'is_document_modified', False):
+            clicked_button = self.save_message_box(
+                "",
+                "В документе есть несохраненные изменения. Требуется сохранить их перед сжатием."
+            )
+            if clicked_button == QMessageBox.RejectRole:
+                return
+            elif clicked_button == QMessageBox.YesRole:
+                if not self.save_file():
+                    return
+
+        # Предлагаем выбрать место для сохранения сжатого файла
+        default_dir = os.path.dirname(current_path)
+        default_name = os.path.splitext(os.path.basename(current_path))[0] + "_compressed.pdf"
+        default_path = os.path.join(default_dir, default_name)
+
+        output_path, _ = QFileDialog.getSaveFileName(
+            self.main_window,
+            "Сохранить сжатый PDF файл как...",
+            default_path,
+            "PDF Files (*.pdf);;All Files (*)"
+        )
+
+        if not output_path:
+            return
+
+        # Вдруг пользователь забудет .pdf прописать в конце
+        if not output_path.lower().endswith('.pdf'):
+            output_path += '.pdf'
+
+        # Вдруг пользователь захочет перезаписать оригинальный файл
+        if os.path.abspath(output_path) == os.path.abspath(current_path):
+            reply = QMessageBox.question(
+                self.main_window,
+                "Перезапись файла",
+                "Вы пытаетесь сохранить сжатый файл поверх исходного.\n"
+                "Это приведёт к потере исходного файла"
+                "Вы уверены?",
+                QMessageBox.Yes | QMessageBox.No,
+                QMessageBox.No
+            )
+            if reply == QMessageBox.Yes:
+                return self.compress_pdf()  # Заново вызываем функцию просто
+
+        quality_options = {
+            "Максимальное сжатие": "/prepress",
+            "Высокое": "/printer",
+            "Среднее": "/ebook",
+            "Наименьшее сжатие": "/screen"
+        }
+
+        quality, ok = QInputDialog.getItem(
+            self.main_window,
+            "Качество сжатия:",
+            "Выберите уровень сжатия:",
+            list(quality_options.keys()),
+            2,  #  По-умолчанию ebook - "Среднее"
+            False
+        )
+
+        if not ok:
+            return
+
+        quality_value = quality_options[quality]
+
+        # Подбираем параметры и сжимаем
+        input_path = current_path
+
+        env = os.environ.copy()
+        if sys.platform.startswith("linux"):
+            if 'LD_LIBRARY_PATH_ORIG' in env:
+                env['LD_LIBRARY_PATH'] = env['LD_LIBRARY_PATH_ORIG']
+            else:
+                env.pop('LD_LIBRARY_PATH', None)
+
+        if not os.path.isfile(input_path):
+            raise FileNotFoundError(f"Файл {input_path} не найден")
+
+        gs_command = [
+            gs_path,
+            "-sDEVICE=pdfwrite",
+            "-dCompatibilityLevel=1.4",
+            f"-dPDFSETTINGS={quality_value}",
+            "-dNOPAUSE",
+            "-dQUIET",
+            "-dBATCH",
+            f"-sOutputFile={output_path}",
+            input_path
+        ]
+
+        print(gs_command)
+
+        startupinfo = None
+        if sys.platform == "win32":
+            startupinfo = subprocess.STARTUPINFO()
+            startupinfo.dwFlags |= subprocess.STARTF_USESHOWWINDOW
+
+        try:
+            result = subprocess.run(
+                gs_command,
+                env=env,
+                startupinfo=startupinfo,
+                capture_output=True,
+                text=True,
+                shell=False,
+                check=False
+            )
+        except Exception as e:
+            QMessageBox.critical(self.main_window, "Ошибка сжатия", f"При сжатии произошла ошибка: {str(e)}")
+
+        if result.returncode != 0:
+            print("Ошибка Ghostscript:")
+            print(result.stderr)
+            QMessageBox.critical(self.main_window, "Ошибка сжатия", f"При сжатии произошла ошибка: {result.stderr}")
+            return
+        else:
+            if os.path.isfile(output_path):
+                print("Сжатие завершено")
+                print(f"Файл сохранен: {output_path}")
+                size_original = os.path.getsize(input_path) / 1024
+                size_compressed = os.path.getsize(output_path) / 1024
+
+                if size_compressed >= size_original:
+                    os.remove(output_path)
+                    QMessageBox.information(
+                        self.main_window,
+                        "",
+                        "Оригинальный документ уже сжат до минимального объёма.\n"
+                        "Новая сжатая версия не будет создана."
+                    )
+                    return
+
+                compressed_ratio = (1 - size_compressed / size_original) * 100
+                QMessageBox.information(
+                    self.main_window,
+                    "Сжатие завершено",
+                    f"Файл сохранён как: {output_path}\n\n"
+                    f"Размер исходного файла: {size_original:.1f} КБ\n"
+                    f"Размер сжатого файла: {size_compressed:.1f} КБ\n"
+                    f"Сжато на {compressed_ratio:.1f}%"
+                )
+            else:
+                print("Ghostscript отработал, но файл не создан")
+                print("STDOUT:", result.stdout)
+                print("STDERR:", result.stderr)
+                QMessageBox.critical(self.main_window, "Ошибка сохранения",
+                                     f"Сжатие произвелось, но произошла ошибка сохранения файла")
+
+    def save_message_box(self, title, text):
         """Создает MessageBox с русскими кнопками"""
         msg_box = QMessageBox(self.main_window)
         msg_box.setWindowTitle(title)
@@ -1493,122 +1549,38 @@ class ActionsHandler(QObject):
         msg_box.setDefaultButton(save_btn)
         msg_box.exec()
 
-        return msg_box.clickedButton()
+        button = msg_box.clickedButton()
+        role = msg_box.buttonRole(button)
+        return role
+
+        # clicked_button = msg_box.clickedButton()
+        # if clicked_button == save_btn:
+        #     return "save"
+        # elif clicked_button == discard_btn:
+        #     return "discard"
+        # elif clicked_button == cancel_btn:
+        #     return "cancel"
 
     def email_document(self):
-        """Отправить текущий PDF документ по email с опциями"""
+        """Отправить текущий PDF документ по email."""
         current_path = getattr(self.main_window, 'current_document_path', '')
         if not current_path:
             QMessageBox.warning(self.main_window, "Нет документа", "Пожалуйста, сначала откройте PDF файл.")
             return
 
-        # Обработка несохраненных изменений
         if getattr(self.main_window, 'is_document_modified', False):
-            clicked_button = self.russian_message_box(
-                "Несохраненные изменения",
-                "В документе есть несохраненные изменения. Хотите сохранить перед отправкой?"
+            clicked_button = self.save_message_box(
+                "",
+                "В документе есть несохранённые изменения. Хотите сохранить перед отправкой?"
             )
-
-            if clicked_button.text() == "Отмена":
+            if clicked_button == QMessageBox.RejectRole:
                 return
-            elif clicked_button.text() == "Сохранить":
+            elif clicked_button == QMessageBox.YesRole:
                 if not self.save_file():
                     return
 
-        # Запрос опций email
-        subject, ok = QInputDialog.getText(
-            self.main_window,
-            "Тема письма",
-            "Введите тему письма:",
-            text=os.path.basename(current_path)
-        )
-
-        if not ok:
-            return
-
-        # Запрос текста письма
-        body, ok = QInputDialog.getMultiLineText(
-            self.main_window,
-            "Текст письма",
-            "Введите текст письма (опционально):",
-            f"В приложении PDF документ: {os.path.basename(current_path)}"
-        )
-
-        if not ok:
-            return
-
-        try:
-            if sys.platform == "win32":
-                self._email_windows_enhanced(subject, body, current_path)
-            elif sys.platform == "linux":
-                self._email_linux_enhanced(subject, body, current_path)
-            else:
-                self._email_generic_enhanced(subject, body, current_path)
-
-        except Exception as e:
-            QMessageBox.critical(
-                self.main_window,
-                "Ошибка отправки",
-                f"Не удалось подготовить email:\n{str(e)}"
-            )
-
-    def _email_windows_enhanced(self, subject, body, file_path):
-        """Улучшенная отправка email в Windows с текстом письма"""
-        try:
-            import win32com.client as win32
-            ol_app = win32.Dispatch('Outlook.Application')
-            mail_item = ol_app.CreateItem(0)
-            mail_item.Subject = subject
-            mail_item.Body = body
-            mail_item.Attachments.Add(file_path)
-            mail_item.Display()
-        except Exception as e:
-            print(f"Outlook недоступен: {e}")
-            self._email_generic_enhanced(subject, body, file_path)
-
-    def _email_linux_enhanced(self, subject, body, file_path):
-        """Улучшенная отправка email в Linux"""
-        r7_organizer_path = "/opt/r7-office/organizer/r7organizer"
-        if os.path.exists(r7_organizer_path):
-            try:
-                import subprocess
-                # R7 Office может не поддерживать текст в командной строке, используем универсальный вариант
-                self._email_generic_enhanced(subject, body, file_path)
-                return
-            except Exception as e:
-                print(f"Ошибка R7 Office: {e}")
-
-        self._email_generic_enhanced(subject, body, file_path)
-
-    def _email_generic_enhanced(self, subject, body, file_path):
-        """Улучшенный универсальный вариант для всех платформ"""
-        from urllib.parse import quote
-        import webbrowser
-
-        mailto_link = f"mailto:?subject={quote(subject)}&body={quote(body)}"
-
-        try:
-            webbrowser.open(mailto_link)
-
-            # Показать инструкции по вложению
-            QMessageBox.information(
-                self.main_window,
-                "Вложение к письму",
-                f"Ваш почтовый клиент должен открыться с указанной темой и текстом.\n\n"
-                f"Если Ваш файл не прикрепился, Вы можете сделать это вручную (\n{file_path}\n\n)"
-                f"Файл расположен по адресу:\n{os.path.dirname(file_path)}"
-            )
-        except Exception as e:
-            QMessageBox.information(
-                self.main_window,
-                "Отправка документа по email",
-                f"Чтобы отправить этот документ:\n\n"
-                f"1. Откройте ваш почтовый клиент\n"
-                f"2. Создайте новое сообщение\n"
-                f"3. Тема: {subject}\n"
-                f"4. Текст: {body}\n"
-                f"5. Прикрепите этот файл:\n{file_path}"
-            )
+        from classes.email_sender import EmailSender
+        EmailSender.send(self.main_window, current_path)
 
     def move_page_up(self):
         self._move_page_generic('move_page_up')
@@ -1635,15 +1607,7 @@ class ActionsHandler(QObject):
                 if hasattr(self.main_window, 'update_window_title'):
                     self.main_window.update_window_title()
 
-                # Thumbnails follow original indices to match viewer's layout
-                thumb = getattr(self.ui, 'thumbnailList', None)
-                if thumb and hasattr(thumb, 'update_thumbnails_order'):
-                    try:
-                        thumb.update_thumbnails_order(self.get_visible_pages_as_original_indices())
-                        if hasattr(pv, 'get_current_page') and hasattr(thumb, 'set_current_page'):
-                            thumb.set_current_page(pv.get_current_page())
-                    except Exception:
-                        pass
+                self.ui.thumbnailList.refresh_thumbnails(pv.document)
 
     def rotate_page_clockwise(self):
         self._rotate_page_generic(90)
@@ -1672,16 +1636,4 @@ class ActionsHandler(QObject):
             else:
                 self.main_window.is_document_modified = True
             # Update corresponding thumbnail preview if supported
-            thumb = getattr(self.ui, 'thumbnailList', None)
-            if thumb and hasattr(pv, 'get_current_page'):
-                cur = pv.get_current_page()
-                for meth in ('rotate_page_thumbnail', 'refresh_thumbnails'):
-                    if hasattr(thumb, meth):
-                        try:
-                            if meth == 'rotate_page_thumbnail':
-                                thumb.rotate_page_thumbnail(cur, delta)
-                            else:
-                                thumb.refresh_thumbnails()
-                            break
-                        except Exception:
-                            pass
+            self.ui.thumbnailList.refresh_thumbnails(pv.document)

@@ -1,20 +1,17 @@
 import os
-import sys
-from typing import Optional
 
+from PySide6.QtCore import QEvent, Qt
+from PySide6.QtGui import QDragEnterEvent, QDropEvent
 from PySide6.QtPdf import QPdfBookmarkModel
 from PySide6.QtWidgets import (
-    QMainWindow, QApplication, QFileDialog, QMessageBox, QSplitter,
-    QWidget, QVBoxLayout, QLabel, QFrame, QInputDialog
+    QMainWindow, QMessageBox, QInputDialog
 )
-from PySide6.QtCore import Qt, QTimer
-from PySide6.QtGui import QKeySequence, QDragEnterEvent, QDropEvent
 
-from updated_ui_main_window import UiMainWindow
-from pdf_viewer import PDFViewer
-from thumbnail_widget import ThumbnailContainerWidget
 from actions_handler import ActionsHandler
+from pdf_viewer import PDFViewer
 from settings_manager import settings_manager
+from thumbnail_widget import ThumbnailContainerWidget, ThumbnailInfo
+from updated_ui_main_window import UiMainWindow
 
 
 class MainWindow(QMainWindow):
@@ -27,7 +24,7 @@ class MainWindow(QMainWindow):
 
         # UI setup
         self.ui = UiMainWindow()
-        self.ui.setup_ui(self, 'ru')
+        self.ui.setup_ui(self, "en")
 
         # Document state
         self.current_document_path = ""
@@ -50,22 +47,19 @@ class MainWindow(QMainWindow):
         self.update_ui_state()
 
         # Window settings
-        self.setWindowTitle("PDF Editor")
+        self.setWindowTitle("Редактор PDF Альт")
 
     def setup_pdf_components(self):
         """Setup PDF viewer and thumbnail components"""
         # PDF viewer should already be created by updated_ui_main_window.py
-        if hasattr(self.ui, 'pdfView') and isinstance(self.ui.pdfView, PDFViewer):
-            self.pdf_viewer = self.ui.pdfView
-        else:
+        if not hasattr(self.ui, 'pdfView') or not isinstance(self.ui.pdfView, PDFViewer):
             # Fallback: create new PDF viewer if not found
             print("Warning: PDFViewer not found in UI, creating new one")
-            self.pdf_viewer = PDFViewer()
-            self.ui.pdfView = self.pdf_viewer
+            self.ui.pdfView = PDFViewer()
 
             # Try to add it to the splitter if it exists
             if hasattr(self.ui, 'splitter'):
-                self.ui.splitter.addWidget(self.pdf_viewer)
+                self.ui.splitter.addWidget(self.ui.pdfView)
 
         # Thumbnail widget should already be created by updated_ui_main_window.py
         if hasattr(self.ui, 'thumbnailList') and isinstance(self.ui.thumbnailList, ThumbnailContainerWidget):
@@ -123,16 +117,6 @@ class MainWindow(QMainWindow):
                 self.ui.pagesButton.setChecked(True)
                 self.ui.toggle_pages_tab()
 
-        # The new ThumbnailContainerWidget uses fixed thumbnail size (100px)
-        # => passssssss vvv
-        #
-        # # Load thumbnail size
-        # thumbnail_size = settings_manager.get_thumbnail_size()
-        # if hasattr(self.ui.thumbnailList, 'set_thumbnail_size'):
-        #     self.ui.thumbnailList.set_thumbnail_size(thumbnail_size)
-        # elif hasattr(self.ui.thumbnailList, 'thumbnail_size'):
-        #     self.ui.thumbnailList.thumbnail_size = thumbnail_size
-
     def save_window_settings(self):
         """Save window settings"""
         settings_manager.save_window_state(
@@ -179,7 +163,7 @@ class MainWindow(QMainWindow):
             layout_index = self.ui.pdfView.layout_index_for_original(page)
             if layout_index is not None:
                 print(f"Navigating to layout index: {layout_index}")
-                self.ui.pdfView.go_to_page(layout_index)
+                self.ui.pdfView.scroll_to_page(layout_index)
             else:
                 print(f"Could not find layout index for original page {page}")
 
@@ -200,15 +184,15 @@ class MainWindow(QMainWindow):
             self.ui.pdfView.page_changed.connect(self.on_page_changed)
         if hasattr(self.ui.pdfView, 'document_modified'):
             self.ui.pdfView.document_modified.connect(self.on_document_modified)
+        if hasattr(self.ui.pdfView, 'set_zoom'):
+            self.ui.pdfView.set_zoom_signal.connect(self.ui.m_zoomSelector.set_zoom_value)
 
         # Thumbnail signals
         if hasattr(self.ui.thumbnailList, 'page_clicked'):
             self.ui.thumbnailList.page_clicked.connect(self.on_thumbnail_clicked)
             self.ui.thumbnailList.page_clicked.connect(self.ui.pdfView.scroll_to_page)
 
-        # Page input
-        if hasattr(self.ui, 'm_pageInput'):
-            self.ui.m_pageInput.editingFinished.connect(self.go_to_page_input)
+        self.ui.m_pageInput.installEventFilter(self)
 
         # Zoom selector
         if hasattr(self.ui, 'm_zoomSelector') and hasattr(self.ui.m_zoomSelector, 'zoom_changed'):
@@ -218,6 +202,23 @@ class MainWindow(QMainWindow):
             self.ui.actionDraw.toggled.connect(self.on_action_draw_toggled)
 
         # All action connections are now handled by ActionsHandler
+
+    def toggle_fullscreen(self):
+        if self.isFullScreen():
+            self.showNormal()
+        else:
+            self.showFullScreen()
+
+    def eventFilter(self, obj, event):
+        if obj == self.ui.m_pageInput:
+            if event.type() == QEvent.KeyPress:
+                if event.key() in (Qt.Key_Return, Qt.Key_Enter):
+
+                    has_document = hasattr(self.ui.pdfView, 'document') and self.ui.pdfView.document is not None
+                    if has_document:
+                        self.go_to_page_input()
+                    return True
+        return super().eventFilter(obj, event)
 
     def load_document(self, file_path: str):
         """Load a PDF document with password handling"""
@@ -273,25 +274,10 @@ class MainWindow(QMainWindow):
             self.load_bookmarks_document(file_path)
 
             if hasattr(self.ui.thumbnailList, 'set_document'):
-                self.ui.thumbnailList.set_document(
-                    getattr(self.ui.pdfView, 'document', None),
-                    file_path,
-                    getattr(self.ui.pdfView, 'document_password', None)
-                )
 
-            try:
-                if hasattr(self.ui.pdfView, 'go_to_page'):
-                    self.ui.pdfView.go_to_page(0)
-                if hasattr(self.ui.pdfView, 'pages_info') and hasattr(self.ui.thumbnailList, 'set_display_order'):
-                    visible_order = [
-                        info.page_num for info in self.ui.pdfView.pages_info
-                        if info.page_num not in getattr(self.ui.pdfView, 'deleted_pages', set())
-                    ]
-                    self.ui.thumbnailList.set_display_order(visible_order)
-                    cur_orig = self.ui.pdfView.get_current_page()
-                    self.ui.thumbnailList.set_current_page(cur_orig)
-            except Exception:
-                pass
+                self.ui.thumbnailList.set_document(
+                    getattr(self.ui.pdfView, 'document', None)
+                )
 
             self.is_document_modified = False
             self.update_ui_state()
@@ -381,6 +367,18 @@ class MainWindow(QMainWindow):
             self.ui.actionClosePdf.setEnabled(has_document)
         if hasattr(self.ui, 'actionPrint'):
             self.ui.actionPrint.setEnabled(has_document)
+        if hasattr(self.ui, 'actionCompress'):
+            self.ui.actionCompress.setEnabled(has_document)
+        if hasattr(self.ui, 'actionEmail'):
+            self.ui.actionEmail.setEnabled(has_document)
+        if hasattr(self.ui, 'actionAboutPdf'):
+            self.ui.actionAboutPdf.setEnabled(has_document)
+        if hasattr(self.ui, 'actionDraw'):
+            self.ui.actionDraw.setEnabled(has_document)
+        if hasattr(self.ui, 'actionAddFile'):
+            self.ui.actionAddFile.setEnabled(has_document)
+        if hasattr(self.ui, 'actionExport_Pages'):
+            self.ui.actionExport_Pages.setEnabled(has_document)
 
         # Update navigation actions
         nav_actions = [
@@ -393,34 +391,32 @@ class MainWindow(QMainWindow):
 
         # Update page manipulation actions
         page_actions = [
-            'actionDeletePage', 'actionMovePageUp', 'actionMovePageDown',
+            'actionDeletePage', 'actionDeleteSpecificPages',
+            'actionMovePageUp', 'actionMovePageDown',
             'actionRotateCurrentPageClockwise', 'actionRotateCurrentPageCounterclockwise'
         ]
         for action_name in page_actions:
             if hasattr(self.ui, action_name):
                 getattr(self.ui, action_name).setEnabled(has_document)
 
-        # Update view actions - fit-to-width is now checkable
+        # Update view actions
         view_actions = [
-            'actionZoom_In', 'actionZoom_Out', 'actionFitToHeight'
+            'actionZoom_In', 'actionZoom_Out',
+            'actionFitToWidth', 'actionFitToHeight'
         ]
         for action_name in view_actions:
             if hasattr(self.ui, action_name):
                 getattr(self.ui, action_name).setEnabled(has_document)
 
-        # Fit to width is always enabled when document is open
-        if hasattr(self.ui, 'actionFitToWidth'):
-            self.ui.actionFitToWidth.setEnabled(has_document)
-
     def get_current_display_page_number(self) -> int:
         """Get the current page's display number (1-based) using pdfView.pages_info and deleted_pages"""
-        if not hasattr(self.ui.pdfView, 'pages_info') or not self.ui.pdfView.pages_info:
-            return 1
+        # if not hasattr(self.ui.pdfView, 'pages_info') or not self.ui.pdfView.pages_info:
+        #     return 1
 
         # pdfView.get_current_page() now returns ORIGINAL page number
         current_original = self.ui.pdfView.get_current_page()
         display_number = 1
-        for i, info in enumerate(self.ui.pdfView.pages_info):
+        for i, info in enumerate(self.ui.pdfView.page_widget_controller.pages_info):
             if info.page_num in self.ui.pdfView.deleted_pages:
                 continue
             if info.page_num == current_original:
@@ -430,21 +426,18 @@ class MainWindow(QMainWindow):
 
     def get_total_display_pages(self) -> int:
         """Total visible pages (non-deleted)"""
-        if not hasattr(self.ui.pdfView, 'pages_info') or not self.ui.pdfView.pages_info:
-            return 0
-        count = 0
-        for info in self.ui.pdfView.pages_info:
-            if info.page_num not in self.ui.pdfView.deleted_pages:
-                count += 1
-        return count
+        return self.ui.pdfView.page_widget_controller.countTotalPagesInfo
+
+    def get_chunk_info_count(self):
+        return self.ui.pdfView.page_widget_controller.current_chunk_index + 1, \
+               len(self.ui.pdfView.page_widget_controller.chunks)
 
     def get_actual_page_from_display_number(self, display_number: int) -> int:
         """Convert a 1-based display number into a layout index (index into page_widgets/pages_info)"""
-        if not hasattr(self.ui.pdfView, 'pages_info') or not self.ui.pdfView.pages_info:
-            return 0
-
+        # if not hasattr(self.ui.pdfView, 'pages_info') or not self.ui.pdfView.pages_info:
+        #     return 0
         current_display = 1
-        for i, info in enumerate(self.ui.pdfView.pages_info):
+        for i, info in enumerate(self.ui.pdfView.page_widget_controller.pages_info):
             if info.page_num in self.ui.pdfView.deleted_pages:
                 continue
             if current_display == display_number:
@@ -457,6 +450,7 @@ class MainWindow(QMainWindow):
         if hasattr(self.ui.pdfView, 'document') and self.ui.pdfView.document:
             current_display_page = self.get_current_display_page_number()
             total_display_pages = self.get_total_display_pages()
+            current_chunk, total_chunk = self.get_chunk_info_count()
 
             if hasattr(self.ui, 'm_pageInput'):
                 self.ui.m_pageInput.setText(str(current_display_page))
@@ -464,7 +458,7 @@ class MainWindow(QMainWindow):
                 self.ui.m_pageLabel.setText(f"of {total_display_pages}")
 
             if hasattr(self, 'statusBar'):
-                self.statusBar().showMessage(f"Page {current_display_page} of {total_display_pages}")
+                self.statusBar().showMessage(f"Страница {current_display_page} из {total_display_pages}. Часть {current_chunk} из {total_chunk}")
         else:
             if hasattr(self.ui, 'm_pageInput'):
                 self.ui.m_pageInput.setText("")
@@ -472,6 +466,10 @@ class MainWindow(QMainWindow):
                 self.ui.m_pageLabel.setText("of 0")
             if hasattr(self, 'statusBar'):
                 self.statusBar().showMessage("No document")
+
+    # def update_zoom_state(self):
+    #     self.ui.actionFitToWidth.setChecked(1 * self.ui.pdfView.zoom_type)
+    #     pass
 
     def go_to_page_input(self):
         """User typed a page number: convert display number -> layout index -> go_to_page"""
@@ -483,7 +481,9 @@ class MainWindow(QMainWindow):
                 if 1 <= display_page_num <= total_pages:
                     layout_index = self.get_actual_page_from_display_number(display_page_num)
                     if hasattr(self.ui.pdfView, 'go_to_page'):
-                        self.ui.pdfView.go_to_page(layout_index)
+                        # self.ui.pdfView.go_to_page(layout_index)
+
+                        self.ui.pdfView.scroll_to_page(layout_index)
                 else:
                     current_display_page = self.get_current_display_page_number()
                     self.ui.m_pageInput.setText(str(current_display_page))
@@ -532,7 +532,9 @@ class MainWindow(QMainWindow):
     # Event handlers
     def on_page_changed(self, orig_page_num: int):
         """pdfView now emits ORIGINAL page numbers; thumbnail widget likely expects original page ids"""
+        print(f"Calling 'on_page_changed' from main_window to page {orig_page_num}")
         if hasattr(self.ui.thumbnailList, 'set_current_page'):
+            # thumbnailList probably expects original page number; if it expects layout index adjust accordingly
             try:
                 self.ui.thumbnailList.set_current_page(orig_page_num)
             except Exception:
@@ -541,6 +543,7 @@ class MainWindow(QMainWindow):
                 if layout_idx is not None and hasattr(self.ui.thumbnailList, 'set_current_page'):
                     self.ui.thumbnailList.set_current_page(layout_idx)
         self.update_page_info()
+        # print(f"o:{orig_page_num}, g:{self.ui.pdfView.get_current_page()}")
 
     def on_action_draw_toggled(self, checked: bool):
         """Toggle drawing mode. If turning off and there are unsaved drawings prompt Save/Discard/Cancel."""
@@ -549,70 +552,8 @@ class MainWindow(QMainWindow):
             if hasattr(self.ui.pdfView, 'set_drawing_mode'):
                 self.ui.pdfView.set_drawing_mode(True)
         else:
-            # user requested to exit drawing mode — check unsaved annotations
-            if hasattr(self.ui.pdfView, 'any_annotations_dirty') and self.ui.pdfView.any_annotations_dirty():
-                from PySide6.QtWidgets import QMessageBox
-                msg_box = QMessageBox(self)
-                msg_box.setWindowTitle("Сохранить рисунки?")
-                msg_box.setText("Сохранить рисунки в документе? (Сохранить = оставить, Не сохранять = удалить)")
-                msg_box.setIcon(QMessageBox.Question)
-
-                # Создаем кнопки с русским текстом
-                save_btn = msg_box.addButton("Сохранить", QMessageBox.AcceptRole)
-                discard_btn = msg_box.addButton("Не сохранять", QMessageBox.DestructiveRole)
-                cancel_btn = msg_box.addButton("Отмена", QMessageBox.RejectRole)
-
-                # Устанавливаем кнопку по умолчанию
-                msg_box.setDefaultButton(save_btn)
-
-                msg_box.exec()
-
-                clicked_button = msg_box.clickedButton()
-                if clicked_button == save_btn:
-                    choice = QMessageBox.Save
-                elif clicked_button == discard_btn:
-                    choice = QMessageBox.Discard
-                else:
-                    choice = QMessageBox.Cancel
-
-                if choice == QMessageBox.Save:
-                    # mark modified so normal Save will persist drawings
-                    # we set is_modified so Save action is enabled
-                    if hasattr(self.ui.pdfView, 'is_modified'):
-                        self.ui.pdfView.is_modified = True
-                        try:
-                            self.ui.pdfView.document_modified.emit(True)
-                        except Exception:
-                            pass
-                    # disable drawing UI but keep drawings in memory (they will be merged on actual Save)
-                    if hasattr(self.ui.pdfView, 'set_drawing_mode'):
-                        self.ui.pdfView.set_drawing_mode(False)
-                elif choice == QMessageBox.Discard:
-                    # clear overlays on all pages
-                    for w in getattr(self.ui.pdfView, "page_widgets", []):
-                        try:
-                            w.overlay.clear_annotations()
-                        except Exception:
-                            pass
-                    if hasattr(self.ui.pdfView, 'set_drawing_mode'):
-                        self.ui.pdfView.set_drawing_mode(False)
-                    # mark not modified if nothing else changed
-                    self.is_document_modified = False
-                    try:
-                        self.ui.pdfView.document_modified.emit(False)
-                    except Exception:
-                        pass
-                else:
-                    # cancel: re-enable drawing toggle
-                    try:
-                        self.ui.actionDraw.setChecked(True)
-                    except Exception:
-                        pass
-                    return
-            else:
-                # no dirty annotations: just disable
-                if hasattr(self.ui.pdfView, 'set_drawing_mode'):
-                    self.ui.pdfView.set_drawing_mode(False)
+            if hasattr(self.ui.pdfView, 'set_drawing_mode'):
+                self.ui.pdfView.set_drawing_mode(False)
 
     def on_document_modified(self, is_modified: bool):
         """Handle document modification status change"""
@@ -638,7 +579,7 @@ class MainWindow(QMainWindow):
         if layout_idx is None:
             # sanity-check bounds
             try:
-                if 0 <= int(page_num) < len(self.ui.pdfView.page_widgets):
+                if 0 <= int(page_num) < self.ui.pdfView.page_widget_controller.getLastPageWidget().orig_page_num:
                     layout_idx = int(page_num)
             except Exception:
                 return
@@ -649,7 +590,8 @@ class MainWindow(QMainWindow):
     def on_zoom_changed(self, zoom_factor: float):
         """Handle zoom change from zoom selector"""
         if hasattr(self.ui.pdfView, 'set_zoom'):
-            self.ui.pdfView.set_zoom(zoom_factor)
+            zoom_factor = max(0.25, min(5.0, zoom_factor))
+            self.ui.pdfView.set_zoom(zoom_factor, margin_y=0)
 
         # Save zoom level
         settings_manager.save_zoom_level(zoom_factor)
@@ -678,13 +620,13 @@ class MainWindow(QMainWindow):
         """Aggressive cleanup before application closes"""
         print("Performing aggressive cleanup before close...")
 
+        # # Clear thumbnails
+        if hasattr(self.ui, 'thumbnailList') and hasattr(self.ui.thumbnailList, 'clear_thumbnails'):
+            self.ui.thumbnailList.clear_thumbnails()
+
         # Close PDF viewer document
         if hasattr(self.ui, 'pdfView') and hasattr(self.ui.pdfView, 'close_document'):
             self.ui.pdfView.close_document()
-
-        # Clear thumbnails
-        if hasattr(self.ui, 'thumbnailList') and hasattr(self.ui.thumbnailList, 'clear_thumbnails'):
-            self.ui.thumbnailList.clear_thumbnails()
 
         # Clear any remaining references
         self.current_document_path = ""
@@ -698,6 +640,9 @@ class MainWindow(QMainWindow):
         import gc
         for _ in range(3):
             gc.collect()
+
+    # def pageInputEditing(self):
+    #     self.ui.pdfView.zoom_action[self.ui.pdfView.zoom_type]()
 
     def closeEvent(self, event):
         """Handle application close event"""
@@ -718,4 +663,3 @@ class MainWindow(QMainWindow):
         self.cleanup_before_close()
 
         event.accept()
-

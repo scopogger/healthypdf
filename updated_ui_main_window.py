@@ -33,7 +33,7 @@ class ZoomSelector(QWidget):
         layout.setContentsMargins(0, 0, 0, 0)
 
         self.zoom_input = QLineEdit()
-        self.zoom_input.setMaximumWidth(80)
+        self.zoom_input.setMaximumWidth(50)
         self.zoom_input.setText("100%")
         self.zoom_input.returnPressed.connect(self.on_zoom_input)
         layout.addWidget(self.zoom_input)
@@ -66,8 +66,9 @@ class UiMainWindow(object):
         self.menuZoom = None
         self.menuBar = None
         self.m_pageInput = None
-        self.spacerMiddle = None
         self.page_widget = None
+        self.spacerRight = None
+        self.spacerMiddle = None
         self.spacerLeft = None
         self.mainToolBar = None
         self.m_zoomSelector = None
@@ -177,11 +178,12 @@ class UiMainWindow(object):
         self.sidePanelContent = QWidget(self.splitter)
         self.sidePanelContentLayout = QVBoxLayout(self.sidePanelContent)
         self.sidePanelContentLayout.setContentsMargins(1, 1, 1, 1)
-        self.sidePanelContent.setObjectName("sidePanelContent")  # Add object name for specific targeting
+        self.sidePanelContent.setObjectName("sidePanelContent")
 
+        # Set darker background for side panel (ok color #e8e8e8)
         self.sidePanelContent.setStyleSheet("""
             #sidePanelContent {
-                background-color: #c8c8c8;
+                background-color: #d0d0d0;
             }
         """)
 
@@ -204,6 +206,11 @@ class UiMainWindow(object):
         self.splitter.setStretchFactor(0, 0)  # Tab buttons don't resize (fixed 25px)
         self.splitter.setStretchFactor(1, 0)  # Sidebar content limited resize (150-300px)
         self.splitter.setStretchFactor(2, 1)  # PDF view gets all remaining space
+
+    #     self.splitter.splitterMoved.connect(self.on_sidebar_resized)
+    #
+    # def on_sidebar_resized(self):
+    #     print("MOVED!!!")
 
     def setup_initial_sidebar_size(self):
         """Set up the initial sidebar size to be as narrow as allowed"""
@@ -285,13 +292,6 @@ class UiMainWindow(object):
         self.bookmarkView.setObjectName("bookmarkView")
         self.bookmarkView.setHeaderHidden(True)
 
-        self.bookmarkView.setStyleSheet("""
-                QTreeView {
-                    border: none;
-                    background-color: white;
-                }
-            """)
-
         # Set up the bookmark model (from old code)
         self.bookmark_model = QPdfBookmarkModel(self.bookmarkTab)
         self.bookmark_model.setDocument(self.m_document)
@@ -306,14 +306,12 @@ class UiMainWindow(object):
         self.pagesTabLayout.setContentsMargins(0, 0, 0, 0)
         self.pagesTabLayout.setSpacing(0)
 
-        # Mount the new thumbnail container widget
-        self.thumbnailWidget = ThumbnailContainerWidget(self.pagesTab)
-        self.pagesTabLayout.addWidget(self.thumbnailWidget)
+        # Нужен контейнер иначе не залезает
+        self.thumbnailList = ThumbnailContainerWidget(self.pagesTab)
+        self.pagesTabLayout.addWidget(self.thumbnailList)
 
-        self.thumbnailWidget.setStyleSheet("border: none;")
-
-        # Expose inner controls under old names, so other code keeps working
-        self.thumbnailList = self.thumbnailWidget
+        # На всякий случай чтобы работало со старыми именами
+        # self.thumbnailList = self.thumbnailWidget
 
     def setup_pdf_view(self):
         """Setup PDF viewer widget"""
@@ -419,8 +417,8 @@ class UiMainWindow(object):
         self.actionDraw.setCheckable(True)
 
         # Additional actions from old version
-        self.actionSave_Page_As_Image = QAction(main_window)
-        self.actionSave_Page_As_Image.setObjectName("actionSave_Page_As_Image")
+        self.actionExport_Pages = QAction(main_window)
+        self.actionExport_Pages.setObjectName("actionExport_Pages")
 
         self.actionPasswordDoc = QAction(main_window)
         self.actionPasswordDoc.setObjectName("actionPasswordDoc")
@@ -435,7 +433,16 @@ class UiMainWindow(object):
         # Recent files management actions
         self.actionClearRecentFiles = QAction(main_window)
         self.actionClearRecentFiles.setObjectName("actionClearRecentFiles")
-        self.actionClearRecentFiles.setText("Clear recent files")
+
+        self.actionToggleFullscreen = QAction(main_window)
+        self.actionToggleFullscreen.setObjectName("actionToggleFullscreen")
+        self.actionToggleFullscreen.triggered.connect(main_window.toggle_fullscreen)
+
+    # def toggle_fullscreen(self, main_window):
+    #     if main_window.isFullScreen():
+    #         main_window.showNormal()
+    #     else:
+    #         main_window.showFullScreen()
 
     def define_menus_ui(self, main_window):
         """Create menu bar and menus"""
@@ -470,13 +477,13 @@ class UiMainWindow(object):
 
         # Add submenus to View menu
         self.menuRotation = QMenu("Rotation", self.menuView)
-        self.menuView.addMenu(self.menuRotation)
+        # self.menuView.addMenu(self.menuRotation)
 
         self.menuNavigation = QMenu("Navigation", self.menuView)
-        self.menuView.addMenu(self.menuNavigation)
+        # self.menuView.addMenu(self.menuNavigation)
 
         self.menuZoom = QMenu("Zoom", self.menuView)
-        self.menuView.addMenu(self.menuZoom)
+        # self.menuView.addMenu(self.menuZoom)
 
     def connect_menus_ui(self):
         """Connect menu actions"""
@@ -489,45 +496,51 @@ class UiMainWindow(object):
         self.menuFile.addAction(self.actionClosePdf)
         self.menuFile.addSeparator()
         self.menuFile.addAction(self.actionPrint)
+        # if sys.platform == "win32":
         self.menuFile.addAction(self.actionEmail)
         self.menuFile.addAction(self.actionCompress)
-        self.menuFile.addAction(self.actionSave_Page_As_Image)
-        # self.menuFile.addAction(self.actionEnumeratePages)
-        self.menuFile.addAction(self.actionPasswordDoc)
+            # self.menuFile.addAction(self.actionEnumeratePages)
+            # self.menuFile.addAction(self.actionPasswordDoc)
         self.menuFile.addAction(self.actionAboutPdf)
         self.menuFile.addSeparator()
         self.menuFile.addAction(self.actionQuit)
 
         # View menu
-        self.menuView.addAction(self.actionToggle_Panel)
+        # self.menuView.addAction(self.actionToggle_Panel)
+        # self.menuView.addSeparator()
+
+        # # View submenus
+        # self.menuRotation.addAction(self.actionRotateViewClockwise)
+        # self.menuRotation.addAction(self.actionRotateViewCounterclockwise)
+
+        # self.menuNavigation.addAction(self.actionJumpToFirstPage)
+        # self.menuNavigation.addAction(self.actionJumpToLastPage)
+
+        self.menuView.addAction(self.actionPrevious_Page)
+        self.menuView.addAction(self.actionNext_Page)
         self.menuView.addSeparator()
-
-        # View submenus
-        self.menuRotation.addAction(self.actionRotateViewClockwise)
-        self.menuRotation.addAction(self.actionRotateViewCounterclockwise)
-
-        self.menuNavigation.addAction(self.actionJumpToFirstPage)
-        self.menuNavigation.addAction(self.actionJumpToLastPage)
-        self.menuNavigation.addAction(self.actionPrevious_Page)
-        self.menuNavigation.addAction(self.actionNext_Page)
-
-        self.menuZoom.addAction(self.actionZoom_In)
-        self.menuZoom.addAction(self.actionZoom_Out)
-        self.menuZoom.addAction(self.actionFitToWidth)
-        self.menuZoom.addAction(self.actionFitToHeight)
+        self.menuView.addAction(self.actionZoom_In)
+        self.menuView.addAction(self.actionZoom_Out)
+        self.menuView.addSeparator()
+        self.menuView.addAction(self.actionFitToWidth)
+        self.menuView.addAction(self.actionFitToHeight)
+        self.menuView.addSeparator()
+        self.menuView.addAction(self.actionToggleFullscreen)
 
         # Edit menu
         self.menuEdit.addAction(self.actionAddFile)
+        self.menuEdit.addAction(self.actionExport_Pages)
         self.menuEdit.addSeparator()
         self.menuEdit.addAction(self.actionDeletePage)
         self.menuEdit.addAction(self.actionDeleteSpecificPages)
+
         self.menuEdit.addSeparator()
         self.menuEdit.addAction(self.actionMovePageUp)
         self.menuEdit.addAction(self.actionMovePageDown)
         self.menuEdit.addSeparator()
         self.menuEdit.addAction(self.actionRotateCurrentPageClockwise)
         self.menuEdit.addAction(self.actionRotateCurrentPageCounterclockwise)
-        self.menuEdit.addAction(self.actionRotateSpecificPages)
+        # self.menuEdit.addAction(self.actionRotateSpecificPages)
         self.menuEdit.addSeparator()
         self.menuEdit.addAction(self.actionDraw)
 
@@ -544,68 +557,121 @@ class UiMainWindow(object):
 
         # Zoom selector
         self.m_zoomSelector = ZoomSelector(main_window)
-        self.m_zoomSelector.setMaximumWidth(150)
+        self.m_zoomSelector.setMaximumWidth(70)
 
         # Page input and label
         self.m_pageInput = QLineEdit(main_window)
         self.m_pageLabel = QLabel(main_window)
         page_layout = QHBoxLayout()
         page_layout.addWidget(self.m_pageInput)
+
+        if sys.platform != "win32":
+            self.artificialSpacerPage = QWidget()
+            self.artificialSpacerPage.setFixedWidth(10)
+            page_layout.addWidget(self.artificialSpacerPage)
+
         page_layout.addWidget(self.m_pageLabel)
         self.page_widget = QWidget(main_window)
         self.page_widget.setLayout(page_layout)
-        self.page_widget.setFixedWidth(120)
+        self.page_widget.setFixedWidth(100)
 
         # Set input field size
         font_metrics = self.m_pageInput.fontMetrics()
         character_width = font_metrics.horizontalAdvance("0")
-        self.m_pageInput.setFixedWidth(character_width * 6)
+        self.m_pageInput.setFixedWidth(character_width * 7)
         self.m_pageLabel.setFixedWidth(character_width * 8)
-        self.m_pageInput.setPlaceholderText("Page")
+        self.m_pageInput.setPlaceholderText("")
 
         # Spacers
         self.spacerLeft = QWidget()
         self.spacerLeft.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
+        # self.spacerMidLeft = QWidget()
+        # self.spacerMidLeft.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
         self.spacerMiddle = QWidget()
         self.spacerMiddle.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
+        # self.spacerMidRight = QWidget()
+        # self.spacerMidRight.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
+        self.spacerRight = QWidget()
+        self.spacerRight.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
+
+        self.artificialSpacer1 = QWidget()
+        self.artificialSpacer1.setFixedWidth(10)
+        self.artificialSpacer2 = QWidget()
+        self.artificialSpacer2.setFixedWidth(10)
+        self.artificialSpacer3 = QWidget()
+        self.artificialSpacer3.setFixedWidth(10)
+        self.artificialSpacer4 = QWidget()
+        self.artificialSpacer4.setFixedWidth(10)
+        self.artificialSpacer5 = QWidget()
+        self.artificialSpacer5.setFixedWidth(10)
+        self.artificialSpacer6 = QWidget()
+        self.artificialSpacer6.setFixedWidth(10)
+        self.artificialSpacer7 = QWidget()
+        self.artificialSpacer7.setFixedWidth(10)
+        self.artificialSpacer8 = QWidget()
+        self.artificialSpacer8.setFixedWidth(10)
 
     def connect_toolbar_ui(self):
         """Connect toolbar elements"""
-        # Left side - File operations
+        # LEFT SECTION - FILE OPERATIONS
+
         self.mainToolBar.addAction(self.actionOpen)
         self.mainToolBar.addAction(self.actionSave)
         self.mainToolBar.addAction(self.actionSaveAs)
         self.mainToolBar.addAction(self.actionPrint)
+        self.mainToolBar.addAction(self.actionCompress)
         self.mainToolBar.addAction(self.actionClosePdf)
+
+        # MIDDLE SECTION - MISCELLANEOUS
 
         self.mainToolBar.addWidget(self.spacerLeft)
 
-        # Middle - Navigation and view
-        self.mainToolBar.addAction(self.actionPrevious_Page)
-        self.mainToolBar.addAction(self.actionNext_Page)
-        self.mainToolBar.addSeparator()
-        self.mainToolBar.addAction(self.actionRotateViewCounterclockwise)
-        self.mainToolBar.addAction(self.actionRotateViewClockwise)
-        self.mainToolBar.addSeparator()
-        self.mainToolBar.addWidget(self.page_widget)
-        self.mainToolBar.addSeparator()
         self.mainToolBar.addAction(self.actionZoom_In)
         self.mainToolBar.addAction(self.actionZoom_Out)
         self.mainToolBar.addWidget(self.m_zoomSelector)
         self.mainToolBar.addAction(self.actionFitToWidth)
         self.mainToolBar.addAction(self.actionFitToHeight)
 
-        self.mainToolBar.addWidget(self.spacerMiddle)
-
-        # Right side - Page operations
-        self.mainToolBar.addAction(self.actionDeletePage)
-        self.mainToolBar.addAction(self.actionMovePageUp)
-        self.mainToolBar.addAction(self.actionMovePageDown)
+        self.mainToolBar.addWidget(self.artificialSpacer1)
         self.mainToolBar.addSeparator()
+
+        self.mainToolBar.addWidget(self.page_widget)
+
+        self.mainToolBar.addSeparator()
+        self.mainToolBar.addWidget(self.artificialSpacer2)
+
+        self.mainToolBar.addAction(self.actionPrevious_Page)
+        self.mainToolBar.addAction(self.actionNext_Page)
+
+        self.mainToolBar.addWidget(self.artificialSpacer3)
+        self.mainToolBar.addSeparator()
+        self.mainToolBar.addWidget(self.artificialSpacer4)
+
         self.mainToolBar.addAction(self.actionRotateCurrentPageCounterclockwise)
         self.mainToolBar.addAction(self.actionRotateCurrentPageClockwise)
+
+        self.mainToolBar.addWidget(self.artificialSpacer5)
         self.mainToolBar.addSeparator()
+        self.mainToolBar.addWidget(self.artificialSpacer6)
+
+        self.mainToolBar.addAction(self.actionMovePageUp)
+        self.mainToolBar.addAction(self.actionMovePageDown)
+
+        self.mainToolBar.addWidget(self.artificialSpacer7)
+        self.mainToolBar.addSeparator()
+        self.mainToolBar.addWidget(self.artificialSpacer8)
+
+        self.mainToolBar.addAction(self.actionDeletePage)
+        self.mainToolBar.addAction(self.actionAddFile)
+
+        # RIGHT SECTION - DRAWING
+
+        self.mainToolBar.addWidget(self.spacerRight)
+
         self.mainToolBar.addAction(self.actionDraw)
+
+        # self.mainToolBar.addAction(self.actionRotateViewCounterclockwise)
+        # self.mainToolBar.addAction(self.actionRotateViewClockwise)
 
     def setup_action_icons(self, theme):
         """Setup icons for actions"""
@@ -630,19 +696,20 @@ class UiMainWindow(object):
             self.actionCompress: "compress.png",
             self.actionAboutPdf: "information.png",
             self.actionQuit: "exit.png",
-            self.actionSave_Page_As_Image: "image_download.png",
+            self.actionExport_Pages: "image_download.png",
             self.actionPasswordDoc: "password_doc.png",
             self.actionEnumeratePages: "enumerate_pages.png",
             self.actionClearRecentFiles: "delete_pages.png",
 
             # View actions
             self.actionToggle_Panel: "pages.png",
+            self.actionToggleFullscreen: "pages.png",
             self.actionZoom_In: "zoom_in.png",
             self.actionZoom_Out: "zoom_out.png",
             self.actionFitToWidth: "fit_to_width.png",
             self.actionFitToHeight: "fit_to_height.png",
-            self.actionRotateViewClockwise: "rotate_temp_clockwise.png",
-            self.actionRotateViewCounterclockwise: "rotate_temp_counterclockwise.png",
+            self.actionRotateViewClockwise: "rotate_pages_clockwise.png",
+            self.actionRotateViewCounterclockwise: "rotate_pages_counterclockwise.png",
 
             # Navigation actions
             self.actionPrevious_Page: "page_up.png",
@@ -655,8 +722,8 @@ class UiMainWindow(object):
             self.actionDeleteSpecificPages: "delete_pages.png",
             self.actionMovePageUp: "move_page_up.png",
             self.actionMovePageDown: "move_page_down.png",
-            self.actionRotateCurrentPageClockwise: "rotate_pages_clockwise.png",
-            self.actionRotateCurrentPageCounterclockwise: "rotate_pages_counterclockwise.png",
+            self.actionRotateCurrentPageClockwise: "rotate_temp_clockwise.png",
+            self.actionRotateCurrentPageCounterclockwise: "rotate_temp_counterclockwise.png",
             self.actionRotateSpecificPages: "rotate_pages_180_degrees.png",
             self.actionAddFile: "add_file.png",
             self.actionDraw: "drawing.png",

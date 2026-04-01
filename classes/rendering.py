@@ -1,9 +1,11 @@
 import fitz
+import gc
 from pymupdf import Page
 
 from classes.document import Document
 from PySide6.QtCore import (
-    Qt, QRunnable)
+    Qt, QRunnable, QThreadPool, QTimer, Signal, QSize
+)
 from PySide6.QtGui import QPixmap
 
 
@@ -31,16 +33,27 @@ class PageRenderWorker(QRunnable):
             # print(f"Rendering page {self.page_num} with zoom {self.zoom}")
 
             # Open document briefly
+
             if self.cancelled:
+                # self.current_doc.close()
                 return
 
+            # if self.cancelled:
+            #     self.current_doc.close()
+            #     return
+
             # Apply rotation
+            old_rotation = self.page.rotation
             if self.rotation != 0:
-                self.page.set_rotation(self.rotation)
+                self.page.set_rotation(old_rotation + self.rotation)
 
             # Use zoom to create matrix - this determines the actual pixel dimensions
             matrix = fitz.Matrix(self.zoom, self.zoom)
             pix = self.page.get_pixmap(matrix=matrix, alpha=False, colorspace=fitz.csRGB, clip=None)
+
+            # if self.cancelled:
+            #     self.current_doc.close()
+            #     return
 
             # Convert to QPixmap
             img_data = pix.tobytes("ppm")
@@ -48,8 +61,13 @@ class PageRenderWorker(QRunnable):
             success = pixmap.loadFromData(img_data)
 
             # Force cleanup of PyMuPDF objects
+            if self.rotation != 0:
+                self.page.set_rotation(old_rotation)
+
             del pix
             del matrix
+
+            gc.collect()
 
             if not self.cancelled and success:
                 # callback receives original page number, pixmap and render_id

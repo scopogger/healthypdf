@@ -1,5 +1,4 @@
-# drawing_overlay.py
-from PySide6.QtWidgets import QWidget, QLabel, QVBoxLayout
+from PySide6.QtWidgets import QWidget
 from PySide6.QtGui import QPainter, QPen, QColor, QPixmap, QMouseEvent, QPaintEvent
 from PySide6.QtCore import Qt, QRect, QPoint, QBuffer, Signal, QSize
 
@@ -18,8 +17,8 @@ class DrawingOverlay(QWidget):
         # --- Minimal defensive defaults (so paintEvent won't crash if called early) ---
         self.annot_pixmap = QPixmap(1, 1)
         self.annot_pixmap.fill(Qt.transparent)
-        self.strokes = []   # list of stroke dicts
-        self.rects = []     # list of rect dicts
+        self.strokes = []  # list of stroke dicts
+        self.rects = []  # list of rect dicts
         self.tool = self.TOOL_BRUSH
         self.color = QColor(Qt.black)
         self.brush_size = 6
@@ -85,7 +84,8 @@ class DrawingOverlay(QWidget):
                 pts = s.get("points", [])
                 if not pts:
                     continue
-                pen = QPen(QColor(*s.get("color", (0, 0, 0))), s.get("width", 1), Qt.SolidLine, Qt.RoundCap, Qt.RoundJoin)
+                pen = QPen(QColor(*s.get("color", (0, 0, 0))), s.get("width", 1), Qt.SolidLine, Qt.RoundCap,
+                           Qt.RoundJoin)
                 p.setPen(pen)
                 prev = None
                 for nx, ny in pts:
@@ -164,15 +164,15 @@ class DrawingOverlay(QWidget):
         p = ev.position().toPoint() if hasattr(ev, "position") else ev.pos()
         if getattr(self, "tool", None) == self.TOOL_BRUSH:
             try:
-                painter = QPainter(self.annot_pixmap)
-                pen = QPen(getattr(self, "color", QColor(Qt.black)), getattr(self, "brush_size", 6),
-                           Qt.SolidLine, Qt.RoundCap, Qt.RoundJoin)
-                painter.setPen(pen)
-                prev = self._current_stroke[-1]
-                painter.drawLine(prev, p)
-                painter.end()
+                # painter = QPainter(self.annot_pixmap)
+                # pen = QPen(getattr(self, "color", QColor(Qt.black)), getattr(self, "brush_size", 6),
+                #            Qt.SolidLine, Qt.RoundCap, Qt.RoundJoin)
+                # painter.setPen(pen)
+                # prev = self._current_stroke[-1]
+                # painter.drawLine(prev, p)
+                # painter.end()
                 self._current_stroke.append(p)
-                self._dirty = True
+                # self._dirty = True
                 self.update()
             except Exception:
                 pass
@@ -257,7 +257,8 @@ class DrawingOverlay(QWidget):
                 pts = s.get("points", [])
                 if not pts:
                     continue
-                pen = QPen(QColor(*s.get("color", (0, 0, 0))), s.get("width", 1), Qt.SolidLine, Qt.RoundCap, Qt.RoundJoin)
+                pen = QPen(QColor(*s.get("color", (0, 0, 0))), s.get("width", 1), Qt.SolidLine, Qt.RoundCap,
+                           Qt.RoundJoin)
                 painter.setPen(pen)
                 prev = None
                 w = max(1, self.width())
@@ -283,102 +284,30 @@ class DrawingOverlay(QWidget):
                 painter.setBrush(col)
                 painter.drawRect(x, y, w, h)
 
-            # draw current rect preview if active
-            if getattr(self, "_drawing", False) and getattr(self, "tool", None) == self.TOOL_RECT and not getattr(self, "_rect_current", QRect()).isNull():
-                pen = QPen(self.color, 1, Qt.SolidLine)
-                painter.setPen(pen)
-                painter.setBrush(self.color)
-                painter.drawRect(self._rect_current)
+            if getattr(self, "_drawing", False):
+                # draw current brush stokes preview if active
+                if getattr(self, "tool", None) == self.TOOL_BRUSH:
+                    current_stroke = getattr(self, "_current_stroke", [])
+                    if len(current_stroke) >= 2:
+                        pen = QPen(self.color, self.brush_size, Qt.SolidLine, Qt.RoundCap, Qt.RoundJoin)
+                        painter.setPen(pen)
+                        prev = current_stroke[0]
+                        for i in range(1, len(current_stroke)):
+                            curr = current_stroke[i]
+                            painter.drawLine(prev, curr)
+                            prev = curr
+
+                # draw current rect preview if active
+                elif getattr(self, "tool", None) == self.TOOL_RECT and not getattr(self, "_rect_current", QRect()).isNull():
+                    pen = QPen(self.color, 1, Qt.SolidLine)
+                    painter.setPen(pen)
+                    painter.setBrush(self.color)
+                    painter.drawRect(self._rect_current)
 
             painter.end()
+
         except Exception as e:
             # guard against any unexpected drawing-time errors
             print(f"[DrawingOverlay] paintEvent error: {e}")
 
 
-class PageWidget(QWidget):
-    """Container: QLabel base + DrawingOverlay overlay (with compatibility shims)."""
-    def __init__(self, width=200, height=200, parent=None):
-        super().__init__(parent)
-        self.setAttribute(Qt.WA_StyledBackground, True)
-        self.setStyleSheet("background-color: white;")
-
-        self.base_label = QLabel(self)
-        self.base_label.setAlignment(Qt.AlignCenter)
-        self.base_label.setStyleSheet("QLabel { border: none; }")
-        self.base_label.setFixedSize(width, height)
-
-        self.overlay = DrawingOverlay(self)
-        self.overlay.setFixedSize(width, height)
-
-        layout = QVBoxLayout(self)
-        layout.setContentsMargins(0, 0, 0, 0)
-        layout.addWidget(self.base_label)
-
-        self.base_pixmap = None
-
-    def resizeEvent(self, ev):
-        sz = self.base_label.size()
-        self.overlay.setFixedSize(sz)
-        super().resizeEvent(ev)
-
-    def set_base_pixmap(self, pixmap: QPixmap):
-        if pixmap is None or pixmap.isNull():
-            return
-        self.base_pixmap = pixmap
-        self.base_label.setPixmap(pixmap)
-        self.base_label.setFixedSize(pixmap.size())
-        self.overlay.setFixedSize(pixmap.size())
-        self.overlay.update()
-
-    def clear_base(self, emit: bool = True):
-        try:
-            self.base_label.clear()
-        except Exception:
-            pass
-        self.base_pixmap = None
-        try:
-            self.overlay.clear_annotations(emit=emit)
-        except Exception:
-            pass
-
-    def clear(self):
-        self.clear_base(emit=False)
-
-    def has_annotations(self) -> bool:
-        return self.overlay.is_dirty() or self.overlay.has_vector()
-
-    def export_annotations_png(self, target_width: int, target_height: int) -> bytes:
-        return self.overlay.export_png_bytes(target_width, target_height)
-
-    # compatibility shims
-    def setText(self, text: str):
-        self.base_label.setText(text)
-
-    def text(self) -> str:
-        return self.base_label.text()
-
-    def setPixmap(self, pixmap: QPixmap):
-        try:
-            if isinstance(pixmap, QPixmap):
-                self.set_base_pixmap(pixmap)
-            else:
-                pm = QPixmap()
-                ok = pm.loadFromData(pixmap)
-                if ok and not pm.isNull():
-                    self.set_base_pixmap(pm)
-        except Exception:
-            try:
-                self.base_label.setPixmap(pixmap)
-            except Exception:
-                pass
-
-    def setStyleSheet(self, sheet: str):
-        try:
-            QWidget.setStyleSheet(self, sheet)
-        except Exception:
-            pass
-        try:
-            self.base_label.setStyleSheet(sheet)
-        except Exception:
-            pass

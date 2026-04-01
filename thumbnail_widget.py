@@ -12,6 +12,7 @@ from dataclasses import dataclass
 import fitz  # PyMuPDF
 
 from classes.document import Document
+from classes.mapPage import MapPage
 
 
 @dataclass
@@ -32,95 +33,41 @@ class ThumbnailWidget(QWidget):
         self.thumbnail_info = thumbnail_info
         self.layout_index = layout_index
         self.zoom = zoom
+
         self.page = page
+
         self.thumbnail_size = 100
 
-        # Добавляем состояния
         self.is_selected = False
         self.is_hovered = False
 
         self.setFixedSize(self.thumbnail_size + 12, self.thumbnail_size + 12)
         self.setCursor(Qt.PointingHandCursor)
 
-        # Включаем отслеживание мыши для hover эффекта
-        self.setMouseTracking(True)
-
         # Thumbnail pixmap
         self.thumbnail_pixmap: Optional[QPixmap] = None
         self.is_loaded = False
 
-    def set_selected(self, selected: bool):
-        if self.is_selected != selected:
-            self.is_selected = selected
-            self.update()
+    def isVisibleByScrollViewport(self, scroll: int, viewport_height: int):
+        top = scroll  # a_min
+        bottom = scroll + viewport_height  # a_max
 
-    def enterEvent(self, event):
-        """Курсор навёлся"""
-        self.is_hovered = True
-        self.update()
-        super().enterEvent(event)
+        # return top <= self.y() <= bottom or top <= self.y() + self.height() <= bottom
 
-    def leaveEvent(self, event):
-        """Курсор отвёлся"""
-        self.is_hovered = False
-        self.update()
-        super().leaveEvent(event)
-
-    def paintEvent(self, event: QPaintEvent):
-        painter = QPainter(self)
-        painter.setRenderHint(QPainter.Antialiasing)
-
-        # Определяем цвета в зависимости от состояния
-        if self.is_selected:
-            border_color = QColor("#0078d4")
-            background_color = QColor("#e3f2fd")
-            border_width = 2
-        elif self.is_hovered:
-            border_color = QColor("#90caf9")
-            background_color = QColor("#f0f8ff")
-            border_width = 2
-        else:
-            border_color = QColor(200, 200, 200)
-            background_color = QColor(240, 240, 240)
-            border_width = 1
-
-        # Рисуем фон с закругленными углами
-        painter.setPen(Qt.NoPen)
-        painter.setBrush(background_color)
-        painter.drawRoundedRect(self.rect().adjusted(1, 1, -1, -1), 6, 6)
-
-        # Рисуем белый прямоугольник для миниатюры
-        content_rect = self.rect().adjusted(4, 4, -4, -4)
-        painter.setBrush(Qt.white)
-        painter.setPen(QPen(QColor(200, 200, 200), 1))
-        painter.drawRect(content_rect)
-
-        if self.thumbnail_pixmap and not self.thumbnail_pixmap.isNull():
-            # Center the thumbnail
-            x = (self.width() - self.thumbnail_pixmap.width()) // 2
-            y = (self.height() - self.thumbnail_pixmap.height()) // 2
-            painter.drawPixmap(x, y, self.thumbnail_pixmap)
-        else:
-            # Draw placeholder
-            painter.setPen(Qt.black)
-            display_num = self.layout_index + 1
-            f = painter.font()
-            f.setBold(True)
-            f.setPointSize(10)
-            painter.setFont(f)
-            painter.drawText(content_rect, Qt.AlignCenter, str(display_num))
-
-        # Рисуем border в зависимости от состояния
-        painter.setPen(QPen(border_color, border_width))
-        painter.setBrush(Qt.NoBrush)
-        painter.drawRoundedRect(self.rect().adjusted(1, 1, -1, -1), 6, 6)
+        return max(top, self.y()) <= min(bottom, self.y() + self.height())
 
     def load_thumbnail(self):
         """Load thumbnail from document"""
         if self.is_loaded:
             return
+
         try:
+
             page = self.page
+
+            # # Apply rotation if needed
+            # if self.thumbnail_info.rotation != 0:
+            #     page.set_rotation(self.thumbnail_info.rotation)
 
             # Calculate scale for fixed thumbnail size
             rect = page.rect
@@ -132,9 +79,13 @@ class ThumbnailWidget(QWidget):
                 alpha=False,
                 colorspace=fitz.csRGB
             )
+
             img_data = pix.tobytes("ppm")
             self.thumbnail_pixmap = QPixmap()
             self.thumbnail_pixmap.loadFromData(img_data)
+
+            del pix
+            del matrix
 
             # Add page number overlay
             self._add_page_number_overlay()
@@ -172,18 +123,60 @@ class ThumbnailWidget(QWidget):
         painter.drawText(result.rect().adjusted(0, 0, 0, -2),
                          Qt.AlignHCenter | Qt.AlignBottom,
                          str(display_num))
-
         painter.end()
 
         self.thumbnail_pixmap = result
+
+    def set_selected(self, selected: bool):
+        self.is_selected = selected
+        self.update()  # Redraws the thing
+
+        # print(f"UPDATED VISUAL SELECTION")
+
+    def enterEvent(self, event):
+        """Курсор навёлся"""
+        super().enterEvent(event)
+        self.is_hovered = True
+        self.update()
+
+        # print(f"ENTERED")
+
+    def leaveEvent(self, event):
+        """Курсор отвёлся"""
+        super().leaveEvent(event)
+        self.is_hovered = False
+        self.update()
+
+        # print(f"LEFT")
 
     def paintEvent(self, event: QPaintEvent):
         """Paint the thumbnail widget"""
         painter = QPainter(self)
         painter.setRenderHint(QPainter.Antialiasing)
 
-        # Draw background
-        painter.fillRect(self.rect(), QColor(240, 240, 240))
+        if self.is_selected:
+            border_color = QColor("#0078d4")
+            background_color = QColor("#e3f2fd")
+            border_width = 2
+        elif self.is_hovered:
+            border_color = QColor("#90caf9")
+            background_color = QColor("#f0f8ff")
+            border_width = 2
+        else:
+            border_color = QColor(200, 200, 200)
+            background_color = QColor(240, 240, 240)
+            border_width = 1
+
+        # Фон
+        painter.setPen(Qt.NoPen)
+        painter.setBrush(background_color)
+        painter.drawRoundedRect(self.rect().adjusted(1, 1, -1, -1), 6, 6)
+
+        # Прямоугольник для миниатюры
+        content_rect = self.rect().adjusted(4, 4, -4, -4)
+        painter.setBrush(Qt.white)
+        painter.setPen(QPen(QColor(200, 200, 200), 1))
+        painter.drawRect(content_rect)
 
         if self.thumbnail_pixmap and not self.thumbnail_pixmap.isNull():
             # Center the thumbnail
@@ -201,11 +194,12 @@ class ThumbnailWidget(QWidget):
             f.setPointSize(10)
             painter.setFont(f)
             painter.setPen(Qt.black)
-            painter.drawText(self.rect(), Qt.AlignCenter, str(display_num))
+            painter.drawText(content_rect, Qt.AlignCenter, str(display_num))
 
-        # Draw border
-        painter.setPen(QPen(QColor(200, 200, 200), 1))
-        painter.drawRect(self.rect().adjusted(0, 0, -1, -1))
+        # Draw border в зависимости от состояния
+        painter.setPen(QPen(border_color, border_width))
+        painter.setBrush(Qt.NoBrush)
+        painter.drawRoundedRect(self.rect().adjusted(1, 1, -1, -1), 6, 6)
 
     def mousePressEvent(self, event: QMouseEvent):
         """Handle mouse clicks"""
@@ -224,7 +218,7 @@ class ThumbnailWidgetStack(QVBoxLayout):
     page_clicked = Signal(int)
 
     def __init__(self, mainWidget: QWidget, spacing: int = 5, all_margins: int = 5, map_step: int = 20):
-        super().__init__(mainWidget)
+        super(ThumbnailWidgetStack, self).__init__(mainWidget)
         self.setSpacing(spacing)
         self.setAlignment(Qt.AlignmentFlag.AlignTop | Qt.AlignmentFlag.AlignHCenter)
         self.setContentsMargins(all_margins, all_margins, all_margins, all_margins)
@@ -232,29 +226,57 @@ class ThumbnailWidgetStack(QVBoxLayout):
         self.thumbnails_info: List[ThumbnailInfo] = []
         self.countTotalThumbnailsInfo: int = 0
 
+        # Track selected thumbs
+        self.selected_thumbnails: List[int] = []
+        self.selection_mode_single = True  # True = одна минька за раз. False = несколько
+
+        # Текущая выделенная минька
+        self.current_selected_widget: Optional[ThumbnailWidget] = None
+
         self.thumbnail_widgets: List[ThumbnailWidget] = []
         self.zoom = 1.0  # Fixed for thumbnails
         self.spacer: QSpacerItem = QSpacerItem(0, 0)
         self.isSpacer = False
 
-        self._map_step: int = map_step
-        self._map_max: int = (self._map_step * 2) + 1
-        self._map_size_tail = 10
+        # self._map_step: int = map_step
+        # # self._map_max: int = (self._map_step * 2) + 1
+        # self._map_size_tail = 10
+
+        self.map_page = MapPage(map_step, 10)
 
         # Document info for loading thumbnails
         self.doc_path = ""
         self.document_password = ""
+
         # Track loaded thumbnails
         self.loaded_thumbnails = set()
+
         self.current_doc: Document = None
 
-        self.current_selected_widget: Optional[ThumbnailWidget] = None
+    # def set_selected_page(self, page_num: int):
+    #     """Set the selected page"""
+    #     if self.current_selected_page is not None:
+    #         for widget in self.thumbnail_widgets:
+    #             if widget.thumbnail_info.page_num == self.current_selected_page:
+    #                 widget.set_selected(False)
+    #                 break
+    #
+    #     for widget in self.thumbnail_widgets:
+    #         if widget.thumbnail_info.page_num == page_num:
+    #             widget.set_selected(True)
+    #             self.current_selected_page = page_num
+    #             break
 
     def set_document_stack(self, document: Document):
         """Set the document to display thumbnails for"""
+        # print(f"Stack caught set_document_stack function call from container")
+
         self.clear()
 
         self.current_doc = document
+
+        # print(f"doc_path = {doc_path}")
+        # print(f"len = {document.get_page_count()}")
 
         if self.current_doc:
             # Create thumbnail info for all pages
@@ -269,24 +291,30 @@ class ThumbnailWidgetStack(QVBoxLayout):
                 )
                 thumbnails_info.append(thumbnail_info)
 
+            # self.countTotalThumbnailsInfo = len(self.thumbnails_info)
             self.initThumbnailInfoList(thumbnails_info)
+            # print(f"thumbnails_info = {self.thumbnails_info}")
+            # print(f"countTotalThumbnailsInfo = {self.countTotalThumbnailsInfo}")
 
             # Load initial thumbnails
             self.calculateMapPagesByIndex(0)
 
-    def setZoom(self, newZoom):
-        """Thumbnails use fixed size, but keep for compatibility"""
-        self.zoom = newZoom
-
-        if newZoom < 1:
-            newStep = round(3.2 - 2.95 * math.log(newZoom))
-        else:
-            newStep = 3
-
-        self._map_step = newStep + 3
-        self._map_size_tail = newStep
+    # НЕ ИСПОЛЬЗУЕТСЯ
+    # def setZoom(self, newZoom):
+    #     """Thumbnails use fixed size, but keep for compatibility"""
+    #     self.zoom = newZoom
+    #
+    #     if newZoom < 1:
+    #         newStep = round(3.2 - 2.95 * math.log(newZoom))
+    #     else:
+    #         newStep = 3
+    #
+    #     # self._map_step = newStep + 3
+    #     # self._map_size_tail = newStep
+    #     self.map_page.update(newStep)
 
     def initThumbnailInfoList(self, thumbnails_info: List[ThumbnailInfo]):
+        # print(f"Executing initThumbnailInfoList...")
         self.thumbnails_info = thumbnails_info
         self.countTotalThumbnailsInfo = len(self.thumbnails_info)
 
@@ -385,9 +413,13 @@ class ThumbnailWidgetStack(QVBoxLayout):
         # Fixed thumbnail size
         thumbnail_height = 112
 
+        # print(f"countTotalThumbnailsInfo = {self.countTotalThumbnailsInfo}")
+
         for i in range(self.countTotalThumbnailsInfo):
             total_height += thumbnail_height
             total_height += spacing
+
+            # print(f"Total height = {total_height}")
 
             if heightScroll < total_height:
                 return i
@@ -400,6 +432,8 @@ class ThumbnailWidgetStack(QVBoxLayout):
     def needCalculateByScrollHeight(self, scroll: int):
         index = self.getCurrThumbnailIndexByHeightScroll(scroll)
 
+        # print(f"Index {index} changed in needCalculateByScrollHeight")
+
         widget = self.getThumbnailWidgetByIndex(index)
 
         if widget is None:
@@ -410,18 +444,25 @@ class ThumbnailWidgetStack(QVBoxLayout):
         if indexInList == -1:
             return False
 
-        topTail = min(index - 1, self._map_size_tail) + 1
-        bottomTail = len(self.thumbnail_widgets) - min(self._map_size_tail, self.countTotalThumbnailsInfo - index)
+        tail = self.map_page.map_size_tail
+        topTail = min(index - 1, tail) + 1  # tail -> self._map_size_tail
+        bottomTail = len(self.thumbnail_widgets) - min(tail, self.countTotalThumbnailsInfo - index)
 
         if not topTail <= indexInList <= bottomTail:
             return True
+
         return False
 
     def calculateMapPagesByIndex(self, index: int):
         """Calculate and update which thumbnails to display"""
         map_thumbnails = []
-        cur_min = index - min(self._map_step, index)
-        cur_max = index + min(self._map_step, self.countTotalThumbnailsInfo - index - 1)
+
+        # print("Entering calculateMapPagesByIndex...")
+
+        # cur_min = index - min(self._map_step, index)
+        # cur_max = index + min(self._map_step, self.countTotalThumbnailsInfo - index - 1)
+
+        cur_min, cur_max = self.map_page.calculate(index, self.countTotalThumbnailsInfo)
 
         if self.countTotalThumbnailsInfo == 0:
             raise Exception(f"ThumbnailInfo not initialized")
@@ -441,6 +482,7 @@ class ThumbnailWidgetStack(QVBoxLayout):
                         zoom=self.zoom
                     )
                     # Connect click signal
+                    # newWidget.clicked.connect(self.page_clicked.emit)
                     newWidget.clicked.connect(self._on_thumbnail_clicked)
                     map_thumbnails.append(newWidget)
 
@@ -451,6 +493,9 @@ class ThumbnailWidgetStack(QVBoxLayout):
 
             thumbnails_for_delete.sort(key=lambda x: x.layout_index)
             thumbnails_for_add.sort(key=lambda x: x.layout_index)
+
+            # print(f"TN for delete: {thumbnails_for_delete}")
+            # print(f"TN for add: {thumbnails_for_add}")
 
             # Remove old thumbnails
             for widget in thumbnails_for_delete:
@@ -483,25 +528,107 @@ class ThumbnailWidgetStack(QVBoxLayout):
             raise Exception(f"Error calculating thumbnail map: {e}")
 
     def _on_thumbnail_clicked(self, page_num: int):
-        """Обработчик клика по миниатюре"""
-        self.set_current_page(page_num)
-        self.page_clicked.emit(page_num)
+        """Клик по миниатюре"""
+        self.page_clicked.emit(page_num)  # Emitter
+        self.highlight_page(page_num)  # Highlighter
 
-    def set_current_page(self, page_num: int):
+    def highlight_page(self, page_num: int):
         """Highlight the thumbnail for the given page number"""
-        # Снимаем выделение с предыдущего виджета
-        if self.current_selected_widget:
-            self.current_selected_widget.set_selected(False)
+        print(f"Executing highlight {page_num} page function")
+        if self.selection_mode_single:
+            self._deselect_all_thumbnails()
+            self._select_thumbnail(page_num)
+        else:
+            if page_num in self.selected_thumbnails:
+                self._deselect_thumbnail(page_num)
+            else:
+                self._select_thumbnail(page_num)
 
-        # Находим и выделяем новый виджет
+        # print(f"HIGHLIGHT FUNCTION FINISHED")
+
+        # # Снимаем выделение с предыдущего виджета
+        # if self.current_selected_widget:
+        #     self.current_selected_widget.set_selected(False)
+        #
+        # # Находим и выделяем новый виджет
+        # self.thumbnail_widgets[page_num].set_selected(True)
+
+        # for widget in self.thumbnail_widgets:
+        #     if widget.thumbnail_info.page_num == page_num:
+        #         self.thumbnail_widgets[page_num].set_selected(True)
+        #         self.current_selected_widget = widget
+        #         break
+        # else:
+        #     self.current_selected_widget = None
+
+    def _select_thumbnail(self, page_num: int):
+        """Select a thumbnail by page number"""
+        print(f"Selecting {page_num} page...")
+
+        if page_num in self.selected_thumbnails:
+            return
+
+        self.selected_thumbnails.append(page_num)
+
+        # Update the affected widget
         for widget in self.thumbnail_widgets:
             if widget.thumbnail_info.page_num == page_num:
                 widget.set_selected(True)
+                # self.thumbnail_widgets[page_num].set_selected(True)
                 self.current_selected_widget = widget
                 break
-        else:
-            self.current_selected_widget = None
 
+    def _deselect_thumbnail(self, page_num: int):
+        """Deselect a thumbnail by page number"""
+        print(f"Deselecting {page_num} page...")
+        if page_num not in self.selected_thumbnails:
+            return
+
+        self.selected_thumbnails.remove(page_num)
+
+        # Update the affected widget
+        for widget in self.thumbnail_widgets:
+            if widget.thumbnail_info.page_num == page_num:
+                widget.set_selected(False)
+                if self.current_selected_widget == widget:
+                    # self.thumbnail_widgets[page_num].set_selected(True)
+                    self.current_selected_widget = widget
+                break
+
+    def _deselect_all_thumbnails(self):
+        print(f"Deselecting all pages...")
+        thumbnails_to_deselect = self.selected_thumbnails.copy()
+
+        for page_num in thumbnails_to_deselect:
+            self._deselect_thumbnail(page_num)
+
+        self.selected_thumbnails.clear()
+        self.current_selected_widget = None
+
+    # def stack_set_current_page(self, page_num: int):
+    #     """Можно вызывать самому типа"""
+    #     print(f"In the proxy function...")
+    #     self._deselect_all_thumbnails()
+    #     self._select_thumbnail(page_num)
+    # self._scroll_to_thumbnail(page_num)
+
+    # def _scroll_to_thumbnail(self, page_num: int):
+    #     widget = None
+    #     for thumb_widget in self.thumbnail_widgets:
+    #         if thumb_widget.thumbnail_info.page_num == page_num:
+    #             widget = thumb_widget
+    #             break
+    #
+    #         if widget:
+    #             self.ensureWidgetVisible(widget)
+
+    # def get_selected_pages(self) -> List[int]:
+    #     return self.selected_thumbnails.copy()
+    #
+    # def clear_selection(self):
+    #     self._deselect_all_thumbnails()
+
+    # TODO: add thumbnail rotation on page edit event
     def rotate_page_thumbnail(self, page_num: int, rotation: int):
         """Rotate a page thumbnail"""
         # Find thumbnail info and update rotation
@@ -515,6 +642,8 @@ class ThumbnailWidgetStack(QVBoxLayout):
         # Reload thumbnail
         for widget in self.thumbnail_widgets:
             if widget.thumbnail_info.page_num == page_num:
+                current_rotation = widget.thumbnail_info.rotation
+                new_rotation = (current_rotation + rotation) % 360
                 widget.thumbnail_info.rotation = new_rotation
                 widget.is_loaded = False
                 if self.doc_path:
@@ -550,10 +679,11 @@ class ThumbnailWidgetStack(QVBoxLayout):
         """Clear all thumbnails"""
         self.countTotalThumbnailsInfo = 0
         self.thumbnails_info = []
-        for widget in self.thumbnail_widgets:
-            self.removeThumbnailWidget(widget)
-            widget.clean()
-            widget.deleteLater()
+
+        for i in range(len(self.thumbnail_widgets)):
+            self.removeThumbnailWidget(self.thumbnail_widgets[0])
+
+        self.thumbnail_widgets.clear()
 
         if self.isSpacer:
             self.removeSpacer()
@@ -588,6 +718,11 @@ class ThumbnailContainerWidget(QScrollArea):
         self.container_widget.setLayout(self.thumbnail_stack)
         self.setWidget(self.container_widget)
 
+        # Main layout
+        # layout = QVBoxLayout(self)
+        # layout.setContentsMargins(0, 0, 0, 0)
+        # layout.addWidget(self)
+
         # Connect scroll to update thumbnails
         self.verticalScrollBar().valueChanged.connect(self._on_scroll)
 
@@ -603,13 +738,44 @@ class ThumbnailContainerWidget(QScrollArea):
         """Handle scroll events to update visible thumbnails"""
         self.scroll_timer.start(200)
 
+    # Dupes the function in stack
+    def _scroll_to_thumbnail(self, page_num: int):
+
+        print(f"Executing _scroll_to_thumbnail...")
+        page_index = -1
+        for i, item in enumerate(self.thumbnail_stack.thumbnails_info):
+            if item.page_num == page_num:
+                page_index = i
+
+        if page_index == -1:
+            page_index = page_num
+
+        self.verticalScrollBar().setValue(self.thumbnail_stack.getTotalHeightByCountThumbnails(page_index))
+        widget = None
+        for thumb_widget in self.thumbnail_stack.thumbnail_widgets:
+            if thumb_widget.thumbnail_info.page_num == page_num:
+                widget = thumb_widget
+                print(f"thumb_widget = {widget}")
+                break
+
+        if widget:
+            print(f"Executing ensureWidgetVisible...")
+            self.ensureWidgetVisible(widget)
+
     def calculate_in_need(self):
+
         value = self.verticalScrollBar().value()
 
         if self.thumbnail_stack.needCalculateByScrollHeight(value):
             index = self.thumbnail_stack.getCurrThumbnailIndexByHeightScroll(value)
             if index >= 0:
                 self.thumbnail_stack.calculateMapPagesByIndex(index)
+
+        # self.thumbnail_stack
+        for widget_tn in self.thumbnail_stack.thumbnail_widgets:
+            if widget_tn.isVisibleByScrollViewport(self.verticalScrollBar().value() - 100,
+                                                   self.viewport().rect().height() + 100):
+                widget_tn.load_thumbnail()
 
     def set_document(self, document):
         """Set the document to display thumbnails for"""
@@ -618,10 +784,20 @@ class ThumbnailContainerWidget(QScrollArea):
         self.container_widget.setMinimumHeight(
             self.thumbnail_stack.getTotalHeightByCountThumbnails(self.thumbnail_stack.countTotalThumbnailsInfo))
         self.container_widget.adjustSize()
+        self.calculate_in_need()
+
+        # # REMOVE AFTER FIXING THE PAGE NUMBERS
+        # print(f"Container caught set_document function call from main_window")
+        # self.thumbnail_stack.highlight_page(0)
 
     def set_current_page(self, page_num: int):
         """Highlight the thumbnail for the given page number"""
-        self.thumbnail_stack.set_current_page(page_num)
+        self._scroll_to_thumbnail(page_num)
+        self.thumbnail_stack.highlight_page(page_num)
+
+        # self.thumbnail_stack._deselect_all_thumbnails()
+        # self.thumbnail_stack._select_thumbnail(page_num)
+        # # self.thumbnail_stack._scroll
 
     def rotate_page_thumbnail(self, page_num: int, rotation: int):
         """Rotate a page thumbnail"""
@@ -633,4 +809,18 @@ class ThumbnailContainerWidget(QScrollArea):
 
     def clear(self):
         """Clear all thumbnails"""
+        self.container_widget.setMinimumHeight(0)
+        self.container_widget.adjustSize()
+
         self.thumbnail_stack.clear()
+
+        # if self.document:
+        #     self.document.close()
+        #     self.document = None
+
+    def clear_thumbnails(self):
+        self.clear()
+
+    def refresh_thumbnails(self, document: Document):
+        self.clear_thumbnails()
+        self.set_document(document)

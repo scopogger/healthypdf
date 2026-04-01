@@ -10,9 +10,10 @@ class SettingsManager:
     MIN_PANEL_WIDTH = 150  # Minimum allowed width
     MAX_PANEL_WIDTH = 300  # Maximum reasonable width
     MAX_RECENT_FILES = 10
+    DEFAULT_ZOOM_TYPE = 2
 
     def __init__(self):
-        self.settings = QSettings("SNG_COMPANY", "PDFEditor")
+        self.settings = QSettings("YourCompany", "PDFEditor")
 
     def save_window_state(self, size: QSize, position: QPoint, maximized: bool):
         """Save window state"""

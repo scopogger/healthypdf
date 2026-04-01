@@ -1,10 +1,10 @@
-import sys
 import os
+import sys
 from argparse import ArgumentParser, RawTextHelpFormatter
 
+from PySide6.QtCore import QLocale, Qt
+from PySide6.QtGui import QIcon, QPalette, QGuiApplication, QColor
 from PySide6.QtWidgets import QApplication
-from PySide6.QtCore import Qt, QLocale
-from PySide6.QtGui import QIcon
 
 # Add current directory to path so we can import our modules
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
@@ -18,17 +18,37 @@ def setup_application():
                                      formatter_class=RawTextHelpFormatter)
     argument_parser.add_argument("file", help="The file to open",
                                  nargs='?', type=str)
-    options = argument_parser.parse_args()
+    # options = argument_parser.parse_args()
 
-    if sys.platform == "win32":
+    if sys.platform.startswith("win32"):
         # Default theme should be Light (this is an exception for Windows 10 and 11 PySide6 GUIs)
         sys.argv += ['-platform', 'windows:darkmode=1']
 
     app = QApplication(sys.argv)
 
+    if sys.platform.startswith("linux"):
+        app.setStyle("Fusion")
+
+        # Explicitly set light palette
+        palette = QPalette()
+        palette.setColor(QPalette.Window, QColor("#f5f5f5"))
+        palette.setColor(QPalette.WindowText, Qt.black)
+        palette.setColor(QPalette.Base, QColor("#ffffff"))
+        palette.setColor(QPalette.Text, Qt.black)
+        palette.setColor(QPalette.Button, QColor("#f0f0f0"))
+        palette.setColor(QPalette.AlternateBase, Qt.lightGray)
+        palette.setColor(QPalette.ButtonText, Qt.black)
+        palette.setColor(QPalette.BrightText, Qt.red)
+        palette.setColor(QPalette.Link, QColor("#0066cc"))
+        palette.setColor(QPalette.Highlight, Qt.blue)
+        palette.setColor(QPalette.HighlightedText, Qt.white)
+        app.setPalette(palette)
+
+        QGuiApplication.styleHints().setColorScheme(Qt.ColorScheme.Light)
+
     # Set application properties
     app.setApplicationName("PDF Editor")
-    app.setApplicationVersion("0.8.1")
+    app.setApplicationVersion("0.8.12")
     app.setApplicationDisplayName("PDF Editor")
     app.setOrganizationName("PDF Tools")
     app.setOrganizationDomain("sng.ru")
