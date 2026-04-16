@@ -2,7 +2,7 @@ import os
 import sys
 from argparse import ArgumentParser, RawTextHelpFormatter
 
-from PySide6.QtCore import QLocale, Qt
+from PySide6.QtCore import QLocale, Qt, QTranslator, QLibraryInfo
 from PySide6.QtGui import QIcon, QPalette, QGuiApplication, QColor
 from PySide6.QtWidgets import QApplication
 
@@ -12,19 +12,39 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from main_window import MainWindow
 
 
+def install_russian_qt_translations(app: QApplication) -> None:
+    """
+    Install Qt's own Russian translations so that built-in dialogs
+    (QColorDialog, QPrintDialog, QFileDialog, etc.) display in Russian
+    regardless of the system locale.
+    """
+    ru_locale = QLocale(QLocale.Language.Russian, QLocale.Country.Russia)
+    QLocale.setDefault(ru_locale)
+
+    qt_translations_path = QLibraryInfo.path(QLibraryInfo.LibraryPath.TranslationsPath)
+
+    for catalog in ("qtbase_ru", "qt_ru"):
+        translator = QTranslator(app)
+        if translator.load(catalog, qt_translations_path):
+            app.installTranslator(translator)
+            break  # one successful load is enough
+
+
 def setup_application():
     """Setup application properties and style"""
     argument_parser = ArgumentParser(description="AltPDF",
                                      formatter_class=RawTextHelpFormatter)
     argument_parser.add_argument("file", help="The file to open",
                                  nargs='?', type=str)
-    # options = argument_parser.parse_args()
 
     if sys.platform.startswith("win32"):
-        # Default theme should be Light (this is an exception for Windows 10 and 11 PySide6 GUIs)
         sys.argv += ['-platform', 'windows:darkmode=1']
 
     app = QApplication(sys.argv)
+
+    # Install Russian translations for all built-in Qt dialogs
+    # (QColorDialog, QPrintDialog, QFileDialog, etc.)
+    install_russian_qt_translations(app)
 
     if sys.platform.startswith("linux"):
         app.setStyle("Fusion")
@@ -47,16 +67,16 @@ def setup_application():
         QGuiApplication.styleHints().setColorScheme(Qt.ColorScheme.Light)
 
     # Set application properties
-    app.setApplicationName("PDF Editor")
+    app.setApplicationName("Редактор PDF Альт")
     app.setApplicationVersion("0.8.12")
-    app.setApplicationDisplayName("PDF Editor")
+    app.setApplicationDisplayName("Редактор PDF Альт")
     app.setOrganizationName("PDF Tools")
     app.setOrganizationDomain("sng.ru")
 
     # Set application icon if available
     try:
         app.setWindowIcon(QIcon(":/icons/app_icon.png"))
-    except:
+    except Exception:
         pass
 
     return app

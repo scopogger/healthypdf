@@ -7,6 +7,9 @@ from PySide6.QtWidgets import (
     QMainWindow, QMessageBox, QInputDialog
 )
 
+# Single source of truth for the application name used in window titles
+APP_NAME = "Редактор PDF Альт"
+
 from actions_handler import ActionsHandler
 from pdf_viewer import PDFViewer
 from settings_manager import settings_manager
@@ -47,7 +50,7 @@ class MainWindow(QMainWindow):
         self.update_ui_state()
 
         # Window settings
-        self.setWindowTitle("Редактор PDF Альт")
+        self.setWindowTitle(APP_NAME)
 
     def setup_pdf_components(self):
         """Setup PDF viewer and thumbnail components"""
@@ -268,7 +271,7 @@ class MainWindow(QMainWindow):
             print("Document loaded successfully")
             self.current_document_path = file_path
             filename = os.path.basename(file_path)
-            self.setWindowTitle(f"PDF Editor - {filename}")
+            self.setWindowTitle(f"{APP_NAME} — {filename}")
 
             # Load document for bookmarks
             self.load_bookmarks_document(file_path)
@@ -472,7 +475,7 @@ class MainWindow(QMainWindow):
     #     pass
 
     def go_to_page_input(self):
-        """User typed a page number: convert display number -> layout index -> go_to_page"""
+        """User typed a page number: convert display number -> layout index -> scroll and highlight."""
         try:
             if hasattr(self.ui, 'm_pageInput'):
                 page_text = self.ui.m_pageInput.text()
@@ -480,14 +483,21 @@ class MainWindow(QMainWindow):
                 total_pages = self.get_total_display_pages()
                 if 1 <= display_page_num <= total_pages:
                     layout_index = self.get_actual_page_from_display_number(display_page_num)
-                    if hasattr(self.ui.pdfView, 'go_to_page'):
-                        # self.ui.pdfView.go_to_page(layout_index)
+                    self.ui.pdfView.scroll_to_page(layout_index)
 
-                        self.ui.pdfView.scroll_to_page(layout_index)
+                    # Directly sync the thumbnail highlight. scroll_to_page fires
+                    # page_changed only via a 200 ms scroll timer, so the first call
+                    # may arrive before the thumbnail widget is ready. Calling
+                    # set_current_page here ensures the highlight is always applied.
+                    orig_page_num = self.ui.pdfView.page_widget_controller.getPageInfoByIndex(layout_index).page_num
+                    if hasattr(self.ui.thumbnailList, 'set_current_page'):
+                        self.ui.thumbnailList.set_current_page(orig_page_num)
+                    self.update_page_info()
                 else:
                     current_display_page = self.get_current_display_page_number()
                     self.ui.m_pageInput.setText(str(current_display_page))
-        except ValueError:
+        except (ValueError, Exception) as e:
+            print(f"[go_to_page_input] {e}")
             current_display_page = self.get_current_display_page_number()
             if hasattr(self.ui, 'm_pageInput'):
                 self.ui.m_pageInput.setText(str(current_display_page))
@@ -523,11 +533,11 @@ class MainWindow(QMainWindow):
         if self.current_document_path:
             filename = os.path.basename(self.current_document_path)
             if self.is_document_modified:
-                self.setWindowTitle(f"PDF Editor - {filename}*")
+                self.setWindowTitle(f"{APP_NAME} — {filename}*")
             else:
-                self.setWindowTitle(f"PDF Editor - {filename}")
+                self.setWindowTitle(f"{APP_NAME} — {filename}")
         else:
-            self.setWindowTitle("PDF Editor")
+            self.setWindowTitle(APP_NAME)
 
     # Event handlers
     def on_page_changed(self, orig_page_num: int):

@@ -480,8 +480,21 @@ class PDFViewer(QScrollArea):
         """Ultra-conservative visible page management with dynamic placeholder loading"""
         if not self.document:
             return
-        value = self.verticalScrollBar().value()
+        # Guard against re-entrant calls (rapid scroll + timer firing simultaneously)
+        if getattr(self, '_updating_visible', False):
+            return
+        self._updating_visible = True
+        try:
+            self._do_update_visible_pages()
+        except Exception as e:
+            print(f"[PDFViewer] update_visible_pages error: {e}")
+        finally:
+            self._updating_visible = False
+        gc.collect()
 
+    def _do_update_visible_pages(self):
+        """Inner implementation called by update_visible_pages."""
+        value = self.verticalScrollBar().value()
         max_scroll = self.verticalScrollBar().maximum()
 
         if value >= max_scroll - 10 \
@@ -495,58 +508,34 @@ class PDFViewer(QScrollArea):
             self.update_container_full_size()
             self.verticalScrollBar().setValue(max_scroll - 150)
 
-        # print(f"Chunk index: "
-        #       f"{self.page_widget_controller.current_chunk_index}/{len(self.page_widget_controller.chunks) - 1};"
-        #       f"")
-
         viewport_rect = self.viewport().rect()
-        scroll_y = value
-        # visible_layout_indices: Set[int] = set()
-        # current_center_layout_index = None
+        # Re-read scroll value after potential setValue() calls above
+        scroll_y = self.verticalScrollBar().value()
         viewport_center_y = scroll_y + viewport_rect.height() // 2
 
         isNeedCalculateMap = self.page_widget_controller.needCalculateByScrollHeight(viewport_center_y)
-
-        # for layout_idx in self.last_visible_layout_indices - visible_layout_indices:
-        #     if 0 <= layout_idx < self.page_widgets[-1:][0].layout_index:
-        #         self.clear_page_widget(layout_idx)
-
-        # print(f"need calculate? - {isNeedCalculateMap}")
         curIndex = self.page_widget_controller.getCurrPageIndexByHeightScroll(viewport_center_y)
 
-        # curWidg = self.page_widget_controller.getPageWidgetByIndex(curIndex)
+        if not self.document:
+            return
 
         self.page_changed.emit(self.page_widget_controller.getPageInfoByIndex(curIndex).page_num)
 
         if isNeedCalculateMap:
-            # for widget in self.page_widget_controller:
-            #     self.clear_page_widget(widget)
-
             self.page_widget_controller.calculateMapPagesByIndex(curIndex)
 
-        for widget in self.page_widget_controller:
-
-            # print(f"Start render widget: {widget.layout_index}")
-            # print(f"scroll: {scroll_y}. VP height: {viewport_rect.height()}")
-            # print(f"Widget {widget.layout_index} is visible: {widget.isVisibleByViewport(scroll_y, viewport_rect.height())}")
-            if widget.isVisibleByViewport(scroll_y - viewport_rect.height() * 2, viewport_rect.height() * 3):
-                self.load_page_if_needed(widget)
-            else:
-                # self.clear_page_widget(widget)
+        # Snapshot before iterating: calculateMapPagesByIndex may mutate page_widgets,
+        # and rapid scrolling can cause widget deletion between calls.
+        widgets_snapshot = list(self.page_widget_controller.page_widgets)
+        for widget in widgets_snapshot:
+            if not self.document:
+                break
+            try:
+                if widget.isVisibleByViewport(scroll_y - viewport_rect.height() * 2, viewport_rect.height() * 3):
+                    self.load_page_if_needed(widget)
+            except RuntimeError:
+                # Widget was deleted between snapshot and this call (rapid chunk switch)
                 pass
-
-        # load visible
-        # for layout_idx in visible_layout_indices:
-        #     if 0 <= layout_idx <= self.page_widgets[-1:][0].layout_index:
-        #         self.load_page_if_needed(layout_idx)
-
-        # self.last_visible_layout_indices = visible_layout_indices.copy()
-
-        # if current_center_layout_index is not None:
-        #     orig_center = self.pages_info[current_center_layout_index].page_num
-        #     self.page_changed.emit(orig_center)
-
-        gc.collect()
 
     def update_container_full_size(self):
         """Update container size to account for ALL pages (even not-yet-created ones)"""

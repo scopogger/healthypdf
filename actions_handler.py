@@ -17,6 +17,8 @@ from PySide6.QtWidgets import (
 from PySide6.QtCore import Qt
 from PySide6.QtGui import QAction, QImage
 
+APP_NAME = "Редактор PDF Альт"
+
 try:
     import fitz  # PyMuPDF
 except Exception:  # pragma: no cover
@@ -576,7 +578,7 @@ class ActionsHandler:
             self.main_window.current_document_path = file_path
             if hasattr(self.main_window, 'setWindowTitle'):
                 filename = os.path.basename(file_path)
-                self.main_window.setWindowTitle(f"PDF Editor - {filename}")
+                self.main_window.setWindowTitle(f"{APP_NAME} — {filename}")
             self._mark_not_modified()
             settings_manager.add_recent_file(file_path)
             self.update_recent_files_menu()
@@ -622,7 +624,7 @@ class ActionsHandler:
         if hasattr(self.main_window, 'update_ui_state'):
             self.main_window.update_ui_state()
         if update_title and hasattr(self.main_window, 'setWindowTitle'):
-            self.main_window.setWindowTitle("PDF Editor")
+            self.main_window.setWindowTitle(APP_NAME)
         if hasattr(self.main_window, 'update_window_title'):
             self.main_window.update_window_title()
 
@@ -1190,7 +1192,6 @@ class ActionsHandler:
 
     def show_about(self):
         """Показать информацию о приложении"""
-        APP_NAME = "Редактор PDF Альт"
         APP_VERSION = "0.831"
         APP_DESCRIPTION = "Приложение для просмотра и редактирования PDF-файлов для операционной системы Альт Рабочая станция."
 

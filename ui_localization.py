@@ -1,13 +1,17 @@
 from PySide6.QtCore import QCoreApplication, Qt
 from PySide6.QtGui import QKeySequence
 
+# The canonical application name — must match MainWindow and actions_handler
+APP_NAME = "Редактор PDF Альт"
+
 
 def translate_ui(self, main_window, language):
     """Translate UI elements based on language"""
 
     if language == 'en' or language == 'en-US':
-        # Window title
-        main_window.setWindowTitle(QCoreApplication.translate("MainWindow", "PDF Editor", None))
+        # Window title — use the official Russian name regardless of UI language
+        # (the product is Russian-only; English mode is for development only)
+        main_window.setWindowTitle(APP_NAME)
 
         # File menu and actions
         self.menuFile.setTitle(QCoreApplication.translate("MainWindow", "File", None))
@@ -77,7 +81,7 @@ def translate_ui(self, main_window, language):
 
     elif language == 'ru' or language == 'ru-RU':
         # Window title
-        main_window.setWindowTitle(QCoreApplication.translate("MainWindow", "PDF Редактор", None))
+        main_window.setWindowTitle(APP_NAME)
 
         # File menu and actions
         self.menuFile.setTitle(QCoreApplication.translate("MainWindow", "Файл", None))
