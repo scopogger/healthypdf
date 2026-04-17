@@ -576,9 +576,8 @@ class ActionsHandler:
 
         if ok:
             self.main_window.current_document_path = file_path
-            if hasattr(self.main_window, 'setWindowTitle'):
-                filename = os.path.basename(file_path)
-                self.main_window.setWindowTitle(f"{APP_NAME} — {filename}")
+            if hasattr(self.main_window, 'update_window_title'):
+                self.main_window.update_window_title()
             self._mark_not_modified()
             settings_manager.add_recent_file(file_path)
             self.update_recent_files_menu()
@@ -772,34 +771,31 @@ class ActionsHandler:
     # Panel ops (respecting new splitter sizing)
     # -----------------------------
     def toggle_side_panel(self):
-        if not hasattr(self.ui, 'sidePanelContent'):
+        if not hasattr(self.ui, 'sidebarStack') or not hasattr(self.ui, 'splitter'):
             return
-        is_visible = self.ui.sidePanelContent.isVisible()
+        # Don't toggle if in drawing mode
+        if self.ui.sidebarStack.currentIndex() == 1:
+            return
+        sizes = self.ui.splitter.sizes()
+        is_visible = len(sizes) >= 2 and sizes[1] > 0
 
         if not is_visible:
-            self.ui.sidePanelContent.show()
             # Prefer opening the Pages tab
-            for name in ('pagesButton', 'pagesTab'):
-                w = getattr(self.ui, name, None)
-                if hasattr(w, 'setChecked'):
-                    w.setChecked(True)
-                if hasattr(w, 'show'):
-                    w.show()
+            pages_btn = getattr(self.ui, 'pagesButton', None)
+            if pages_btn:
+                pages_btn.setChecked(True)
+                self.ui.toggle_pages_tab()
 
-            if hasattr(self.ui, 'splitter'):
-                sizes = self.ui.splitter.sizes()
-                total = sum(sizes) if sizes else self.main_window.width()
-                tab_buttons_width = 25
-                # try to restore preferred width from settings if present
-                try:
-                    _, panel_width, _ = settings_manager.load_panel_state()
-                except Exception:
-                    panel_width = 150
-                panel_width = max(150, min(300, int(panel_width or 150)))
-                self.ui.splitter.setSizes(
-                    [tab_buttons_width, panel_width, max(400, total - tab_buttons_width - panel_width)])
+            total = sum(sizes) if sizes else self.main_window.width()
+            tab_buttons_width = 25
+            try:
+                _, panel_width, _ = settings_manager.load_panel_state()
+            except Exception:
+                panel_width = 150
+            panel_width = max(150, min(300, int(panel_width or 150)))
+            self.ui.splitter.setSizes(
+                [tab_buttons_width, panel_width, max(400, total - tab_buttons_width - panel_width)])
         else:
-            self.ui.sidePanelContent.hide()
             if hasattr(self.ui, 'splitter'):
                 total = sum(self.ui.splitter.sizes())
                 self.ui.splitter.setSizes([25, 0, max(0, total - 25)])
