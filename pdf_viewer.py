@@ -13,8 +13,8 @@ from classes.page_widget_stack import PageWidgetStack
 from classes.page_widget import PageWidget
 
 from PySide6.QtWidgets import (
-    QScrollArea, QVBoxLayout, QWidget, QLabel, QMessageBox, QInputDialog, QFrame, QPushButton, QLineEdit, QApplication,
-    QSpacerItem, QSizePolicy, QButtonGroup, QAbstractButton, QHBoxLayout, QColorDialog
+    QScrollArea, QVBoxLayout, QWidget, QLabel, QMessageBox, QInputDialog, QPushButton, QLineEdit, QApplication,
+    QSpacerItem, QSizePolicy
 )
 from PySide6.QtCore import (
     Qt, QRunnable, QThreadPool, QTimer, Signal, QSize
@@ -1704,149 +1704,14 @@ class PDFViewer(QScrollArea):
             (getattr(w, "overlay", None) and w.overlay.is_dirty()) for w in self.page_widget_controller.page_widgets)
 
     def set_drawing_mode(self, enabled: bool):
-        """Enable or disable drawing mode for all page widgets and show tools panel."""
+        """Enable or disable drawing mode for all page widgets."""
         self._drawing_mode = bool(enabled)
         for w in self.page_widget_controller:
             try:
                 w.overlay.set_enabled(enabled)
             except Exception:
                 pass
-        if enabled:
-            if not hasattr(self, "drawing_tools"):
-                self._create_drawing_tools()
-            try:
-                self.drawing_tools.show()
-            except Exception:
-                pass
-        else:
-            if hasattr(self, "drawing_tools"):
-                try:
-                    self.drawing_tools.hide()
-                except Exception:
-                    pass
 
-    def _create_drawing_tools(self):
-        panel = QFrame(self.viewport())
-        panel.setObjectName("drawingTools")
-        panel.setStyleSheet("""
-            QFrame {
-                background: rgba(255,255,255,0.92);
-                border: 1px solid #bbb;
-                padding: 4px;
-            }
-            QPushButton {
-                padding: 4px 8px;
-                border: 1px solid #ccc;
-                border-radius: 3px;
-                background: #f0f0f0;
-            }
-            QPushButton:checked {
-                background: #e0e0e0;
-                border: 2px solid #0078d7;
-                font-weight: bold;
-            }
-            QPushButton#colorBtn {
-                border: 2px solid #333;
-                min-width: 28px;
-            }
-        """)
-
-        main_layout = QVBoxLayout(panel)
-        main_layout.setContentsMargins(4, 4, 4, 4)
-
-        tool_layout = QHBoxLayout()
-        tool_layout.setSpacing(2)
-        tool_layout.setContentsMargins(0, 0, 0, 0)
-
-        self._tool_group = QButtonGroup(panel)
-        self._tool_group.setExclusive(True)
-
-        brush_btn = QPushButton("", panel)
-        brush_btn.setCheckable(True)
-        brush_btn.setObjectName("brushBtn")
-        # brush_btn.setMinimumWidth(80)
-        brush_btn.setIcon(QIcon(f":/light_theme_v2/brush.png"))
-        brush_btn.setIconSize(QSize(24, 24))
-
-        rect_btn = QPushButton("", panel)
-        rect_btn.setCheckable(True)
-        rect_btn.setObjectName("rectBtn")
-        # rect_btn.setMinimumWidth(120)
-        rect_btn.setIcon(QIcon(f":/light_theme_v2/rectangle.png"))
-        rect_btn.setIconSize(QSize(24, 24))
-
-        self._current_draw_color = QColor(Qt.black)
-
-        preview_btn = QPushButton("", panel)
-        preview_btn.setCheckable(False)
-        preview_btn.setObjectName("colorBtn")
-        preview_btn.setToolTip("Select drawing color")
-        self._update_color_button_icon(preview_btn)
-
-        self._tool_group.addButton(brush_btn)
-        self._tool_group.addButton(rect_btn)
-
-        brush_btn.setChecked(True)
-
-        tool_layout.addWidget(brush_btn)
-        tool_layout.addWidget(rect_btn)
-        tool_layout.addWidget(preview_btn)
-
-        main_layout.addLayout(tool_layout)
-
-        clear_btn = QPushButton("Очистить холст", panel)
-        all_clear_btn = QPushButton("Очистить все страницы", panel)
-
-        main_layout.addWidget(clear_btn)
-        main_layout.addWidget(all_clear_btn)
-
-        panel.adjustSize()
-
-        def place_panel():
-            vp = self.viewport()
-            x = max(8, vp.width() - panel.width() - 8)
-            y = 8
-            panel.move(x, y)
-
-        place_panel()
-
-        self._tool_group.buttonToggled.connect(self._on_tool_toggled)
-
-        preview_btn.clicked.connect(self._open_color_dialog)
-
-        clear_btn.clicked.connect(self._clear_current_page_overlay)
-        all_clear_btn.clicked.connect(self._clear_all_pages_overlay)
-
-        self.drawing_tools = panel
-
-    def _update_color_button_icon(self, btn: QPushButton):
-        pixmap = QPixmap(24, 24)
-        pixmap.fill(self._current_draw_color)
-
-        btn.setIcon(QIcon(pixmap))
-        btn.setIconSize(QSize(24, 24))
-
-    def _on_tool_toggled(self, button: QAbstractButton, checked: bool):
-        if not checked:
-            return
-
-        name = button.objectName()
-        if name == "brushBtn":
-            self._set_tool_for_all("brush")
-        elif name == "rectBtn":
-            self._set_tool_for_all("rect")
-
-    def _open_color_dialog(self):
-        color = QColorDialog.getColor(
-            self._current_draw_color,
-            self,
-            "Выберите цвет рисования",
-            options=QColorDialog.DontUseNativeDialog
-        )
-        if color.isValid():
-            self._current_draw_color = color
-            self._update_color_button_icon(self.drawing_tools.findChild(QPushButton, "colorBtn"))
-            self._set_color_for_all(color)
 
     def _set_color_for_all(self, color: QColor):
         """Apply the given color to all page overlays."""
@@ -1888,17 +1753,8 @@ class PDFViewer(QScrollArea):
         self.page_widget_controller.dict_vectors.Clear()
 
     def resizeEvent(self, ev):
-        # Событие при изменении ширины миниатюр
         super().resizeEvent(ev)
-        try:
-            # self.resize_window_timer.start(400)
-            if hasattr(self, "drawing_tools") and self.drawing_tools.isVisible():
-                vp = self.viewport()
-                x = max(8, vp.width() - self.drawing_tools.width() - 8)
-                y = 8
-                self.drawing_tools.move(x, y)
-        except Exception:
-            pass
+        self.zoom_action[self._zoom_type]()
 
     # ---------------- Fit helpers ----------------
     def toggle_fit_to_width(self):
