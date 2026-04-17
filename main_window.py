@@ -87,28 +87,16 @@ class MainWindow(QMainWindow):
         panel_visible, panel_width, active_tab = settings_manager.load_panel_state()
 
         # Set panel visibility and enforce size constraints
-        if hasattr(self.ui, 'sidePanelContent') and hasattr(self.ui, 'splitter'):
-            self.ui.sidePanelContent.setVisible(panel_visible)
-
+        if hasattr(self.ui, 'sidebarStack') and hasattr(self.ui, 'splitter'):
             if panel_visible:
-                # Enforce minimum/maximum panel width constraints
                 min_panel_width = 150
-                max_panel_width = 300  # Maximum allowed width
+                max_panel_width = 300
                 constrained_width = max(min_panel_width, min(panel_width, max_panel_width))
-
-                # Set the splitter sizes - tab buttons (25px) + content width + remaining for PDF view
                 tab_buttons_width = 25
                 total_sidebar_width = tab_buttons_width + constrained_width
-                pdf_view_width = max(400, self.width() - total_sidebar_width - 25)  # Minimum 400px for PDF view
-
-                splitter_sizes = [tab_buttons_width, constrained_width, pdf_view_width]
-                self.ui.splitter.setSizes(splitter_sizes)
-
-                # Set minimum and maximum sizes for the side panel content
-                self.ui.sidePanelContent.setMinimumWidth(min_panel_width)
-                self.ui.sidePanelContent.setMaximumWidth(max_panel_width)
+                pdf_view_width = max(400, self.width() - total_sidebar_width - 25)
+                self.ui.splitter.setSizes([tab_buttons_width, constrained_width, pdf_view_width])
             else:
-                # When panel is hidden, give all space to PDF view
                 self.ui.splitter.setSizes([25, 0, self.width() - 25])
 
         # Set active tab
@@ -133,12 +121,11 @@ class MainWindow(QMainWindow):
         panel_width = 150  # Default fallback
         active_tab = "pages"
 
-        if hasattr(self.ui, 'sidePanelContent'):
-            panel_visible = self.ui.sidePanelContent.isVisible()
-            if hasattr(self.ui, 'splitter') and panel_visible:
-                sizes = self.ui.splitter.sizes()
-                if len(sizes) >= 3:
-                    panel_width = sizes[1]  # Second element is sidebar content width
+        if hasattr(self.ui, 'sidebarStack') and hasattr(self.ui, 'splitter'):
+            sizes = self.ui.splitter.sizes()
+            panel_visible = len(sizes) >= 2 and sizes[1] > 0
+            if panel_visible and len(sizes) >= 3:
+                panel_width = sizes[1]
 
         if hasattr(self.ui, 'bookmarksButton'):
             if self.ui.bookmarksButton.isChecked():
@@ -271,7 +258,7 @@ class MainWindow(QMainWindow):
             print("Document loaded successfully")
             self.current_document_path = file_path
             filename = os.path.basename(file_path)
-            self.setWindowTitle(f"{APP_NAME} — {filename}")
+            self.setWindowTitle(filename)
 
             # Load document for bookmarks
             self.load_bookmarks_document(file_path)
@@ -533,9 +520,9 @@ class MainWindow(QMainWindow):
         if self.current_document_path:
             filename = os.path.basename(self.current_document_path)
             if self.is_document_modified:
-                self.setWindowTitle(f"{APP_NAME} — {filename}*")
+                self.setWindowTitle(f"{filename}*")
             else:
-                self.setWindowTitle(f"{APP_NAME} — {filename}")
+                self.setWindowTitle(filename)
         else:
             self.setWindowTitle(APP_NAME)
 
@@ -556,14 +543,80 @@ class MainWindow(QMainWindow):
         # print(f"o:{orig_page_num}, g:{self.ui.pdfView.get_current_page()}")
 
     def on_action_draw_toggled(self, checked: bool):
-        """Toggle drawing mode. If turning off and there are unsaved drawings prompt Save/Discard/Cancel."""
+        """Toggle drawing mode — swap sidebar to/from drawing tools panel."""
         if checked:
-            # enable drawing mode
             if hasattr(self.ui.pdfView, 'set_drawing_mode'):
                 self.ui.pdfView.set_drawing_mode(True)
+            # Switch sidebar to drawing panel
+            if hasattr(self.ui, 'show_drawing_panel'):
+                self.ui.show_drawing_panel()
+            self._connect_drawing_panel_buttons()
         else:
             if hasattr(self.ui.pdfView, 'set_drawing_mode'):
                 self.ui.pdfView.set_drawing_mode(False)
+            # Restore normal sidebar
+            if hasattr(self.ui, 'hide_drawing_panel'):
+                self.ui.hide_drawing_panel()
+
+    def _connect_drawing_panel_buttons(self):
+        """Connect sidebar drawing panel buttons to PDFViewer actions (idempotent)."""
+        pv = self.ui.pdfView
+        if not hasattr(self.ui, 'drawing_brush_btn'):
+            return
+        # Avoid double-connecting by disconnecting first (safe even if not connected)
+        try:
+            self.ui.drawing_brush_btn.clicked.disconnect()
+        except Exception:
+            pass
+        try:
+            self.ui.drawing_rect_btn.clicked.disconnect()
+        except Exception:
+            pass
+        try:
+            self.ui.drawing_color_btn.clicked.disconnect()
+        except Exception:
+            pass
+        try:
+            self.ui.drawing_clear_page_btn.clicked.disconnect()
+        except Exception:
+            pass
+        try:
+            self.ui.drawing_clear_all_btn.clicked.disconnect()
+        except Exception:
+            pass
+        try:
+            self.ui.drawing_close_btn.clicked.disconnect()
+        except Exception:
+            pass
+
+        self.ui.drawing_brush_btn.clicked.connect(
+            lambda: pv._set_tool_for_all("brush") if hasattr(pv, '_set_tool_for_all') else None)
+        self.ui.drawing_rect_btn.clicked.connect(
+            lambda: pv._set_tool_for_all("rect") if hasattr(pv, '_set_tool_for_all') else None)
+        self.ui.drawing_color_btn.clicked.connect(self._open_drawing_color_dialog)
+        self.ui.drawing_clear_page_btn.clicked.connect(
+            lambda: pv._clear_current_page_overlay() if hasattr(pv, '_clear_current_page_overlay') else None)
+        self.ui.drawing_clear_all_btn.clicked.connect(
+            lambda: pv._clear_all_pages_overlay() if hasattr(pv, '_clear_all_pages_overlay') else None)
+        self.ui.drawing_close_btn.clicked.connect(self._close_drawing_mode)
+
+    def _open_drawing_color_dialog(self):
+        from PySide6.QtWidgets import QColorDialog
+        from PySide6.QtGui import QColor
+        current = getattr(self.ui, '_drawing_current_color', QColor(0, 0, 0))
+        color = QColorDialog.getColor(current, self, "Выберите цвет рисования",
+                                      options=QColorDialog.DontUseNativeDialog)
+        if color.isValid():
+            self.ui._drawing_current_color = color
+            self.ui._refresh_color_btn_icon()
+            pv = self.ui.pdfView
+            if hasattr(pv, '_set_color_for_all'):
+                pv._set_color_for_all(color)
+
+    def _close_drawing_mode(self):
+        """Uncheck the Draw action, which triggers on_action_draw_toggled(False)."""
+        if hasattr(self.ui, 'actionDraw'):
+            self.ui.actionDraw.setChecked(False)
 
     def on_document_modified(self, is_modified: bool):
         """Handle document modification status change"""
