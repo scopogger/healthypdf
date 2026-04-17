@@ -1,6 +1,6 @@
 import fitz  # PyMuPDF
 from PySide6.QtWidgets import (QMessageBox, QProgressDialog, QApplication)
-from PySide6.QtPrintSupport import QPrinter, QPrintDialog, QPrintPreviewDialog
+from PySide6.QtPrintSupport import QPrinter, QPrintPreviewDialog
 from PySide6.QtGui import QPainter, QImage, QTransform
 from PySide6.QtCore import QRectF, Qt
 
@@ -19,36 +19,16 @@ class PDFPrinter:
         printer = QPrinter(QPrinter.HighResolution)
         printer.setFromTo(1, total_pages)
 
-        # ── Step 1: show print settings dialog ──────────────────────────
-        print_dialog = QPrintDialog(printer, main_window)
-        print_dialog.setWindowTitle("Параметры печати")
-        # DontUseNativeDialog ensures Qt's own Russian translations apply to
-        # button labels (the native OS dialog ignores installed QTranslators)
-        print_dialog.setOption(QPrintDialog.PrintDialogOption.DontUseNativeDialog, True)
-        print_dialog.setOption(QPrintDialog.PrintPageRange, True)
-        print_dialog.setOption(QPrintDialog.PrintCollateCopies, True)
-        print_dialog.setOption(QPrintDialog.PrintShowPageSize, True)
-        print_dialog.setOption(QPrintDialog.PrintToFile, True)
-        if print_dialog.exec() != QPrintDialog.Accepted:
-            return
-
-        # ── Step 2: show preview ─────────────────────────────────────────
+        # Show print preview — the preview's own "Print" button opens the print settings dialog.
+        # We deliberately skip a separate QPrintDialog here so the user sees exactly one dialog.
         preview = QPrintPreviewDialog(printer, main_window)
-        preview.setWindowTitle("Предпросмотр печати")
+        preview.setWindowTitle("Предпросмотр и печать")
 
-        # The preview widget calls this signal whenever it needs a repaint
-        # (including when the user flips pages inside the preview).
         preview.paintRequested.connect(
             lambda p: PDFPrinter._paint_to_printer(p, doc, main_window)
         )
 
-        if preview.exec() != QPrintPreviewDialog.Accepted:
-            return
-
-        # ── Step 3: actual print (printer already configured by preview) ─
-        # paintRequested was already called for the real print pass by Qt
-        # when the user clicked "Print" inside the preview dialog, so
-        # nothing extra is needed here.
+        preview.exec()
 
     # ------------------------------------------------------------------ #
     @staticmethod
