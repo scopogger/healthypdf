@@ -68,9 +68,9 @@ def setup_application():
 
     # Set application properties
     app.setApplicationName("Редактор PDF Альт")
-    app.setApplicationVersion("0.8.12")
+    app.setApplicationVersion("0.8.81")
     app.setApplicationDisplayName("Редактор PDF Альт")
-    app.setOrganizationName("PDF Tools")
+    app.setOrganizationName("SngPdfTools")
     app.setOrganizationDomain("sng.ru")
 
     # Set application icon if available

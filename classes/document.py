@@ -30,8 +30,8 @@ class Document:
 
     def get_page(self, num: int):
         try:
-            # print(self.current_doc)
-            return self.current_doc[num]
+            return self.current_doc.load_page(num)
+            # return self.current_doc[num]
         except Exception as e:
             print(f"Error get page: {e}")
 

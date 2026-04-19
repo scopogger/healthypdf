@@ -204,7 +204,7 @@ class MainWindow(QMainWindow):
         if hasattr(self.ui, 'actionDraw'):
             self.ui.actionDraw.toggled.connect(self.on_action_draw_toggled)
 
-        # All action connections are now handled by ActionsHandler
+    # All action connections are now handled by ActionsHandler
 
     def toggle_fullscreen(self):
         if self.isFullScreen():
@@ -357,7 +357,10 @@ class MainWindow(QMainWindow):
 
     def update_ui_state(self):
         """Update UI state based on document availability"""
-        has_document = hasattr(self.ui.pdfView, 'document') and self.ui.pdfView.document is not None
+        has_document = self.ui.pdfView.document is not None
+        # hasattr(self.ui.pdfView, 'document') and self.ui.pdfView.document is not None
+
+        stat_ops = has_document and not self.ui.pdfView.drawing_mode
 
         print(f"Updating UI state, has_document: {has_document}")
 
@@ -365,23 +368,23 @@ class MainWindow(QMainWindow):
         if hasattr(self.ui, 'actionSave'):
             self.ui.actionSave.setEnabled(has_document and self.is_document_modified)
         if hasattr(self.ui, 'actionSaveAs'):
-            self.ui.actionSaveAs.setEnabled(has_document)
+            self.ui.actionSaveAs.setEnabled(stat_ops)
         if hasattr(self.ui, 'actionClosePdf'):
-            self.ui.actionClosePdf.setEnabled(has_document)
+            self.ui.actionClosePdf.setEnabled(stat_ops)
         if hasattr(self.ui, 'actionPrint'):
-            self.ui.actionPrint.setEnabled(has_document)
+            self.ui.actionPrint.setEnabled(stat_ops)
         if hasattr(self.ui, 'actionCompress'):
-            self.ui.actionCompress.setEnabled(has_document)
+            self.ui.actionCompress.setEnabled(stat_ops)
         if hasattr(self.ui, 'actionEmail'):
-            self.ui.actionEmail.setEnabled(has_document)
+            self.ui.actionEmail.setEnabled(stat_ops)
         if hasattr(self.ui, 'actionAboutPdf'):
-            self.ui.actionAboutPdf.setEnabled(has_document)
+            self.ui.actionAboutPdf.setEnabled(stat_ops)
         if hasattr(self.ui, 'actionDraw'):
             self.ui.actionDraw.setEnabled(has_document)
         if hasattr(self.ui, 'actionAddFile'):
-            self.ui.actionAddFile.setEnabled(has_document)
+            self.ui.actionAddFile.setEnabled(stat_ops)
         if hasattr(self.ui, 'actionExport_Pages'):
-            self.ui.actionExport_Pages.setEnabled(has_document)
+            self.ui.actionExport_Pages.setEnabled(stat_ops)
 
         # Update navigation actions
         nav_actions = [
@@ -390,7 +393,7 @@ class MainWindow(QMainWindow):
         ]
         for action_name in nav_actions:
             if hasattr(self.ui, action_name):
-                getattr(self.ui, action_name).setEnabled(has_document)
+                getattr(self.ui, action_name).setEnabled(stat_ops)
 
         # Update page manipulation actions
         page_actions = [
@@ -400,7 +403,7 @@ class MainWindow(QMainWindow):
         ]
         for action_name in page_actions:
             if hasattr(self.ui, action_name):
-                getattr(self.ui, action_name).setEnabled(has_document)
+                getattr(self.ui, action_name).setEnabled(stat_ops)
 
         # Update view actions
         view_actions = [
@@ -409,7 +412,7 @@ class MainWindow(QMainWindow):
         ]
         for action_name in view_actions:
             if hasattr(self.ui, action_name):
-                getattr(self.ui, action_name).setEnabled(has_document)
+                getattr(self.ui, action_name).setEnabled(stat_ops)
 
     def get_current_display_page_number(self) -> int:
         """Get the current page's display number (1-based) using pdfView.pages_info and deleted_pages"""
@@ -433,7 +436,7 @@ class MainWindow(QMainWindow):
 
     def get_chunk_info_count(self):
         return self.ui.pdfView.page_widget_controller.current_chunk_index + 1, \
-               len(self.ui.pdfView.page_widget_controller.chunks)
+            len(self.ui.pdfView.page_widget_controller.chunks)
 
     def get_actual_page_from_display_number(self, display_number: int) -> int:
         """Convert a 1-based display number into a layout index (index into page_widgets/pages_info)"""
@@ -460,6 +463,10 @@ class MainWindow(QMainWindow):
             if hasattr(self.ui, 'm_pageLabel'):
                 self.ui.m_pageLabel.setText(f"of {total_display_pages}")
 
+            # 03.04.2026 - как-то вывести зуммирование на смену страницы
+            # при условии, что это не манипулирование скроллом
+            # self.pageInputEditing()
+
             if hasattr(self, 'statusBar'):
                 self.statusBar().showMessage(f"Страница {current_display_page} из {total_display_pages}. Часть {current_chunk} из {total_chunk}")
         else:
@@ -475,7 +482,7 @@ class MainWindow(QMainWindow):
     #     pass
 
     def go_to_page_input(self):
-        """User typed a page number: convert display number -> layout index -> scroll and highlight."""
+        """User typed a page number: convert display number -> layout index -> go_to_page"""
         try:
             if hasattr(self.ui, 'm_pageInput'):
                 page_text = self.ui.m_pageInput.text()
@@ -483,16 +490,10 @@ class MainWindow(QMainWindow):
                 total_pages = self.get_total_display_pages()
                 if 1 <= display_page_num <= total_pages:
                     layout_index = self.get_actual_page_from_display_number(display_page_num)
-                    self.ui.pdfView.scroll_to_page(layout_index)
+                    if hasattr(self.ui.pdfView, 'go_to_page'):
+                        # self.ui.pdfView.go_to_page(layout_index)
 
-                    # Directly sync the thumbnail highlight. scroll_to_page fires
-                    # page_changed only via a 200 ms scroll timer, so the first call
-                    # may arrive before the thumbnail widget is ready. Calling
-                    # set_current_page here ensures the highlight is always applied.
-                    orig_page_num = self.ui.pdfView.page_widget_controller.getPageInfoByIndex(layout_index).page_num
-                    if hasattr(self.ui.thumbnailList, 'set_current_page'):
-                        self.ui.thumbnailList.set_current_page(orig_page_num)
-                    self.update_page_info()
+                        self.ui.pdfView.scroll_to_page(layout_index)
                 else:
                     current_display_page = self.get_current_display_page_number()
                     self.ui.m_pageInput.setText(str(current_display_page))
@@ -505,13 +506,13 @@ class MainWindow(QMainWindow):
     def ask_save_changes(self) -> int:
         """Спросить пользователя, хочет ли он сохранить изменения"""
         msg_box = QMessageBox(self)
-        msg_box.setWindowTitle("Несохранённые изменения")
-        msg_box.setText("В документе есть несохранённые изменения. Хотите ли сохранить их?")
+        msg_box.setWindowTitle("")  # only write app name
+        msg_box.setText("Сохранить изменения?")  # перед закрытием
         msg_box.setIcon(QMessageBox.Question)
 
         # Создаем кнопки с русским текстом
-        save_btn = msg_box.addButton("Сохранить", QMessageBox.AcceptRole)
-        discard_btn = msg_box.addButton("Не сохранять", QMessageBox.DestructiveRole)
+        save_btn = msg_box.addButton("Да", QMessageBox.AcceptRole)
+        discard_btn = msg_box.addButton("Нет", QMessageBox.DestructiveRole)
         cancel_btn = msg_box.addButton("Отмена", QMessageBox.RejectRole)
 
         # Устанавливаем кнопку по умолчанию
@@ -557,13 +558,43 @@ class MainWindow(QMainWindow):
 
     def on_action_draw_toggled(self, checked: bool):
         """Toggle drawing mode. If turning off and there are unsaved drawings prompt Save/Discard/Cancel."""
+
+        if self.ui.pdfView.drawing_mode == checked:
+            return
+        # При включении режима рисования dict_vectors ВСЕГДА пустой (иначе - где-то произошла ошибка)
+        is_has_value = self.ui.pdfView.page_widget_controller.dict_vectors.isHasValue()
+
+        if is_has_value:
+            #  при да - все выполняется как обычно (даже не смотрим)
+            #  при нет - dict_vectors очищается и далее как обычно
+            #  при отмене - Возвращаем обратный сhecked и return
+            reply = self.ask_save_changes()
+            if reply == QMessageBox.Discard:
+                self.ui.pdfView.page_widget_controller.dict_vectors.Clear()
+            elif reply == QMessageBox.Cancel:
+                self.ui.actionDraw.setChecked(not checked)
+                return
+
+        self.ui.pdfView.drawing_mode = checked
+
         if checked:
-            # enable drawing mode
-            if hasattr(self.ui.pdfView, 'set_drawing_mode'):
-                self.ui.pdfView.set_drawing_mode(True)
+            self.ui.m_pageInput.hide()
+            self.ui.m_pageLabel.hide()
+
+            self.ui.pdfView._create_drawing_tools()
+            self.ui.pdfView.drawing_tools.show()
+
+            self.ui.pdfView.wheelCtrl = self.ui.pdfView.ctrlDrawing
         else:
-            if hasattr(self.ui.pdfView, 'set_drawing_mode'):
-                self.ui.pdfView.set_drawing_mode(False)
+            self.ui.m_pageInput.show()
+            self.ui.m_pageLabel.show()
+
+            self.ui.pdfView.drawing_tools.hide()
+            self.ui.pdfView.wheelCtrl = self.ui.pdfView.ctrlMain
+
+        self.update_ui_state()
+        # refresh UI (как будто бы не самый лучший способ вызова, подумать)
+        self.ui.thumbnailList.refresh_thumbnails(self.ui.pdfView.document)
 
     def on_document_modified(self, is_modified: bool):
         """Handle document modification status change"""

@@ -145,11 +145,8 @@ class ExportPagesDialog(QDialog):
         layout.addWidget(self.delete_checkbox)
 
         # ── Row 4: Separate files checkbox ──────────────────────────────
-        # For a single-page document the checkbox is pre-checked and locked:
-        # there is only one page to export, so "separate files" is the only
-        # meaningful option and the format combo must always be available.
         single_page_doc = (total_pages == 1)
-        self.separate_checkbox = QCheckBox("Сохранить страницы как отдельные файлы:")
+        self.separate_checkbox = QCheckBox("Извлечь страницы как отдельные файлы:")
         if single_page_doc:
             self.separate_checkbox.setChecked(True)
             self.separate_checkbox.setEnabled(False)
@@ -158,9 +155,9 @@ class ExportPagesDialog(QDialog):
         # ── Row 5: Format combo ─────────────────────────────────────────
         self._fmt_map = [
             ("PDF (документ)", "PDF"),
-            ("PNG (изображение)", "PNG"),
-            ("JPEG (изображение)", "JPEG"),
-            ("BMP (изображение)", "BMP"),
+            ("PNG (изобр.)", "PNG"),
+            ("JPEG (изобр.)", "JPEG"),
+            ("BMP (изобр.)", "BMP"),
         ]
         fmt_layout = QHBoxLayout()
         self.format_combo = QComboBox()

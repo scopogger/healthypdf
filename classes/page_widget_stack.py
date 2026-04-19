@@ -12,7 +12,7 @@ from classes.mapPage import MapPage
 
 class PageWidgetStack(QVBoxLayout):
 
-    pagePainted = Signal()
+    # pagePainted = Signal()
 
     def __init__(self, mainWidget: QWidget, spacing: int = 10, all_margins: int = 10, map_step: int = 10):
         super(PageWidgetStack, self).__init__(mainWidget)
@@ -49,6 +49,7 @@ class PageWidgetStack(QVBoxLayout):
     def __getitem__(self, item) -> PageWidget:
         return self.page_widgets[item]
 
+    # Как же я эти чанки терпеть не могу ааааааааааааааааааааааааааааааааааааааааааааааааааааааааааааааааааааааааааааааа
     def _build_chunks(self, total_height: int = -1):
         self.chunks.clear()
         self.chunks = []
@@ -159,6 +160,22 @@ class PageWidgetStack(QVBoxLayout):
         except Exception as e:
             raise Exception(f"Ошибка при удалении страницы: {e}")
 
+    # "Обрезка" всех виджетов, кроме указанного, и его возврат на дальнейшую обработку
+    def clipPageWidget(self, page_num: int) -> PageWidget:
+        clip_page_widget = self.getPageWidgetByIndex(page_num)
+
+        # Собираем все неиспользуемые виджеты
+        inactive_widgets = [w for w in self
+                            if w.page_info.page_num != page_num]
+        for w in inactive_widgets:
+            self.removePageWidget(w)
+        clip_page_widget.layout_index = 0
+
+        if self.isSpacer:
+            self.removeSpacer()
+
+        return clip_page_widget
+
     def addPageWidgetByIndexInLayout(self, index: int):
         try:
             widget = list(filter(lambda x: x.layout_index == index, self.page_widgets))
@@ -233,14 +250,14 @@ class PageWidgetStack(QVBoxLayout):
         total_height = self.contentsMargins().top() + spacing
         zoom = self.zoom
 
-        print(f"Current Chunk Index: {self.current_chunk_index}")
+        # print(f"Current Chunk Index: {self.current_chunk_index}")
 
         heightScrollWithChunk = heightScroll + \
                                 self.MAX_HEIGHT_CHUNK * self.current_chunk_index - 1 \
             if self.current_chunk_index > 0 and withChunk \
             else heightScroll
 
-        print(f"HSWC: {heightScrollWithChunk}; ")
+        # print(f"HSWC: {heightScrollWithChunk}; ")
 
         for i in range(self.countTotalPagesInfo):
             height = self.pages_info[i].width if abs(self.rotation_view_deg) == 90 else self.pages_info[i].height
@@ -258,7 +275,7 @@ class PageWidgetStack(QVBoxLayout):
     def needCalculateByScrollHeight(self, scroll: int):
         index = self.getCurrPageIndexByHeightScroll(scroll)
 
-        print(f"index: {index} in scroll: {scroll}")
+        # print(f"index: {index} in scroll: {scroll}")
 
         widget = self.getPageWidgetByIndex(index)
 
@@ -418,7 +435,8 @@ class PageWidgetStack(QVBoxLayout):
             if (len(strokes) > 0) or (len(rects) > 0):
                 self.page_vectors[orig_page_num] = {"strokes": list(strokes), "rects": list(rects)}
                 self.dict_vectors.Add(self.page_vectors[orig_page_num], orig_page_num)
-                self.pagePainted.emit()
+                # 16.04.2026 - убрал, т.к. будет реализовано через pdfView
+                # self.pagePainted.emit()
                 print(f"[PDFViewer] _save_vector_immediate: saved vector for orig {orig_page_num}")
             else:
                 if orig_page_num in self.page_vectors:

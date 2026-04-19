@@ -10,7 +10,6 @@ def translate_ui(self, main_window, language):
 
     if language == 'en' or language == 'en-US':
         # Window title — use the official Russian name regardless of UI language
-        # (the product is Russian-only; English mode is for development only)
         main_window.setWindowTitle(APP_NAME)
 
         # File menu and actions

@@ -1,8 +1,9 @@
-import copy
+# import copy
 import math
 import os
 import gc
 import threading
+
 from settings_manager import SettingsManager
 from typing import Optional, Dict, Set, List
 from classes.document import Document, PageInfo
@@ -11,7 +12,6 @@ from classes.rendering import PageRenderWorker
 
 from classes.page_widget_stack import PageWidgetStack
 from classes.page_widget import PageWidget
-
 from PySide6.QtWidgets import (
     QScrollArea, QVBoxLayout, QWidget, QLabel, QMessageBox, QInputDialog, QFrame, QPushButton, QLineEdit, QApplication,
     QSpacerItem, QSizePolicy, QButtonGroup, QAbstractButton, QHBoxLayout, QColorDialog
@@ -39,20 +39,23 @@ class PDFViewer(QScrollArea):
 
     zoom_type_changed = Signal(int)
 
+    # TODO PDFViewer работает в одном режиме. Т.е. у нет разделения по режимам
+    #  что, если сделать два режима - основной и рисовальный? И в целом сделать класс режимов
+    #  (если потребуются еще режимы)
+
     def __init__(self, parent=None):
         super().__init__(parent)
-        self.max_loaded_pages = 15  # Maximum rendered pages in memory
-        self.visible_page_limit = 10  # Initial number of placeholders to create
-        from PySide6.QtCore import QTimer
+        # self.max_loaded_pages = 15  # Maximum rendered pages in memory
+        # self.visible_page_limit = 10  # Initial number of placeholders to create
 
         self._center_timer = QTimer(self)
         self._center_timer.setSingleShot(True)
         self._center_timer.timeout.connect(lambda: self._do_pending_center())
 
         self._pending_center_index = None
-        self._last_center_time = 0
+        # self._last_center_time = 0
         # per-original-page annotation storage (orig_page_num => PNG bytes)
-        self.page_annotations = {}
+        # self.page_annotations = {}
         # per-original-page vector storage (orig_page_num => {"strokes":[...], "rects":[...]})
         self.page_vectors = {}
 
@@ -66,8 +69,7 @@ class PDFViewer(QScrollArea):
         # self.page_widgets: list[PageWidget] = []  # same order as pages_info
         self.pages_container = QWidget()
         self.page_widget_controller: PageWidgetStack = PageWidgetStack(self.pages_container)
-        self.page_widget_controller.pagePainted.connect(lambda: self.document_modified.emit(True))
-
+        # self.page_widget_controller.pagePainted.connect(lambda: self.document_modified.emit(True))
         self.pages_container.setSizePolicy(QSizePolicy.Policy.Preferred, QSizePolicy.Policy.Preferred)
         self.zoom_level = 1.0
         self._zoom_type = 0
@@ -115,8 +117,11 @@ class PDFViewer(QScrollArea):
 
         self.main_spacer = QSpacerItem(0, 0, QSizePolicy.Policy.Fixed, QSizePolicy.Policy.Fixed)
 
+        self._drawing_mode = False
+
+        self.wheelCtrl = self.ctrlMain
+
     # auto-zoom properties
-    ###
     @property
     def zoom_type(self):
         return self._zoom_type
@@ -127,7 +132,47 @@ class PDFViewer(QScrollArea):
             self._zoom_type = value
             self.zoom_action[self._zoom_type]()
 
-    ###
+    @property
+    def drawing_mode(self) -> bool:
+        return self._drawing_mode
+
+    @drawing_mode.setter
+    def drawing_mode(self, value: bool):
+        if self._drawing_mode == value:
+            return
+
+        self._drawing_mode = value
+        cur_page_num = self.get_current_pageInfo_index()
+
+        cur_page_widget = self.page_widget_controller.clipPageWidget(cur_page_num)
+        cur_page_widget.overlay.set_enabled(value)
+
+        self.reinitializePageWidgets()
+
+        # TODO - сюда ввести отключение/включение миниатюр, инструментов рисования, отключение зума и т.д.
+        # Включение/отключение инструментов
+        # if value:
+        #
+        #     # 1) Закрыть панель миниатюр/закладок
+        #     # 2) Открыть панель инструментов (новую)
+        #     # 3) Перехват события колесика мыши (чтобы избавиться от зума)
+        #
+        #
+        #     self.verticalScrollBar().setValue(0)
+        # else:
+        #     # Обратные действия пунктам из условия выше
+        #
+        #     # self.drawing_tools.hide()
+        #     # is_has_value = self.page_widget_controller.dict_vectors.isHasValue()
+        #
+        #     # При выходе закрепляем изменения (при наличии)
+        #     # if is_has_value:
+        #     self.overlay_render(self.document.get_page(cur_page_widget.page_info.page_num))
+        self.verticalScrollBar().setValue(0)
+        self.overlay_render(self.document.get_page(cur_page_widget.page_info.page_num))
+        self.refresh_render()
+
+        self.scroll_to_page(cur_page_widget.page_info.page_num)
 
     def setup_ui(self):
         """Setup the scrollable area"""
@@ -181,9 +226,18 @@ class PDFViewer(QScrollArea):
             print(f"Error during authentication: {e}")
             return None
 
+    # 14.04.2026 ТЕСТ
     def reinitializePageWidgets(self):
-        pages_info = [self.document.get_page_info(i) for i in range(self.document.get_page_count())]
+        pages_info = []
+        if not self.drawing_mode:
+            pages_info = [self.document.get_page_info(i) for i in range(self.document.get_page_count())]
+        else:
+            pages_info.append(self.document.get_page_info(self.get_current_page()))
         self.page_widget_controller.initPageInfoList(pages_info)
+
+    # def reinitializePageWidgets(self):
+    #     pages_info = [self.document.get_page_info(i) for i in range(self.document.get_page_count())]
+    #     self.page_widget_controller.initPageInfoList(pages_info)
 
     def open_document(self, file_path: str) -> bool:
         """Open PDF document with immediate optimization"""
@@ -469,7 +523,7 @@ class PDFViewer(QScrollArea):
             self.active_workers.clear()
 
     # ---------------- Scrolling & visible pages ----------------
-    def on_scroll(self, value):
+    def on_scroll(self):
         """Handle scroll events with delay"""
         if self.CtrlPressed:
             return
@@ -477,10 +531,10 @@ class PDFViewer(QScrollArea):
         self.scroll_timer.start(200)
 
     def update_visible_pages(self):
-        """Ultra-conservative visible page management with dynamic placeholder loading"""
+        """это буквально обёртка try-except"""
         if not self.document:
             return
-        # Guard against re-entrant calls (rapid scroll + timer firing simultaneously)
+        # testing guard against re-entrant calls (rapid scroll + timer firing simultaneously)
         if getattr(self, '_updating_visible', False):
             return
         self._updating_visible = True
@@ -493,8 +547,9 @@ class PDFViewer(QScrollArea):
         gc.collect()
 
     def _do_update_visible_pages(self):
-        """Inner implementation called by update_visible_pages."""
+        """Ultra-conservative visible page management with dynamic placeholder loading"""
         value = self.verticalScrollBar().value()
+
         max_scroll = self.verticalScrollBar().maximum()
 
         if value >= max_scroll - 10 \
@@ -508,20 +563,39 @@ class PDFViewer(QScrollArea):
             self.update_container_full_size()
             self.verticalScrollBar().setValue(max_scroll - 150)
 
+        # print(f"Chunk index: "
+        #       f"{self.page_widget_controller.current_chunk_index}/{len(self.page_widget_controller.chunks) - 1};"
+        #       f"")
+
         viewport_rect = self.viewport().rect()
+
         # Re-read scroll value after potential setValue() calls above
-        scroll_y = self.verticalScrollBar().value()
+        # scroll_y = self.verticalScrollBar().value()
+        scroll_y = value
+
+        # visible_layout_indices: Set[int] = set()
+        # current_center_layout_index = None
         viewport_center_y = scroll_y + viewport_rect.height() // 2
 
         isNeedCalculateMap = self.page_widget_controller.needCalculateByScrollHeight(viewport_center_y)
+
+        # for layout_idx in self.last_visible_layout_indices - visible_layout_indices:
+        #     if 0 <= layout_idx < self.page_widgets[-1:][0].layout_index:
+        #         self.clear_page_widget(layout_idx)
+
+        # print(f"need calculate? - {isNeedCalculateMap}")
         curIndex = self.page_widget_controller.getCurrPageIndexByHeightScroll(viewport_center_y)
 
         if not self.document:
             return
+        # curWidg = self.page_widget_controller.getPageWidgetByIndex(curIndex)
 
         self.page_changed.emit(self.page_widget_controller.getPageInfoByIndex(curIndex).page_num)
 
         if isNeedCalculateMap:
+            # for widget in self.page_widget_controller:
+            #     self.clear_page_widget(widget)
+
             self.page_widget_controller.calculateMapPagesByIndex(curIndex)
 
         # Snapshot before iterating: calculateMapPagesByIndex may mutate page_widgets,
@@ -531,11 +605,26 @@ class PDFViewer(QScrollArea):
             if not self.document:
                 break
             try:
+                # Re-read scroll value after potential setValue() calls above
+                # scroll_y = self.verticalScrollBar().value()
                 if widget.isVisibleByViewport(scroll_y - viewport_rect.height() * 2, viewport_rect.height() * 3):
                     self.load_page_if_needed(widget)
             except RuntimeError:
                 # Widget was deleted between snapshot and this call (rapid chunk switch)
                 pass
+
+        # load visible
+        # for layout_idx in visible_layout_indices:
+        #     if 0 <= layout_idx <= self.page_widgets[-1:][0].layout_index:
+        #         self.load_page_if_needed(layout_idx)
+
+        # self.last_visible_layout_indices = visible_layout_indices.copy()
+
+        # if current_center_layout_index is not None:
+        #     orig_center = self.pages_info[current_center_layout_index].page_num
+        #     self.page_changed.emit(orig_center)
+
+        gc.collect()
 
     def update_container_full_size(self):
         """Update container size to account for ALL pages (even not-yet-created ones)"""
@@ -559,13 +648,11 @@ class PDFViewer(QScrollArea):
         # total_height += margins.top() + margins.bottom()
         # Set container minimum size to ensure scrollbar works correctly
 
-        # print(f"TtH: {total_height}")
-
         # if total_height >= self.page_widget_controller.MAX_HEIGHT_CHUNK:
         #     self.pages_container.setMinimumHeight(self.page_widget_controller.MAX_HEIGHT_CHUNK)
         # else:
 
-        print(f"Set Height Container: {min(total_height, self.page_widget_controller.MAX_HEIGHT_CHUNK)}")
+        # print(f"Set Height Container: {min(total_height, self.page_widget_controller.MAX_HEIGHT_CHUNK)}")
 
         self.pages_container.setMinimumHeight(min(total_height, self.page_widget_controller.MAX_HEIGHT_CHUNK))
 
@@ -695,14 +782,15 @@ class PDFViewer(QScrollArea):
             self.current_render_id += 1
             render_id = f"render_{self.current_render_id}_{layout_index}"
 
-        orig_page = self.page_widget_controller.getPageInfoByIndex(layout_index).page_num
+        orig_page_num = self.page_widget_controller.getPageInfoByIndex(layout_index).page_num
         # rotation = self.page_rotations.get(orig_page, 0)
 
         rotation = self.rotate_view_deg
+        page = self.document.get_page(orig_page_num)
 
         worker = PageRenderWorker(
-            self.document.get_page(orig_page),
-            orig_page,
+            page,
+            orig_page_num,
             self.zoom_level,
             self.on_page_rendered,
             render_id,
@@ -890,88 +978,97 @@ class PDFViewer(QScrollArea):
     #     print(f"x: {ev.position().x()}, y: {ev.position().y()}")
     #     print(f"V POS: {self.verticalScrollBar().value() / (self.verticalScrollBar().maximum())}")
 
+    # Мысль - делегат внутри wheelEvent
+    # Основной режим -> Колесико, прокрутка
+    # Режим рисования -> ---, прокрутка
     def wheelEvent(self, event: QWheelEvent):
+        # self.wheelAction(event)
         if QApplication.keyboardModifiers() == Qt.KeyboardModifier.ControlModifier:
-            self.CtrlPressed = True
+            self.wheelCtrl(event)
+            return
+        super().wheelEvent(event)
 
-            self.zoom_type = 0
-            angle = event.angleDelta().y()
-            factor = 1.25 if angle > 0 else 0.8
-            old_zoom = self.zoom_level
-            new_zoom = max(0.25, min(5.0, old_zoom * factor))
+    def ctrlMain(self, event: QWheelEvent):
+        self.CtrlPressed = True
 
-            if abs(new_zoom - old_zoom) < 0.001:
-                event.accept()
-                return
+        self.zoom_type = 0
+        angle = event.angleDelta().y()
+        factor = 1.25 if angle > 0 else 0.8
+        old_zoom = self.zoom_level
+        new_zoom = max(0.25, min(5.0, old_zoom * factor))
 
-            mouse_pos = event.position().toPoint()
-            mouse_pos_x = mouse_pos.x()
-            mouse_pos_y = mouse_pos.x()
-            viewport = self.viewport()
-            viewport_width = viewport.width()
-            viewport_height = viewport.height()
+        if abs(new_zoom - old_zoom) < 0.001:
+            event.accept()
+            return
 
-            v_scrollbar = self.verticalScrollBar()
-            h_scrollbar = self.horizontalScrollBar()
-            old_v_scroll = v_scrollbar.value()
-            old_h_scroll = h_scrollbar.value()
+        mouse_pos = event.position().toPoint()
+        mouse_pos_x = mouse_pos.x()
+        mouse_pos_y = mouse_pos.x()
+        viewport = self.viewport()
+        viewport_width = viewport.width()
+        viewport_height = viewport.height()
 
-            content_widget = self.pages_container
-            if content_widget:
-                content_rect = content_widget.rect()
-                mouse_in_content_x = old_h_scroll + mouse_pos_x  # mouse_pos.x()
-                mouse_in_content_y = old_v_scroll + mouse_pos_y  # mouse_pos.y()
+        v_scrollbar = self.verticalScrollBar()
+        h_scrollbar = self.horizontalScrollBar()
+        old_v_scroll = v_scrollbar.value()
+        old_h_scroll = h_scrollbar.value()
 
-                if (mouse_in_content_x < 0 or mouse_in_content_x >= content_rect.width() or
-                        mouse_in_content_y < 0 or mouse_in_content_y >= content_rect.height()):
-                    target_x = old_h_scroll + viewport_width / 2
-                    target_y = old_v_scroll + viewport_height / 2
-                else:
-                    target_x = mouse_in_content_x
-                    target_y = mouse_in_content_y
-            else:
+        content_widget = self.pages_container
+        if content_widget:
+            content_rect = content_widget.rect()
+            mouse_in_content_x = old_h_scroll + mouse_pos_x  # mouse_pos.x()
+            mouse_in_content_y = old_v_scroll + mouse_pos_y  # mouse_pos.y()
+
+            if (mouse_in_content_x < 0 or mouse_in_content_x >= content_rect.width() or
+                    mouse_in_content_y < 0 or mouse_in_content_y >= content_rect.height()):
                 target_x = old_h_scroll + viewport_width / 2
                 target_y = old_v_scroll + viewport_height / 2
-
-            self.set_zoom(new_zoom)
-            # для зума к курсору (потестировать)
-            # self.set_zoom(new_zoom, mouse_pos_x / viewport_width, mouse_pos_y / viewport_height)
-            QApplication.processEvents()
-
-            zoom_ratio = new_zoom / old_zoom
-            new_target_x = target_x * zoom_ratio
-            new_target_y = target_y * zoom_ratio
-
-            new_h_scroll = new_target_x - (viewport_width / 2)
-            new_v_scroll = new_target_y - (viewport_height / 2)
-
-            v_max = v_scrollbar.maximum()
-            h_max = h_scrollbar.maximum()
-
-            if new_h_scroll < 0 and h_max > 0:
-                new_h_scroll = max(0, min(h_max * 0.1, new_target_x * 0.5))
-            elif new_h_scroll > h_max:
-                new_h_scroll = h_max
             else:
-                new_h_scroll = max(0, new_h_scroll)
-
-            if new_v_scroll < 0 and v_max > 0:
-                new_v_scroll = max(0, min(v_max * 0.1, new_target_y * 0.5))
-            elif new_v_scroll > v_max:
-                new_v_scroll = v_max
-            else:
-                new_v_scroll = max(0, new_v_scroll)
-
-            # TODO: Оптимизировать под новую систему с чанками (вероятно, уже не пригодится)
-            # h_scrollbar.setValue(int(new_h_scroll))
-            # v_scrollbar.setValue(int(new_v_scroll))
-
-            self.update()
-            event.accept()
-            self.CtrlPressed = False
-            # self.set_zoom_signal.emit(new_zoom)
+                target_x = mouse_in_content_x
+                target_y = mouse_in_content_y
         else:
-            super().wheelEvent(event)
+            target_x = old_h_scroll + viewport_width / 2
+            target_y = old_v_scroll + viewport_height / 2
+
+        self.set_zoom(new_zoom)
+        # для зума к курсору (потестировать)
+        # self.set_zoom(new_zoom, mouse_pos_x / viewport_width, mouse_pos_y / viewport_height)
+        QApplication.processEvents()
+
+        zoom_ratio = new_zoom / old_zoom
+        new_target_x = target_x * zoom_ratio
+        new_target_y = target_y * zoom_ratio
+
+        new_h_scroll = new_target_x - (viewport_width / 2)
+        new_v_scroll = new_target_y - (viewport_height / 2)
+
+        v_max = v_scrollbar.maximum()
+        h_max = h_scrollbar.maximum()
+
+        if new_h_scroll < 0 and h_max > 0:
+            new_h_scroll = max(0, min(h_max * 0.1, new_target_x * 0.5))
+        elif new_h_scroll > h_max:
+            new_h_scroll = h_max
+        else:
+            new_h_scroll = max(0, new_h_scroll)
+
+        if new_v_scroll < 0 and v_max > 0:
+            new_v_scroll = max(0, min(v_max * 0.1, new_target_y * 0.5))
+        elif new_v_scroll > v_max:
+            new_v_scroll = v_max
+        else:
+            new_v_scroll = max(0, new_v_scroll)
+
+        # TODO: Оптимизировать под новую систему с чанками (вероятно, уже не пригодится)
+        # h_scrollbar.setValue(int(new_h_scroll))
+        # v_scrollbar.setValue(int(new_v_scroll))
+
+        self.update()
+        event.accept()
+        self.CtrlPressed = False
+
+    def ctrlDrawing(self, event: QWheelEvent):
+        pass
 
     def previous_page(self):
         cur_page = self.get_current_pageInfo_index()
@@ -1146,6 +1243,7 @@ class PDFViewer(QScrollArea):
         self.reinitializePageWidgets()
 
         self.doc_changing()
+        self.refresh_render()
 
         if orig_current in self.page_cache.cache:
             del self.page_cache.cache[orig_current]
@@ -1182,6 +1280,7 @@ class PDFViewer(QScrollArea):
 
         self.reinitializePageWidgets()
         self.doc_changing()
+        self.refresh_render()
 
         return True
 
@@ -1208,6 +1307,7 @@ class PDFViewer(QScrollArea):
 
         self.reinitializePageWidgets()
         self.doc_changing()
+        self.refresh_render()
 
         return True
 
@@ -1229,6 +1329,7 @@ class PDFViewer(QScrollArea):
         self.document.move_page(orig_current, orig_target)
 
         self.doc_changing()
+        self.refresh_render()
 
         return True
 
@@ -1237,7 +1338,6 @@ class PDFViewer(QScrollArea):
         self.document_modified.emit(True)
 
         self.update_all_page_labels()
-        print("DELETING")
         self.last_visible_layout_indices.clear()
         QTimer.singleShot(50, self.update_visible_pages)
 
@@ -1245,10 +1345,6 @@ class PDFViewer(QScrollArea):
             self.page_changed.emit(self.get_current_page())
         except Exception:
             pass
-        self.refresh_render()
-
-    def refresh_render_by_index(self, index):
-        pass
 
     def refresh_render(self):
 
@@ -1308,19 +1404,12 @@ class PDFViewer(QScrollArea):
     def move_page_down(self):
         return self._move_page(1)
 
-    def overlay_render(self, new_page: Page, width: int, height: int, layout_idx: int):
-
-        vec = self.page_widget_controller.dict_vectors.vectors[layout_idx]
-
-        print(f"vec {vec}")
-        # Этот блок избыточен - страница здесь полюбому с пометками
-        # if overlay empty but stored vectors exist, use them
-        # if (not vec.get("strokes") and not vec.get("rects")) and (
-        #         layout_idx in self.page_vectors):
-        #     vec = self.page_vectors.get(layout_idx, {"strokes": [], "rects": []})
-        # if vec and (vec.get("strokes") or vec.get("rects")):
-        #     # draw each primitive into the PDF page as vector shapes
-        #     pass
+    def overlay_render(self, new_page: Page):
+        layout_idx = new_page.number
+        rect = new_page.rect
+        vec = self.page_widget_controller.dict_vectors.getByIndex(layout_idx)  # vectors[layout_idx]
+        if vec is None:
+            return
 
         shape = new_page.new_shape()
         # page_rect = rect  # src_page.rect mapped to new_page
@@ -1330,8 +1419,8 @@ class PDFViewer(QScrollArea):
         #                                              None) is not None else pw.width() or 1
         # widget_h = pw.base_pixmap.height() if getattr(pw, "base_pixmap",
         #                                               None) is not None else pw.height() or 1
-        pdf_w = float(width)
-        pdf_h = float(height)
+        pdf_w = float(rect.width)
+        pdf_h = float(rect.height)
 
         # draw strokes: points are normalized (0..1) in overlay
         for s in vec.get("strokes", []):
@@ -1378,17 +1467,13 @@ class PDFViewer(QScrollArea):
             shape.commit()
             shape = new_page.new_shape()
 
-    def save_changes(self, file_path: str = None) -> bool:
+        self.page_widget_controller.dict_vectors.Remove(layout_idx)
+        self.doc_changing()
 
+    def save_changes(self, file_path: str = None) -> bool:
         """Save changes to file: build page_order by iterating layout and using ORIGINAL page numbers.
         This version inserts the original page content and then overlays annotation PNG (if present) on top.
         """
-        # print(f"obj {self.dict_vectors.vectors}")  # page_widget_controller.page_vectors
-
-        # for i in self.dict_vectors.vectors.keys():
-        #     print(f"item {self.dict_vectors.vectors[i]}")
-        # return False
-
         if not self.document:  # or not self.is_modified
             return True
         try:
@@ -1401,244 +1486,12 @@ class PDFViewer(QScrollArea):
                 save_path = self.doc_path
 
             try:
-                # внести черкаши в текущий объект self.document
-                for key in self.page_widget_controller.dict_vectors.vectors.keys():
-                    src_page = self.document.get_page(key)
-
-                    # Нужно или нет - пока непонятно, оставлю комментарием
-                    # Apply rotation if it exists BEFORE rendering
-                    # rotation = self.page_rotations.get(layout_idx, 0)
-                    # if rotation != 0:
-                    #     src_page.set_rotation(rotation)
-
-                    # Для определения штампов и прочего
-                    # annotations = list(src_page.annots())
-                    # print(f"ANNOTATIONS:{annotations}")
-                    # for ann in annotations:
-                    #     print(f"TYPE:{ann.type}")
-
-                    rect = src_page.rect
-
-                    # Render original page with rotation applied to pixmap
-                    # zoom = 2.5
-                    # mat = fitz.Matrix(a=zoom, d=zoom)  # ,
-                    # pix = src_page.get_pixmap(alpha=False, matrix=mat)
-                    # base_bytes = pix.tobytes("jpg")
-                    # new_page = self.document.current_doc.new_page(pno=key, width=rect.width, height=rect.height)
-                    # new_page.insert_image(rect, stream=base_bytes)
-
-                    # Рисуем поверх страницы
-                    self.overlay_render(src_page, rect.width, rect.height, key)
-
                 # в конце сохраняем
                 self.document.save(save_path, save_path == self.doc_path)
                 return True
             except Exception as e:
                 print(f"ERROR {e}")
                 return False
-
-            # new_doc = fitz.open()
-            new_doc = Document()
-            # new_new_doc = copy.deepcopy(self.document.current_doc)
-            # page_order: list of original page numbers in current layout (skip deleted originals)
-            page_order = []
-            for i in range(self.page_widget_controller.count()):
-                item = self.page_widget_controller.itemAt(i)
-                if item and item.widget() and not item.widget().isHidden():
-                    widget = item.widget()
-                    # find layout idx
-                    for j, page_widget in enumerate(self.page_widget_controller):
-                        if page_widget == widget:
-                            orig = self.page_widget_controller.getPageInfoByIndex(j).page_num
-                            page_order.append(orig)
-                            break
-
-            for orig_page_num in page_order:
-                if 0 <= orig_page_num < self.document.get_page_count():
-                    # Get source page
-                    src_page = self.document.get_page(orig_page_num)
-
-                    # Apply rotation if it exists BEFORE rendering
-                    rotation = self.page_rotations.get(orig_page_num, 0)
-                    if rotation != 0:
-                        src_page.set_rotation(rotation)
-
-                    rect = src_page.rect
-                    new_page = new_doc.current_doc.new_page(width=rect.width, height=rect.height)
-
-                    # Render original page with rotation applied to pixmap
-                    zoom = 2.5
-                    mat = fitz.Matrix(a=zoom, d=zoom)  # ,
-                    pix = src_page.get_pixmap(alpha=False, matrix=mat)
-                    base_bytes = pix.tobytes("jpg")
-                    new_page.insert_image(rect, stream=base_bytes)
-
-                    # if we have annotations for layout index of orig_page_num, draw them on top
-                    layout_idx = self.layout_index_for_original(orig_page_num)
-                    if layout_idx is not None and 0 <= layout_idx < self.page_widget_controller.getLastPageWidget().layout_index:
-                        # pw = next((w for w in self.page_widgets if w.layout_index == layout_idx), None)
-                        pw = self.page_widget_controller.getPageWidgetByIndex(layout_idx)
-                        # Prefer vector annotations if present
-                        try:
-                            # Vector path handling
-                            vec = {}
-                            try:
-                                vec = pw.overlay.get_vector_shapes()
-                            except Exception:
-                                vec = {"strokes": [], "rects": []}
-                            # if overlay empty but stored vectors exist, use them
-                            if (not vec.get("strokes") and not vec.get("rects")) and (
-                                    orig_page_num in self.page_vectors):
-                                vec = self.page_vectors.get(orig_page_num, {"strokes": [], "rects": []})
-
-                            if vec and (vec.get("strokes") or vec.get("rects")):
-                                # draw each primitive into the PDF page as vector shapes
-                                try:
-                                    shape = new_page.new_shape()
-                                    page_rect = rect  # src_page.rect mapped to new_page
-                                    # If the PageWidget has a base_pixmap, compute mapping factors
-                                    widget_w = pw.base_pixmap.width() if getattr(pw, "base_pixmap",
-                                                                                 None) is not None else pw.width() or 1
-                                    widget_h = pw.base_pixmap.height() if getattr(pw, "base_pixmap",
-                                                                                  None) is not None else pw.height() or 1
-                                    pdf_w = float(page_rect.width)
-                                    pdf_h = float(page_rect.height)
-
-                                    # draw strokes: points are normalized (0..1) in overlay
-                                    for s in vec.get("strokes", []):
-                                        pts = s.get("points", [])
-                                        if not pts or len(pts) < 2:
-                                            continue
-                                        stroke_color = s.get("color", (0, 0, 0))
-                                        stroke_width_px = float(s.get("width", 1))
-                                        # convert width px -> pdf units (use pdf_w/widget_w scale)
-                                        stroke_width = (stroke_width_px / max(1.0, widget_w)) * pdf_w
-
-                                        last_point = None
-                                        for nx, ny in pts:
-                                            x = nx * pdf_w
-                                            y = ny * pdf_h
-                                            if last_point is None:
-                                                last_point = (x, y)
-                                            else:
-                                                shape.draw_line(last_point, (x, y))
-                                                last_point = (x, y)
-
-                                        # finish this stroke with stroke_color and stroke_width
-                                        r, g, b = stroke_color
-                                        # map 0-255 -> 0..1
-                                        shape.finish(color=(r / 255.0, g / 255.0, b / 255.0), fill=None,
-                                                     width=stroke_width)
-                                        shape.commit()
-                                        # create a fresh shape object for next primitive
-                                        shape = new_page.new_shape()
-
-                                    # draw rects (filled)
-                                    for rdef in vec.get("rects", []):
-                                        x0, y0, x1, y1 = rdef.get("rect", (0, 0, 0, 0))
-                                        # normalized -> pdf coords
-                                        x_a = x0 * pdf_w
-                                        y_a = y0 * pdf_h
-                                        x_b = x1 * pdf_w
-                                        y_b = y1 * pdf_h
-                                        rcol = rdef.get("color", (0, 0, 0))
-                                        rr, rg, rb = rcol
-                                        shape.draw_rect(fitz.Rect(x_a, y_a, x_b, y_b))
-                                        shape.finish(color=(rr / 255.0, rg / 255.0, rb / 255.0),
-                                                     fill=(rr / 255.0, rg / 255.0, rb / 255.0), width=0)
-                                        shape.commit()
-                                        shape = new_page.new_shape()
-
-                                except Exception as e:
-                                    # fallback to raster overlay if vector commit fails
-                                    print(f"[PDFViewer] vector overlay commit failed for orig {orig_page_num}: {e}")
-                                    try:
-                                        ann_bytes = pw.export_annotations_png(int(page_rect.width),
-                                                                              int(page_rect.height))
-                                        if ann_bytes:
-                                            new_page.insert_image(page_rect, stream=ann_bytes, overlay=True)
-                                    except Exception:
-                                        pass
-
-                            else:
-                                # no vector shapes — fallback to PNG overlay if overlay has raster
-                                try:
-                                    ann_bytes = pw.export_annotations_png(int(rect.width), int(rect.height))
-                                    if ann_bytes:
-                                        new_page.insert_image(rect, stream=ann_bytes, overlay=True)
-                                except Exception:
-                                    pass
-                        except Exception:
-                            # if anything goes wrong, keep going (do not abort entire save)
-                            try:
-                                ann_bytes = pw.export_annotations_png(int(rect.width), int(rect.height))
-                                if ann_bytes:
-                                    new_page.insert_image(rect, stream=ann_bytes, overlay=True)
-                            except Exception:
-                                pass
-
-            # Save (atomic replace if saving to original path)
-            if save_path == self.doc_path:
-                import tempfile, shutil
-                temp_fd, temp_path = tempfile.mkstemp(suffix=".pdf")
-                os.close(temp_fd)
-                new_doc.save(temp_path)
-                new_doc.close()
-                self.document.close()
-                shutil.move(temp_path, self.doc_path)
-                # self.document = fitz.open(self.doc_path)
-                self.document = Document(self.doc_path)
-                if self.document.need_auth():  # self.document.needs_pass:
-                    self.document.auth(self.document_password)  # self.document.authenticate(self.document_password)
-            else:
-                new_doc.save(save_path)
-                new_doc.close()
-
-            # clean up temp file and restore path
-            if hasattr(self, '_original_doc_path') and self._original_doc_path:
-                # Remove temp file if it exists
-                if self.doc_path != self._original_doc_path:
-                    try:
-                        # import os
-                        if os.path.exists(self.doc_path):
-                            os.remove(self.doc_path)
-                    except Exception as e:
-                        print(f"Failed to remove temp file: {e}")
-
-                # Restore original path
-                self.doc_path = self._original_doc_path
-                delattr(self, '_original_doc_path')
-
-            # Remove stored annotation bytes for pages we saved (or just clear all for simplicity)
-            try:
-                # If we have a local page_order list used during save, we can delete per-page:
-                # for orig in page_order:
-                #     self.page_annotations.pop(orig, None)
-
-                # after saving succeeded for the document:
-                try:
-                    # remove entries for pages that were saved (page_order)
-                    for orig in page_order:
-                        self.page_vectors.pop(orig, None)
-                except Exception:
-                    pass
-
-                self.page_annotations.clear()
-            except Exception:
-                self.page_annotations = {}
-
-            # Reset modification state (we consider drawings saved)
-            self.is_modified = False
-            # After save, clear per-page overlay dirty flags
-            for w in self.page_widget_controller:
-                try:
-                    w.overlay._dirty = False
-                except Exception:
-                    pass
-            self.deleted_pages.clear()
-            self.page_rotations.clear()
-            self.document_modified.emit(False)
-            return True
 
         except Exception as e:
             QMessageBox.critical(None, "Save Error", f"Failed to save PDF: {e}")
@@ -1705,7 +1558,10 @@ class PDFViewer(QScrollArea):
 
     def set_drawing_mode(self, enabled: bool):
         """Enable or disable drawing mode for all page widgets and show tools panel."""
-        self._drawing_mode = bool(enabled)
+        # self.drawing_mode = bool(enabled)
+        # Проходим по каждому загруженному pageWidget и активируем у него Overlay
+        # TODO - активировать только у той страницы, на которой находимся
+        #  плюс ограничиваем только редактируемой страницей
         for w in self.page_widget_controller:
             try:
                 w.overlay.set_enabled(enabled)
@@ -1924,7 +1780,7 @@ class PDFViewer(QScrollArea):
     def fit_to_height(self):
         """Fit document to height"""
         viewport_height = self.viewport().height() - 50
-        current_layout_idx = self.get_current_pageInfo_index() # get_current_page()
+        current_layout_idx = self.get_current_pageInfo_index()  # get_current_page()
         page_height = self.page_widget_controller.getPageInfoByIndex(current_layout_idx).height
         self.fit_to_generic(viewport_height, page_height)
 

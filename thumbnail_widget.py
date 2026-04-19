@@ -596,7 +596,7 @@ class ThumbnailWidgetStack(QVBoxLayout):
                 break
 
     def _deselect_all_thumbnails(self):
-        print(f"Deselecting all pages...")
+        # print(f"Deselecting all pages...")
         thumbnails_to_deselect = self.selected_thumbnails.copy()
 
         for page_num in thumbnails_to_deselect:
@@ -741,7 +741,7 @@ class ThumbnailContainerWidget(QScrollArea):
     # Dupes the function in stack
     def _scroll_to_thumbnail(self, page_num: int):
 
-        print(f"Executing _scroll_to_thumbnail...")
+        # print(f"Executing _scroll_to_thumbnail...")
         page_index = -1
         for i, item in enumerate(self.thumbnail_stack.thumbnails_info):
             if item.page_num == page_num:
@@ -755,11 +755,11 @@ class ThumbnailContainerWidget(QScrollArea):
         for thumb_widget in self.thumbnail_stack.thumbnail_widgets:
             if thumb_widget.thumbnail_info.page_num == page_num:
                 widget = thumb_widget
-                print(f"thumb_widget = {widget}")
+                # print(f"thumb_widget = {widget}")
                 break
 
         if widget:
-            print(f"Executing ensureWidgetVisible...")
+            # print(f"Executing ensureWidgetVisible...")
             self.ensureWidgetVisible(widget)
 
     def calculate_in_need(self):

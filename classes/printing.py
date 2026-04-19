@@ -16,15 +16,21 @@ class PDFPrinter:
             QMessageBox.warning(main_window, "Пустой PDF", "Файл не содержит страниц.")
             return
 
+        # Создаём принтер
         printer = QPrinter(QPrinter.HighResolution)
-        printer.setFromTo(1, total_pages)
+        printer.setFromTo(1, total_pages)  # по умолчанию — все страницы
 
         # ── Step 1: show print settings dialog ──────────────────────────
         print_dialog = QPrintDialog(printer, main_window)
         print_dialog.setWindowTitle("Параметры печати")
+
         # DontUseNativeDialog ensures Qt's own Russian translations apply to
         # button labels (the native OS dialog ignores installed QTranslators)
-        print_dialog.setOption(QPrintDialog.PrintDialogOption.DontUseNativeDialog, True)
+        # print_dialog.setOption(QAbstractPrintDialog.PrintDialogOption.DontUseNativeDialog)
+        # print_dialog.setOption(QPrintDialog.PrintDialogOption.DontUseNativeDialog, True)
+        # FUUUU NOT SUPPORTED??? ;_;
+
+        # включаем нужные опции
         print_dialog.setOption(QPrintDialog.PrintPageRange, True)
         print_dialog.setOption(QPrintDialog.PrintCollateCopies, True)
         print_dialog.setOption(QPrintDialog.PrintShowPageSize, True)
@@ -37,18 +43,12 @@ class PDFPrinter:
         preview.setWindowTitle("Предпросмотр печати")
 
         # The preview widget calls this signal whenever it needs a repaint
-        # (including when the user flips pages inside the preview).
         preview.paintRequested.connect(
             lambda p: PDFPrinter._paint_to_printer(p, doc, main_window)
         )
 
         if preview.exec() != QPrintPreviewDialog.Accepted:
             return
-
-        # ── Step 3: actual print (printer already configured by preview) ─
-        # paintRequested was already called for the real print pass by Qt
-        # when the user clicked "Print" inside the preview dialog, so
-        # nothing extra is needed here.
 
     # ------------------------------------------------------------------ #
     @staticmethod
@@ -58,23 +58,31 @@ class PDFPrinter:
         Called both by the preview widget and the final print pass.
         """
         total_pages = len(doc)
+
+        # Получаем настройки
         mode = printer.printRange()
         pages_to_print = PDFPrinter._extract_pages_from_printer(printer, total_pages, mode)
         if not pages_to_print:
+            # QMessageBox.information(main_window, "Нет страниц", "Диапазон страниц пуст.")
             return
 
+        # тут уже всё в пикселях устройства, ничего считать заново не надо
         paint_rect_px = printer.pageLayout().paintRectPixels(printer.resolution())
         paper_w_px = paint_rect_px.width()
         paper_h_px = paint_rect_px.height()
+
+        # рендер на принтерном dpi
         render_dpi = min(printer.resolution(), 300)
 
         painter = QPainter(printer)
+
         try:
             for idx, page_num in enumerate(pages_to_print):
                 page = doc.load_page(page_num)
                 rect = page.rect
                 is_landscape = rect.width > rect.height
 
+                # рендерим с фиксированным DPI
                 base_scale = render_dpi / PDFPrinter.points_per_inch
                 mat = fitz.Matrix(base_scale, base_scale)
                 pix = page.get_pixmap(matrix=mat)
@@ -105,13 +113,21 @@ class PDFPrinter:
 
     @staticmethod
     def _extract_pages_from_printer(printer, total_pages, mode):
+        """
+        Извлекает список страниц из QPrinter в зависимости от printRange().
+        """
         pages = []
+
         if mode == QPrinter.PrintRange.PageRange:
             from_page = max(1, printer.fromPage())
             to_page = min(total_pages, printer.toPage())
             pages = list(range(from_page - 1, to_page))
+
         elif mode == QPrinter.PrintRange.AllPages:
             pages = list(range(total_pages))
+
         elif mode == QPrinter.PrintRange.CurrentPage:
             pages = [0]
+
+        # Уникальные, отсортированные, валидные
         return sorted({p for p in pages if 0 <= p < total_pages})

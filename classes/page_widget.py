@@ -71,7 +71,7 @@ class PageWidget(QWidget):
         # PyMuPDF uses the matrix to scale, resulting in dimensions = original * zoom
         # We need to ensure we're calculating the exact same dimensions
         width = int(self.page_info.width * self.zoom_level + 0.5)  # Round to nearest
-        height = int(self.page_info.height * self.zoom_level) + 0.5
+        height = int(self.page_info.height * self.zoom_level + 0.5)
 
         # Ensure minimum size for visibility
         width = max(width, 100)

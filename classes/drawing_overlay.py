@@ -80,7 +80,7 @@ class DrawingOverlay(QWidget):
             p.setRenderHint(QPainter.Antialiasing)
 
             # strokes
-            for s in getattr(self, "strokes", []) or []:
+            for s in self.strokes:  # getattr(self, "strokes", []) or []:
                 pts = s.get("points", [])
                 if not pts:
                     continue
@@ -98,7 +98,7 @@ class DrawingOverlay(QWidget):
                         prev = (x, y)
 
             # rects
-            for r in getattr(self, "rects", []) or []:
+            for r in self.rects:  # getattr(self, "rects", []) or []:
                 x0, y0, x1, y1 = r.get("rect", (0, 0, 0, 0))
                 x = x0 * target_width
                 y = y0 * target_height
@@ -121,7 +121,8 @@ class DrawingOverlay(QWidget):
             return b""
 
     def get_vector_shapes(self) -> dict:
-        return {"strokes": list(getattr(self, "strokes", []) or []), "rects": list(getattr(self, "rects", []) or [])}
+        return {"strokes": list(getattr(self, "strokes", []) or []),
+                "rects": list(getattr(self, "rects", []) or [])}
 
     # ------------------- Events -------------------
     def resizeEvent(self, event):
@@ -252,7 +253,7 @@ class DrawingOverlay(QWidget):
                 except Exception:
                     pass
 
-            # draw strokes
+            # drawing
             for s in strokes:
                 pts = s.get("points", [])
                 if not pts:
@@ -272,7 +273,6 @@ class DrawingOverlay(QWidget):
                         painter.drawLine(prev[0], prev[1], x, y)
                         prev = (x, y)
 
-            # draw rects
             for r in rects:
                 x0, y0, x1, y1 = r.get("rect", (0, 0, 0, 0))
                 x = x0 * self.width()
