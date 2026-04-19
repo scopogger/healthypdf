@@ -1,10 +1,10 @@
 from PySide6.QtCore import (QMetaObject, QRect, QSize, Qt, QTimer, QPointF)
-from PySide6.QtGui import (QAction, QIcon, QPainter, QKeySequence)
+from PySide6.QtGui import (QAction, QIcon, QPainter, QKeySequence, QColor, QPixmap)
 from PySide6.QtWidgets import (QMenu, QMenuBar, QSizePolicy, QSplitter, QStatusBar,
                                QToolBar, QVBoxLayout, QWidget, QListWidget, QHBoxLayout,
                                QLineEdit, QLabel, QFrame, QTreeView, QToolButton,
                                QStyleOptionToolButton, QStyle, QScrollArea,
-                               QStackedWidget, QPushButton, QButtonGroup, QColorDialog, QAbstractButton)
+                               QStackedWidget, QPushButton, QButtonGroup, QColorDialog)
 from PySide6.QtPdf import QPdfDocument, QPdfBookmarkModel
 from PySide6.QtPdfWidgets import QPdfView
 import sys
@@ -88,8 +88,6 @@ class UiMainWindow(object):
         self.centralWidget = None
         self.splitter = None
         self.sidePanelContent = None
-        self.sidebarStack = None
-        self.drawingPanelContent = None
         self.tabButtonsWidget = None
 
         # PDF document for bookmarks
@@ -121,7 +119,7 @@ class UiMainWindow(object):
         # Set initially open tab to "Pages"
         self.pagesButton.setChecked(True)
         self.pagesTab.show()
-        self.sidebarStack.setCurrentIndex(0)  # normal sidebar
+        self.sidePanelContent.show()
 
         self.splitter.setChildrenCollapsible(False)
 
@@ -154,238 +152,103 @@ class UiMainWindow(object):
 
     def setup_sidepanel_tab_widget(self):
         """Setup the side panel with tabs and proper size constraints"""
-        # Create tab buttons widget (vertical stripe)
+        # ── Tab-button strip (vertical, fixed 25 px wide) ───────────────
         self.tabButtonsWidget = QWidget(self.splitter)
         self.tabButtonsLayout = QVBoxLayout(self.tabButtonsWidget)
         self.tabButtonsLayout.setContentsMargins(0, 0, 0, 0)
         self.tabButtonsLayout.setSpacing(0)
 
-        # Create tab buttons
         self.bookmarksButton = VerticalButton("Bookmarks", self.tabButtonsWidget)
         self.bookmarksButton.clicked.connect(self.toggle_bookmark_tab)
 
         self.pagesButton = VerticalButton("Pages", self.tabButtonsWidget)
         self.pagesButton.clicked.connect(self.toggle_pages_tab)
 
-        # Add buttons to layout
         self.tabButtonsLayout.addWidget(self.bookmarksButton)
         self.tabButtonsLayout.addWidget(self.pagesButton)
         self.tabButtonsLayout.addStretch()
 
-        # Set fixed size for tab buttons widget
         self.tabButtonsWidget.setMinimumWidth(25)
         self.tabButtonsWidget.setMaximumWidth(25)
         self.tabButtonsWidget.setSizePolicy(QSizePolicy.Fixed, QSizePolicy.Expanding)
 
-        # Create a stacked widget that holds: page 0 = normal sidebar, page 1 = drawing tools
-        self.sidebarStack = QStackedWidget(self.splitter)
-        self.sidebarStack.setObjectName("sidebarStack")
-        self.sidebarStack.setMinimumWidth(120)
-        self.sidebarStack.setMaximumWidth(350)
-        self.sidebarStack.setSizePolicy(QSizePolicy.Preferred, QSizePolicy.Expanding)
-
-        # ── Page 0: normal sidebar content ──────────────────────────────
-        self.sidePanelContent = QWidget()
+        # ── Side-panel content area ──────────────────────────────────────
+        self.sidePanelContent = QWidget(self.splitter)
         self.sidePanelContentLayout = QVBoxLayout(self.sidePanelContent)
         self.sidePanelContentLayout.setContentsMargins(1, 1, 1, 1)
         self.sidePanelContent.setObjectName("sidePanelContent")
         self.sidePanelContent.setStyleSheet("""
-            #sidePanelContent {
-                background-color: #d0d0d0;
-            }
+            #sidePanelContent { background-color: #d0d0d0; }
         """)
+        self.sidePanelContent.setMinimumWidth(120)
+        self.sidePanelContent.setMaximumWidth(350)
+        self.sidePanelContent.setSizePolicy(QSizePolicy.Preferred, QSizePolicy.Expanding)
 
-        # Setup tabs
+        # QStackedWidget lets us swap between normal tabs (index 0) and
+        # the drawing tools panel (index 1) without touching the splitter.
+        self.sidePanelStack = QStackedWidget(self.sidePanelContent)
+        self.sidePanelContentLayout.addWidget(self.sidePanelStack)
+
+        # ── Stack page 0: normal bookmarks / pages tabs ──────────────────
+        self.normalTabsContainer = QWidget()
+        normalTabsLayout = QVBoxLayout(self.normalTabsContainer)
+        normalTabsLayout.setContentsMargins(0, 0, 0, 0)
+        normalTabsLayout.setSpacing(0)
+
         self.setup_bookmarks_tab()
         self.setup_pages_tab()
 
-        # Add tabs to content layout
-        self.sidePanelContentLayout.addWidget(self.bookmarkTab)
-        self.sidePanelContentLayout.addWidget(self.pagesTab)
+        normalTabsLayout.addWidget(self.bookmarkTab)
+        normalTabsLayout.addWidget(self.pagesTab)
         self.bookmarkTab.hide()
         self.pagesTab.hide()
 
-        # ── Page 1: drawing tools panel ──────────────────────────────────
-        self.drawingPanelContent = QWidget()
-        self.drawingPanelContent.setObjectName("drawingPanelContent")
-        self.drawingPanelContent.setStyleSheet("""
-            #drawingPanelContent {
-                background-color: #d0d0d0;
-            }
-        """)
-        self._setup_drawing_panel()
+        # ── Stack page 1: drawing tools panel ────────────────────────────
+        self.setup_drawing_panel()
 
-        self.sidebarStack.addWidget(self.sidePanelContent)   # index 0
-        self.sidebarStack.addWidget(self.drawingPanelContent) # index 1
-        self.sidebarStack.setCurrentIndex(0)
+        self.sidePanelStack.addWidget(self.normalTabsContainer)  # index 0
+        self.sidePanelStack.addWidget(self.drawingPanel)          # index 1
+        self.sidePanelStack.setCurrentIndex(0)
 
-        # Set stretch factors
-        self.splitter.setStretchFactor(0, 0)  # Tab buttons — fixed
-        self.splitter.setStretchFactor(1, 0)  # Sidebar stack — limited
-        self.splitter.setStretchFactor(2, 1)  # PDF view — expands
+        # Stretch factors
+        self.splitter.setStretchFactor(0, 0)  # tab-button strip: fixed
+        self.splitter.setStretchFactor(1, 0)  # sidepanel content: limited
+        self.splitter.setStretchFactor(2, 1)  # PDF view: all remaining space
 
     #     self.splitter.splitterMoved.connect(self.on_sidebar_resized)
     #
     # def on_sidebar_resized(self):
     #     print("MOVED!!!")
 
-    def _setup_drawing_panel(self):
-        """Build the drawing tools panel content."""
-        layout = QVBoxLayout(self.drawingPanelContent)
-        layout.setContentsMargins(6, 8, 6, 8)
-        layout.setSpacing(6)
-
-        # Title
-        title = QLabel("Инструменты рисования")
-        title.setAlignment(Qt.AlignCenter)
-        title.setStyleSheet("font-weight: bold; font-size: 11px; color: #333;")
-        layout.addWidget(title)
-
-        # ── Tool buttons ─────────────────────────────────────────────────
-        tools_label = QLabel("Инструмент:")
-        tools_label.setStyleSheet("font-size: 10px; color: #555;")
-        layout.addWidget(tools_label)
-
-        self.drawing_brush_btn = QPushButton()
-        self.drawing_brush_btn.setCheckable(True)
-        self.drawing_brush_btn.setChecked(True)
-        self.drawing_brush_btn.setToolTip("Кисть")
-        self.drawing_brush_btn.setIcon(QIcon(":/light_theme_v2/brush.png"))
-        self.drawing_brush_btn.setIconSize(QSize(22, 22))
-        self.drawing_brush_btn.setText(" Кисть")
-        self.drawing_brush_btn.setStyleSheet(self._drawing_btn_style())
-
-        self.drawing_rect_btn = QPushButton()
-        self.drawing_rect_btn.setCheckable(True)
-        self.drawing_rect_btn.setToolTip("Прямоугольник")
-        self.drawing_rect_btn.setIcon(QIcon(":/light_theme_v2/rectangle.png"))
-        self.drawing_rect_btn.setIconSize(QSize(22, 22))
-        self.drawing_rect_btn.setText(" Прямоугольник")
-        self.drawing_rect_btn.setStyleSheet(self._drawing_btn_style())
-
-        self._drawing_tool_group = QButtonGroup(self.drawingPanelContent)
-        self._drawing_tool_group.setExclusive(True)
-        self._drawing_tool_group.addButton(self.drawing_brush_btn)
-        self._drawing_tool_group.addButton(self.drawing_rect_btn)
-
-        layout.addWidget(self.drawing_brush_btn)
-        layout.addWidget(self.drawing_rect_btn)
-
-        # ── Color button ─────────────────────────────────────────────────
-        color_label = QLabel("Цвет:")
-        color_label.setStyleSheet("font-size: 10px; color: #555;")
-        layout.addWidget(color_label)
-
-        from PySide6.QtGui import QColor
-        self._drawing_current_color = QColor(0, 0, 0)
-
-        self.drawing_color_btn = QPushButton("  Выбрать цвет")
-        self.drawing_color_btn.setToolTip("Выбрать цвет рисования")
-        self.drawing_color_btn.setStyleSheet(self._drawing_btn_style())
-        self._refresh_color_btn_icon()
-        layout.addWidget(self.drawing_color_btn)
-
-        # ── Separator ────────────────────────────────────────────────────
-        sep = QFrame()
-        sep.setFrameShape(QFrame.HLine)
-        sep.setStyleSheet("color: #aaa;")
-        layout.addWidget(sep)
-
-        # ── Clear buttons ────────────────────────────────────────────────
-        self.drawing_clear_page_btn = QPushButton("Очистить страницу")
-        self.drawing_clear_page_btn.setStyleSheet(self._drawing_btn_style())
-        layout.addWidget(self.drawing_clear_page_btn)
-
-        self.drawing_clear_all_btn = QPushButton("Очистить все")
-        self.drawing_clear_all_btn.setStyleSheet(self._drawing_btn_style())
-        layout.addWidget(self.drawing_clear_all_btn)
-
-        layout.addStretch()
-
-        # ── Close drawing mode button ─────────────────────────────────────
-        self.drawing_close_btn = QPushButton("✕  Закрыть режим рисования")
-        self.drawing_close_btn.setStyleSheet("""
-            QPushButton {
-                background-color: #c0392b;
-                color: white;
-                border: none;
-                border-radius: 4px;
-                padding: 6px 4px;
-                font-size: 11px;
-            }
-            QPushButton:hover { background-color: #e74c3c; }
-            QPushButton:pressed { background-color: #a93226; }
-        """)
-        layout.addWidget(self.drawing_close_btn)
-
-    def _drawing_btn_style(self):
-        return """
-            QPushButton {
-                text-align: left;
-                padding: 5px 6px;
-                border: 1px solid #bbb;
-                border-radius: 4px;
-                background-color: #f0f0f0;
-                font-size: 11px;
-            }
-            QPushButton:checked {
-                background-color: #dce8f8;
-                border: 2px solid #0078d7;
-                font-weight: bold;
-            }
-            QPushButton:hover:!checked { background-color: #e4e4e4; }
-            QPushButton:pressed { background-color: #d0d0d0; }
-        """
-
-    def _refresh_color_btn_icon(self):
-        from PySide6.QtGui import QPixmap, QColor
-        color = getattr(self, '_drawing_current_color', QColor(0, 0, 0))
-        px = QPixmap(20, 20)
-        px.fill(color)
-        self.drawing_color_btn.setIcon(QIcon(px))
-        self.drawing_color_btn.setIconSize(QSize(20, 20))
-
-    def show_drawing_panel(self):
-        """Switch sidebar to drawing tools panel."""
-        self.sidebarStack.setCurrentIndex(1)
-        # Ensure sidebar is visible
-        if hasattr(self, 'splitter'):
-            current_sizes = self.splitter.sizes()
-            if current_sizes[1] == 0:
-                total = sum(current_sizes)
-                self.splitter.setSizes([25, 150, max(400, total - 175)])
-
-    def hide_drawing_panel(self):
-        """Switch sidebar back to normal pages/bookmarks panel."""
-        self.sidebarStack.setCurrentIndex(0)
-
     def setup_initial_sidebar_size(self):
         """Set up the initial sidebar size to be as narrow as allowed"""
-        if hasattr(self, 'splitter') and hasattr(self, 'sidebarStack'):
-            initial_total_width = 1400
+        if hasattr(self, 'splitter') and hasattr(self, 'sidePanelContent'):
+            # Set initial sizes: 25px for tab buttons, 150px for content, rest for PDF view
+            initial_total_width = 1400  # Default window width
             tab_buttons_width = 25
-            sidebar_content_width = 120
+            sidebar_content_width = 120  # Minimum allowed width
             pdf_view_width = initial_total_width - tab_buttons_width - sidebar_content_width
 
+            # Set the initial sizes
             self.splitter.setSizes([tab_buttons_width, sidebar_content_width, pdf_view_width])
 
-            self.splitter.setCollapsible(0, False)
-            self.splitter.setCollapsible(1, False)
-            self.splitter.setCollapsible(2, False)
+            # Ensure the splitter respects our size constraints
+            self.splitter.setCollapsible(0, False)  # Tab buttons can't be collapsed
+            self.splitter.setCollapsible(1, False)  # Sidebar can't be collapsed (use toggle instead)
+            self.splitter.setCollapsible(2, False)  # PDF view can't be collapsed
 
     def toggle_bookmark_tab(self):
         """Toggle bookmark tab visibility"""
-        # Don't switch tabs while in drawing mode
-        if self.sidebarStack.currentIndex() == 1:
-            return
         if self.bookmarksButton.isChecked():
             self.pagesButton.setChecked(False)
             self.pagesTab.hide()
             self.bookmarkTab.show()
+            self.sidePanelContent.show()
 
+            # Restore sidebar size if it was hidden
             if hasattr(self, 'splitter'):
                 current_sizes = self.splitter.sizes()
-                if current_sizes[1] == 0:
+                if current_sizes[1] == 0:  # Sidebar is hidden
                     tab_buttons_width = 25
                     sidebar_content_width = 120
                     remaining_width = sum(current_sizes) - tab_buttons_width - sidebar_content_width
@@ -393,6 +256,8 @@ class UiMainWindow(object):
         else:
             self.bookmarkTab.hide()
             if not self.pagesButton.isChecked():
+                self.sidePanelContent.hide()
+                # Collapse sidebar when both tabs are unchecked
                 if hasattr(self, 'splitter'):
                     current_sizes = self.splitter.sizes()
                     total_width = sum(current_sizes)
@@ -400,17 +265,16 @@ class UiMainWindow(object):
 
     def toggle_pages_tab(self):
         """Toggle pages tab visibility"""
-        # Don't switch tabs while in drawing mode
-        if self.sidebarStack.currentIndex() == 1:
-            return
         if self.pagesButton.isChecked():
             self.bookmarksButton.setChecked(False)
             self.bookmarkTab.hide()
             self.pagesTab.show()
+            self.sidePanelContent.show()
 
+            # Restore sidebar size if it was hidden
             if hasattr(self, 'splitter'):
                 current_sizes = self.splitter.sizes()
-                if current_sizes[1] == 0:
+                if current_sizes[1] == 0:  # Sidebar is hidden
                     tab_buttons_width = 25
                     sidebar_content_width = 120
                     remaining_width = sum(current_sizes) - tab_buttons_width - sidebar_content_width
@@ -418,11 +282,12 @@ class UiMainWindow(object):
         else:
             self.pagesTab.hide()
             if not self.bookmarksButton.isChecked():
+                self.sidePanelContent.hide()
+                # Collapse sidebar when both tabs are unchecked
                 if hasattr(self, 'splitter'):
                     current_sizes = self.splitter.sizes()
                     total_width = sum(current_sizes)
                     self.splitter.setSizes([25, 0, total_width - 25])
-
 
     def setup_bookmarks_tab(self):
         """Setup bookmarks tab content with QPdfBookmarkModel"""
@@ -449,12 +314,169 @@ class UiMainWindow(object):
         self.pagesTabLayout.setContentsMargins(0, 0, 0, 0)
         self.pagesTabLayout.setSpacing(0)
 
-        # Нужен контейнер иначе не залезает
         self.thumbnailList = ThumbnailContainerWidget(self.pagesTab)
         self.pagesTabLayout.addWidget(self.thumbnailList)
 
-        # На всякий случай чтобы работало со старыми именами
-        # self.thumbnailList = self.thumbnailWidget
+    def setup_drawing_panel(self):
+        """Build the drawing-tools panel shown in the sidebar during draw mode."""
+        self.drawingPanel = QWidget()
+        self.drawingPanel.setObjectName("drawingPanel")
+        layout = QVBoxLayout(self.drawingPanel)
+        layout.setContentsMargins(8, 10, 8, 10)
+        layout.setSpacing(8)
+
+        # Title
+        title = QLabel("Рисование")
+        title.setStyleSheet("font-weight: bold; font-size: 12px;")
+        title.setAlignment(Qt.AlignCenter)
+        layout.addWidget(title)
+
+        sep0 = QFrame(); sep0.setFrameShape(QFrame.HLine); sep0.setFrameShadow(QFrame.Sunken)
+        layout.addWidget(sep0)
+
+        # ── Tool buttons ─────────────────────────────────────────────────
+        tools_label = QLabel("Инструмент:")
+        tools_label.setStyleSheet("font-size: 11px;")
+        layout.addWidget(tools_label)
+
+        self._draw_tool_group = QButtonGroup(self.drawingPanel)
+        self._draw_tool_group.setExclusive(True)
+
+        tools_row = QHBoxLayout()
+        tools_row.setSpacing(4)
+
+        self.drawBrushBtn = QPushButton(self.drawingPanel)
+        self.drawBrushBtn.setCheckable(True)
+        self.drawBrushBtn.setChecked(True)
+        self.drawBrushBtn.setObjectName("drawBrushBtn")
+        self.drawBrushBtn.setIcon(QIcon(":/light_theme_v2/brush.png"))
+        self.drawBrushBtn.setIconSize(QSize(22, 22))
+        self.drawBrushBtn.setToolTip("Кисть")
+        self.drawBrushBtn.setFixedHeight(34)
+        self.drawBrushBtn.setStyleSheet(
+            "QPushButton { padding: 4px; border: 1px solid #bbb; border-radius: 3px; background: #f0f0f0; }"
+            "QPushButton:checked { background: #dce8f8; border: 2px solid #0078d7; font-weight: bold; }"
+        )
+
+        self.drawRectBtn = QPushButton(self.drawingPanel)
+        self.drawRectBtn.setCheckable(True)
+        self.drawRectBtn.setObjectName("drawRectBtn")
+        self.drawRectBtn.setIcon(QIcon(":/light_theme_v2/rectangle.png"))
+        self.drawRectBtn.setIconSize(QSize(22, 22))
+        self.drawRectBtn.setToolTip("Прямоугольник")
+        self.drawRectBtn.setFixedHeight(34)
+        self.drawRectBtn.setStyleSheet(
+            "QPushButton { padding: 4px; border: 1px solid #bbb; border-radius: 3px; background: #f0f0f0; }"
+            "QPushButton:checked { background: #dce8f8; border: 2px solid #0078d7; font-weight: bold; }"
+        )
+
+        self._draw_tool_group.addButton(self.drawBrushBtn)
+        self._draw_tool_group.addButton(self.drawRectBtn)
+        tools_row.addWidget(self.drawBrushBtn)
+        tools_row.addWidget(self.drawRectBtn)
+        tools_row.addStretch()
+        layout.addLayout(tools_row)
+
+        # ── Colour picker ─────────────────────────────────────────────────
+        color_label = QLabel("Цвет:")
+        color_label.setStyleSheet("font-size: 11px;")
+        layout.addWidget(color_label)
+
+        self._draw_current_color = QColor(Qt.black)
+        self.drawColorBtn = QPushButton(self.drawingPanel)
+        self.drawColorBtn.setObjectName("drawColorBtn")
+        self.drawColorBtn.setToolTip("Выбрать цвет рисования")
+        self.drawColorBtn.setFixedHeight(34)
+        self.drawColorBtn.setStyleSheet(
+            "QPushButton { padding: 4px 8px; border: 1px solid #bbb; border-radius: 3px; "
+            "background: #f0f0f0; text-align: left; }"
+            "QPushButton:hover { background: #e0e0e0; }"
+        )
+        self._update_draw_color_btn_icon()
+        layout.addWidget(self.drawColorBtn)
+
+        # ── Separator ─────────────────────────────────────────────────────
+        sep1 = QFrame(); sep1.setFrameShape(QFrame.HLine); sep1.setFrameShadow(QFrame.Sunken)
+        layout.addWidget(sep1)
+
+        # ── Clear buttons ─────────────────────────────────────────────────
+        self.drawClearPageBtn = QPushButton("Очистить страницу", self.drawingPanel)
+        self.drawClearPageBtn.setFixedHeight(32)
+        self.drawClearPageBtn.setStyleSheet(
+            "QPushButton { border: 1px solid #bbb; border-radius: 3px; background: #f0f0f0; }"
+            "QPushButton:hover { background: #e0e0e0; }"
+        )
+        layout.addWidget(self.drawClearPageBtn)
+
+        self.drawClearAllBtn = QPushButton("Очистить все страницы", self.drawingPanel)
+        self.drawClearAllBtn.setFixedHeight(32)
+        self.drawClearAllBtn.setStyleSheet(
+            "QPushButton { border: 1px solid #bbb; border-radius: 3px; background: #f0f0f0; }"
+            "QPushButton:hover { background: #e0e0e0; }"
+        )
+        layout.addWidget(self.drawClearAllBtn)
+
+        layout.addStretch()
+
+        # ── Close button at bottom ────────────────────────────────────────
+        sep2 = QFrame(); sep2.setFrameShape(QFrame.HLine); sep2.setFrameShadow(QFrame.Sunken)
+        layout.addWidget(sep2)
+
+        self.drawCloseBtn = QPushButton("✕  Выйти из режима рисования", self.drawingPanel)
+        self.drawCloseBtn.setFixedHeight(36)
+        self.drawCloseBtn.setStyleSheet(
+            "QPushButton { color: #c0392b; font-weight: bold; border: 1px solid #e0a0a0; "
+            "border-radius: 3px; background: #fdf0f0; }"
+            "QPushButton:hover { background: #fad7d7; }"
+        )
+        layout.addWidget(self.drawCloseBtn)
+
+    def _update_draw_color_btn_icon(self):
+        """Refresh the colour swatch on the colour picker button."""
+        px = QPixmap(18, 18)
+        px.fill(self._draw_current_color)
+        self.drawColorBtn.setIcon(QIcon(px))
+        self.drawColorBtn.setIconSize(QSize(18, 18))
+        self.drawColorBtn.setText("  Выбрать цвет")
+
+    def show_drawing_panel(self):
+        """Switch the sidepanel to drawing tools, hiding the tab-button strip."""
+        self.tabButtonsWidget.hide()
+        self.sidePanelContent.show()
+        self.sidePanelStack.setCurrentIndex(1)
+        # Ensure panel has reasonable width
+        if hasattr(self, 'splitter'):
+            sizes = self.splitter.sizes()
+            total = sum(sizes)
+            panel_w = sizes[1] if sizes[1] >= 120 else 160
+            self.splitter.setSizes([0, panel_w, max(400, total - panel_w)])
+
+    def hide_drawing_panel(self):
+        """Restore the normal tab-button strip and content."""
+        self.tabButtonsWidget.show()
+        self.sidePanelStack.setCurrentIndex(0)
+        # Re-show whichever tab was previously active
+        if self.pagesButton.isChecked():
+            self.pagesTab.show()
+            self.sidePanelContent.show()
+            if hasattr(self, 'splitter'):
+                sizes = self.splitter.sizes()
+                total = sum(sizes)
+                panel_w = sizes[1] if sizes[1] >= 120 else 160
+                self.splitter.setSizes([25, panel_w, max(400, total - 25 - panel_w)])
+        elif self.bookmarksButton.isChecked():
+            self.bookmarkTab.show()
+            self.sidePanelContent.show()
+            if hasattr(self, 'splitter'):
+                sizes = self.splitter.sizes()
+                total = sum(sizes)
+                panel_w = sizes[1] if sizes[1] >= 120 else 160
+                self.splitter.setSizes([25, panel_w, max(400, total - 25 - panel_w)])
+        else:
+            self.sidePanelContent.hide()
+            if hasattr(self, 'splitter'):
+                total = sum(self.splitter.sizes())
+                self.splitter.setSizes([25, 0, max(0, total - 25)])
 
     def setup_pdf_view(self):
         """Setup PDF viewer widget"""

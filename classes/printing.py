@@ -1,6 +1,6 @@
 import fitz  # PyMuPDF
-from PySide6.QtWidgets import (QMessageBox, QProgressDialog, QApplication)
-from PySide6.QtPrintSupport import QPrinter, QPrintDialog, QPrintPreviewDialog
+from PySide6.QtWidgets import QMessageBox, QApplication
+from PySide6.QtPrintSupport import QPrinter, QPrintPreviewDialog
 from PySide6.QtGui import QPainter, QImage, QTransform
 from PySide6.QtCore import QRectF, Qt
 
@@ -16,39 +16,17 @@ class PDFPrinter:
             QMessageBox.warning(main_window, "Пустой PDF", "Файл не содержит страниц.")
             return
 
-        # Создаём принтер
         printer = QPrinter(QPrinter.HighResolution)
-        printer.setFromTo(1, total_pages)  # по умолчанию — все страницы
+        printer.setFromTo(1, total_pages)
 
-        # ── Step 1: show print settings dialog ──────────────────────────
-        print_dialog = QPrintDialog(printer, main_window)
-        print_dialog.setWindowTitle("Параметры печати")
-
-        # DontUseNativeDialog ensures Qt's own Russian translations apply to
-        # button labels (the native OS dialog ignores installed QTranslators)
-        # print_dialog.setOption(QAbstractPrintDialog.PrintDialogOption.DontUseNativeDialog)
-        # print_dialog.setOption(QPrintDialog.PrintDialogOption.DontUseNativeDialog, True)
-        # FUUUU NOT SUPPORTED??? ;_;
-
-        # включаем нужные опции
-        print_dialog.setOption(QPrintDialog.PrintPageRange, True)
-        print_dialog.setOption(QPrintDialog.PrintCollateCopies, True)
-        print_dialog.setOption(QPrintDialog.PrintShowPageSize, True)
-        print_dialog.setOption(QPrintDialog.PrintToFile, True)
-        if print_dialog.exec() != QPrintDialog.Accepted:
-            return
-
-        # ── Step 2: show preview ─────────────────────────────────────────
+        # QPrintPreviewDialog has its own Print and Page Setup buttons in its toolbar,
+        # so there is no need for a separate QPrintDialog first.
         preview = QPrintPreviewDialog(printer, main_window)
-        preview.setWindowTitle("Предпросмотр печати")
-
-        # The preview widget calls this signal whenever it needs a repaint
+        preview.setWindowTitle("Предпросмотр и печать")
         preview.paintRequested.connect(
             lambda p: PDFPrinter._paint_to_printer(p, doc, main_window)
         )
-
-        if preview.exec() != QPrintPreviewDialog.Accepted:
-            return
+        preview.exec()
 
     # ------------------------------------------------------------------ #
     @staticmethod
