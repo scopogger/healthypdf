@@ -3,7 +3,8 @@ from PySide6.QtGui import (QAction, QIcon, QPainter, QKeySequence)
 from PySide6.QtWidgets import (QMenu, QMenuBar, QSizePolicy, QSplitter, QStatusBar,
                                QToolBar, QVBoxLayout, QWidget, QListWidget, QHBoxLayout,
                                QLineEdit, QLabel, QFrame, QTreeView, QToolButton,
-                               QStyleOptionToolButton, QStyle, QScrollArea)
+                               QStyleOptionToolButton, QStyle, QScrollArea,
+                               QStackedWidget, QPushButton, QButtonGroup, QColorDialog, QAbstractButton)
 from PySide6.QtPdf import QPdfDocument, QPdfBookmarkModel
 from PySide6.QtPdfWidgets import QPdfView
 import sys
@@ -87,6 +88,8 @@ class UiMainWindow(object):
         self.centralWidget = None
         self.splitter = None
         self.sidePanelContent = None
+        self.sidebarStack = None
+        self.drawingPanelContent = None
         self.tabButtonsWidget = None
 
         # PDF document for bookmarks
@@ -118,7 +121,7 @@ class UiMainWindow(object):
         # Set initially open tab to "Pages"
         self.pagesButton.setChecked(True)
         self.pagesTab.show()
-        self.sidePanelContent.show()
+        self.sidebarStack.setCurrentIndex(0)  # normal sidebar
 
         self.splitter.setChildrenCollapsible(False)
 
@@ -174,23 +177,23 @@ class UiMainWindow(object):
         self.tabButtonsWidget.setMaximumWidth(25)
         self.tabButtonsWidget.setSizePolicy(QSizePolicy.Fixed, QSizePolicy.Expanding)
 
-        # Create side panel content widget
-        self.sidePanelContent = QWidget(self.splitter)
+        # Create a stacked widget that holds: page 0 = normal sidebar, page 1 = drawing tools
+        self.sidebarStack = QStackedWidget(self.splitter)
+        self.sidebarStack.setObjectName("sidebarStack")
+        self.sidebarStack.setMinimumWidth(120)
+        self.sidebarStack.setMaximumWidth(350)
+        self.sidebarStack.setSizePolicy(QSizePolicy.Preferred, QSizePolicy.Expanding)
+
+        # ── Page 0: normal sidebar content ──────────────────────────────
+        self.sidePanelContent = QWidget()
         self.sidePanelContentLayout = QVBoxLayout(self.sidePanelContent)
         self.sidePanelContentLayout.setContentsMargins(1, 1, 1, 1)
         self.sidePanelContent.setObjectName("sidePanelContent")
-
-        # Set darker background for side panel (ok color #e8e8e8)
         self.sidePanelContent.setStyleSheet("""
             #sidePanelContent {
                 background-color: #d0d0d0;
             }
         """)
-
-        # Set size constraints for the side panel content
-        self.sidePanelContent.setMinimumWidth(120)
-        self.sidePanelContent.setMaximumWidth(350)
-        self.sidePanelContent.setSizePolicy(QSizePolicy.Preferred, QSizePolicy.Expanding)
 
         # Setup tabs
         self.setup_bookmarks_tab()
@@ -202,45 +205,187 @@ class UiMainWindow(object):
         self.bookmarkTab.hide()
         self.pagesTab.hide()
 
-        # Set stretch factors - these are critical for proper sizing
-        self.splitter.setStretchFactor(0, 0)  # Tab buttons don't resize (fixed 25px)
-        self.splitter.setStretchFactor(1, 0)  # Sidebar content limited resize (150-300px)
-        self.splitter.setStretchFactor(2, 1)  # PDF view gets all remaining space
+        # ── Page 1: drawing tools panel ──────────────────────────────────
+        self.drawingPanelContent = QWidget()
+        self.drawingPanelContent.setObjectName("drawingPanelContent")
+        self.drawingPanelContent.setStyleSheet("""
+            #drawingPanelContent {
+                background-color: #d0d0d0;
+            }
+        """)
+        self._setup_drawing_panel()
+
+        self.sidebarStack.addWidget(self.sidePanelContent)   # index 0
+        self.sidebarStack.addWidget(self.drawingPanelContent) # index 1
+        self.sidebarStack.setCurrentIndex(0)
+
+        # Set stretch factors
+        self.splitter.setStretchFactor(0, 0)  # Tab buttons — fixed
+        self.splitter.setStretchFactor(1, 0)  # Sidebar stack — limited
+        self.splitter.setStretchFactor(2, 1)  # PDF view — expands
 
     #     self.splitter.splitterMoved.connect(self.on_sidebar_resized)
     #
     # def on_sidebar_resized(self):
     #     print("MOVED!!!")
 
+    def _setup_drawing_panel(self):
+        """Build the drawing tools panel content."""
+        layout = QVBoxLayout(self.drawingPanelContent)
+        layout.setContentsMargins(6, 8, 6, 8)
+        layout.setSpacing(6)
+
+        # Title
+        title = QLabel("Инструменты рисования")
+        title.setAlignment(Qt.AlignCenter)
+        title.setStyleSheet("font-weight: bold; font-size: 11px; color: #333;")
+        layout.addWidget(title)
+
+        # ── Tool buttons ─────────────────────────────────────────────────
+        tools_label = QLabel("Инструмент:")
+        tools_label.setStyleSheet("font-size: 10px; color: #555;")
+        layout.addWidget(tools_label)
+
+        self.drawing_brush_btn = QPushButton()
+        self.drawing_brush_btn.setCheckable(True)
+        self.drawing_brush_btn.setChecked(True)
+        self.drawing_brush_btn.setToolTip("Кисть")
+        self.drawing_brush_btn.setIcon(QIcon(":/light_theme_v2/brush.png"))
+        self.drawing_brush_btn.setIconSize(QSize(22, 22))
+        self.drawing_brush_btn.setText(" Кисть")
+        self.drawing_brush_btn.setStyleSheet(self._drawing_btn_style())
+
+        self.drawing_rect_btn = QPushButton()
+        self.drawing_rect_btn.setCheckable(True)
+        self.drawing_rect_btn.setToolTip("Прямоугольник")
+        self.drawing_rect_btn.setIcon(QIcon(":/light_theme_v2/rectangle.png"))
+        self.drawing_rect_btn.setIconSize(QSize(22, 22))
+        self.drawing_rect_btn.setText(" Прямоугольник")
+        self.drawing_rect_btn.setStyleSheet(self._drawing_btn_style())
+
+        self._drawing_tool_group = QButtonGroup(self.drawingPanelContent)
+        self._drawing_tool_group.setExclusive(True)
+        self._drawing_tool_group.addButton(self.drawing_brush_btn)
+        self._drawing_tool_group.addButton(self.drawing_rect_btn)
+
+        layout.addWidget(self.drawing_brush_btn)
+        layout.addWidget(self.drawing_rect_btn)
+
+        # ── Color button ─────────────────────────────────────────────────
+        color_label = QLabel("Цвет:")
+        color_label.setStyleSheet("font-size: 10px; color: #555;")
+        layout.addWidget(color_label)
+
+        from PySide6.QtGui import QColor
+        self._drawing_current_color = QColor(0, 0, 0)
+
+        self.drawing_color_btn = QPushButton("  Выбрать цвет")
+        self.drawing_color_btn.setToolTip("Выбрать цвет рисования")
+        self.drawing_color_btn.setStyleSheet(self._drawing_btn_style())
+        self._refresh_color_btn_icon()
+        layout.addWidget(self.drawing_color_btn)
+
+        # ── Separator ────────────────────────────────────────────────────
+        sep = QFrame()
+        sep.setFrameShape(QFrame.HLine)
+        sep.setStyleSheet("color: #aaa;")
+        layout.addWidget(sep)
+
+        # ── Clear buttons ────────────────────────────────────────────────
+        self.drawing_clear_page_btn = QPushButton("Очистить страницу")
+        self.drawing_clear_page_btn.setStyleSheet(self._drawing_btn_style())
+        layout.addWidget(self.drawing_clear_page_btn)
+
+        self.drawing_clear_all_btn = QPushButton("Очистить все")
+        self.drawing_clear_all_btn.setStyleSheet(self._drawing_btn_style())
+        layout.addWidget(self.drawing_clear_all_btn)
+
+        layout.addStretch()
+
+        # ── Close drawing mode button ─────────────────────────────────────
+        self.drawing_close_btn = QPushButton("✕  Закрыть режим рисования")
+        self.drawing_close_btn.setStyleSheet("""
+            QPushButton {
+                background-color: #c0392b;
+                color: white;
+                border: none;
+                border-radius: 4px;
+                padding: 6px 4px;
+                font-size: 11px;
+            }
+            QPushButton:hover { background-color: #e74c3c; }
+            QPushButton:pressed { background-color: #a93226; }
+        """)
+        layout.addWidget(self.drawing_close_btn)
+
+    def _drawing_btn_style(self):
+        return """
+            QPushButton {
+                text-align: left;
+                padding: 5px 6px;
+                border: 1px solid #bbb;
+                border-radius: 4px;
+                background-color: #f0f0f0;
+                font-size: 11px;
+            }
+            QPushButton:checked {
+                background-color: #dce8f8;
+                border: 2px solid #0078d7;
+                font-weight: bold;
+            }
+            QPushButton:hover:!checked { background-color: #e4e4e4; }
+            QPushButton:pressed { background-color: #d0d0d0; }
+        """
+
+    def _refresh_color_btn_icon(self):
+        from PySide6.QtGui import QPixmap, QColor
+        color = getattr(self, '_drawing_current_color', QColor(0, 0, 0))
+        px = QPixmap(20, 20)
+        px.fill(color)
+        self.drawing_color_btn.setIcon(QIcon(px))
+        self.drawing_color_btn.setIconSize(QSize(20, 20))
+
+    def show_drawing_panel(self):
+        """Switch sidebar to drawing tools panel."""
+        self.sidebarStack.setCurrentIndex(1)
+        # Ensure sidebar is visible
+        if hasattr(self, 'splitter'):
+            current_sizes = self.splitter.sizes()
+            if current_sizes[1] == 0:
+                total = sum(current_sizes)
+                self.splitter.setSizes([25, 150, max(400, total - 175)])
+
+    def hide_drawing_panel(self):
+        """Switch sidebar back to normal pages/bookmarks panel."""
+        self.sidebarStack.setCurrentIndex(0)
+
     def setup_initial_sidebar_size(self):
         """Set up the initial sidebar size to be as narrow as allowed"""
-        if hasattr(self, 'splitter') and hasattr(self, 'sidePanelContent'):
-            # Set initial sizes: 25px for tab buttons, 150px for content, rest for PDF view
-            initial_total_width = 1400  # Default window width
+        if hasattr(self, 'splitter') and hasattr(self, 'sidebarStack'):
+            initial_total_width = 1400
             tab_buttons_width = 25
-            sidebar_content_width = 120  # Minimum allowed width
+            sidebar_content_width = 120
             pdf_view_width = initial_total_width - tab_buttons_width - sidebar_content_width
 
-            # Set the initial sizes
             self.splitter.setSizes([tab_buttons_width, sidebar_content_width, pdf_view_width])
 
-            # Ensure the splitter respects our size constraints
-            self.splitter.setCollapsible(0, False)  # Tab buttons can't be collapsed
-            self.splitter.setCollapsible(1, False)  # Sidebar can't be collapsed (use toggle instead)
-            self.splitter.setCollapsible(2, False)  # PDF view can't be collapsed
+            self.splitter.setCollapsible(0, False)
+            self.splitter.setCollapsible(1, False)
+            self.splitter.setCollapsible(2, False)
 
     def toggle_bookmark_tab(self):
         """Toggle bookmark tab visibility"""
+        # Don't switch tabs while in drawing mode
+        if self.sidebarStack.currentIndex() == 1:
+            return
         if self.bookmarksButton.isChecked():
             self.pagesButton.setChecked(False)
             self.pagesTab.hide()
             self.bookmarkTab.show()
-            self.sidePanelContent.show()
 
-            # Restore sidebar size if it was hidden
             if hasattr(self, 'splitter'):
                 current_sizes = self.splitter.sizes()
-                if current_sizes[1] == 0:  # Sidebar is hidden
+                if current_sizes[1] == 0:
                     tab_buttons_width = 25
                     sidebar_content_width = 120
                     remaining_width = sum(current_sizes) - tab_buttons_width - sidebar_content_width
@@ -248,8 +393,6 @@ class UiMainWindow(object):
         else:
             self.bookmarkTab.hide()
             if not self.pagesButton.isChecked():
-                self.sidePanelContent.hide()
-                # Collapse sidebar when both tabs are unchecked
                 if hasattr(self, 'splitter'):
                     current_sizes = self.splitter.sizes()
                     total_width = sum(current_sizes)
@@ -257,16 +400,17 @@ class UiMainWindow(object):
 
     def toggle_pages_tab(self):
         """Toggle pages tab visibility"""
+        # Don't switch tabs while in drawing mode
+        if self.sidebarStack.currentIndex() == 1:
+            return
         if self.pagesButton.isChecked():
             self.bookmarksButton.setChecked(False)
             self.bookmarkTab.hide()
             self.pagesTab.show()
-            self.sidePanelContent.show()
 
-            # Restore sidebar size if it was hidden
             if hasattr(self, 'splitter'):
                 current_sizes = self.splitter.sizes()
-                if current_sizes[1] == 0:  # Sidebar is hidden
+                if current_sizes[1] == 0:
                     tab_buttons_width = 25
                     sidebar_content_width = 120
                     remaining_width = sum(current_sizes) - tab_buttons_width - sidebar_content_width
@@ -274,12 +418,11 @@ class UiMainWindow(object):
         else:
             self.pagesTab.hide()
             if not self.bookmarksButton.isChecked():
-                self.sidePanelContent.hide()
-                # Collapse sidebar when both tabs are unchecked
                 if hasattr(self, 'splitter'):
                     current_sizes = self.splitter.sizes()
                     total_width = sum(current_sizes)
                     self.splitter.setSizes([25, 0, total_width - 25])
+
 
     def setup_bookmarks_tab(self):
         """Setup bookmarks tab content with QPdfBookmarkModel"""
