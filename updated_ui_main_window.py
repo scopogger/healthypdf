@@ -4,7 +4,8 @@ from PySide6.QtWidgets import (QMenu, QMenuBar, QSizePolicy, QSplitter, QStatusB
                                QToolBar, QVBoxLayout, QWidget, QListWidget, QHBoxLayout,
                                QLineEdit, QLabel, QFrame, QTreeView, QToolButton,
                                QStyleOptionToolButton, QStyle, QScrollArea,
-                               QStackedWidget, QPushButton, QButtonGroup, QColorDialog)
+                               QStackedWidget, QPushButton, QButtonGroup, QColorDialog,
+                               QSlider, QSpinBox)
 from PySide6.QtPdf import QPdfDocument, QPdfBookmarkModel
 from PySide6.QtPdfWidgets import QPdfView
 import sys
@@ -323,7 +324,7 @@ class UiMainWindow(object):
         self.drawingPanel.setObjectName("drawingPanel")
         layout = QVBoxLayout(self.drawingPanel)
         layout.setContentsMargins(8, 10, 8, 10)
-        layout.setSpacing(8)
+        layout.setSpacing(6)
 
         # Title
         title = QLabel("Рисование")
@@ -339,11 +340,16 @@ class UiMainWindow(object):
         tools_label.setStyleSheet("font-size: 11px;")
         layout.addWidget(tools_label)
 
-        self._draw_tool_group = QButtonGroup(self.drawingPanel)
-        self._draw_tool_group.setExclusive(True)
+        _draw_tool_group = QButtonGroup(self.drawingPanel)
+        _draw_tool_group.setExclusive(True)
 
         tools_row = QHBoxLayout()
         tools_row.setSpacing(4)
+
+        _btn_style = (
+            "QPushButton { padding: 4px; border: 1px solid #bbb; border-radius: 3px; background: #f0f0f0; }"
+            "QPushButton:checked { background: #dce8f8; border: 2px solid #0078d7; font-weight: bold; }"
+        )
 
         self.drawBrushBtn = QPushButton(self.drawingPanel)
         self.drawBrushBtn.setCheckable(True)
@@ -353,10 +359,7 @@ class UiMainWindow(object):
         self.drawBrushBtn.setIconSize(QSize(22, 22))
         self.drawBrushBtn.setToolTip("Кисть")
         self.drawBrushBtn.setFixedHeight(34)
-        self.drawBrushBtn.setStyleSheet(
-            "QPushButton { padding: 4px; border: 1px solid #bbb; border-radius: 3px; background: #f0f0f0; }"
-            "QPushButton:checked { background: #dce8f8; border: 2px solid #0078d7; font-weight: bold; }"
-        )
+        self.drawBrushBtn.setStyleSheet(_btn_style)
 
         self.drawRectBtn = QPushButton(self.drawingPanel)
         self.drawRectBtn.setCheckable(True)
@@ -365,49 +368,145 @@ class UiMainWindow(object):
         self.drawRectBtn.setIconSize(QSize(22, 22))
         self.drawRectBtn.setToolTip("Прямоугольник")
         self.drawRectBtn.setFixedHeight(34)
-        self.drawRectBtn.setStyleSheet(
-            "QPushButton { padding: 4px; border: 1px solid #bbb; border-radius: 3px; background: #f0f0f0; }"
-            "QPushButton:checked { background: #dce8f8; border: 2px solid #0078d7; font-weight: bold; }"
-        )
+        self.drawRectBtn.setStyleSheet(_btn_style)
 
-        self._draw_tool_group.addButton(self.drawBrushBtn)
-        self._draw_tool_group.addButton(self.drawRectBtn)
+        _draw_tool_group.addButton(self.drawBrushBtn)
+        _draw_tool_group.addButton(self.drawRectBtn)
         tools_row.addWidget(self.drawBrushBtn)
         tools_row.addWidget(self.drawRectBtn)
         tools_row.addStretch()
         layout.addLayout(tools_row)
 
-        # ── Colour picker ─────────────────────────────────────────────────
-        color_label = QLabel("Цвет:")
-        color_label.setStyleSheet("font-size: 11px;")
-        layout.addWidget(color_label)
+        sep_tools = QFrame(); sep_tools.setFrameShape(QFrame.HLine); sep_tools.setFrameShadow(QFrame.Sunken)
+        layout.addWidget(sep_tools)
+
+        # ── Brush settings ────────────────────────────────────────────────
+        self.brushSettingsWidget = QWidget(self.drawingPanel)
+        brush_layout = QVBoxLayout(self.brushSettingsWidget)
+        brush_layout.setContentsMargins(0, 0, 0, 0)
+        brush_layout.setSpacing(4)
+
+        brush_color_label = QLabel("Цвет кисти:")
+        brush_color_label.setStyleSheet("font-size: 11px;")
+        brush_layout.addWidget(brush_color_label)
 
         self._draw_current_color = QColor(Qt.black)
         self.drawColorBtn = QPushButton(self.drawingPanel)
         self.drawColorBtn.setObjectName("drawColorBtn")
-        self.drawColorBtn.setToolTip("Выбрать цвет рисования")
-        self.drawColorBtn.setFixedHeight(34)
+        self.drawColorBtn.setToolTip("Выбрать цвет кисти")
+        self.drawColorBtn.setFixedHeight(30)
         self.drawColorBtn.setStyleSheet(
             "QPushButton { padding: 4px 8px; border: 1px solid #bbb; border-radius: 3px; "
             "background: #f0f0f0; text-align: left; }"
             "QPushButton:hover { background: #e0e0e0; }"
         )
         self._update_draw_color_btn_icon()
-        layout.addWidget(self.drawColorBtn)
+        brush_layout.addWidget(self.drawColorBtn)
 
-        # ── Separator ─────────────────────────────────────────────────────
+        # Brush size slider + spinbox
+        brush_size_label = QLabel("Толщина кисти:")
+        brush_size_label.setStyleSheet("font-size: 11px;")
+        brush_layout.addWidget(brush_size_label)
+
+        brush_size_row = QHBoxLayout()
+        self.drawBrushSizeSlider = QSlider(Qt.Horizontal, self.drawingPanel)
+        self.drawBrushSizeSlider.setMinimum(1)
+        self.drawBrushSizeSlider.setMaximum(40)
+        self.drawBrushSizeSlider.setValue(6)
+        self.drawBrushSizeSlider.setToolTip("Толщина кисти")
+        brush_size_row.addWidget(self.drawBrushSizeSlider)
+
+        self.drawBrushSizeSpinBox = QSpinBox(self.drawingPanel)
+        self.drawBrushSizeSpinBox.setMinimum(1)
+        self.drawBrushSizeSpinBox.setMaximum(40)
+        self.drawBrushSizeSpinBox.setValue(6)
+        self.drawBrushSizeSpinBox.setFixedWidth(46)
+        # Keep slider and spinbox in sync
+        self.drawBrushSizeSlider.valueChanged.connect(self.drawBrushSizeSpinBox.setValue)
+        self.drawBrushSizeSpinBox.valueChanged.connect(self.drawBrushSizeSlider.setValue)
+        brush_size_row.addWidget(self.drawBrushSizeSpinBox)
+        brush_layout.addLayout(brush_size_row)
+
+        layout.addWidget(self.brushSettingsWidget)
+
+        # ── Rectangle settings ─────────────────────────────────────────────
+        self.rectSettingsWidget = QWidget(self.drawingPanel)
+        rect_layout = QVBoxLayout(self.rectSettingsWidget)
+        rect_layout.setContentsMargins(0, 0, 0, 0)
+        rect_layout.setSpacing(4)
+
+        # Fill colour
+        rect_fill_label = QLabel("Цвет заливки:")
+        rect_fill_label.setStyleSheet("font-size: 11px;")
+        rect_layout.addWidget(rect_fill_label)
+
+        self._draw_rect_fill_color: QColor | None = QColor(Qt.black)
+        self.drawRectFillColorBtn = QPushButton(self.drawingPanel)
+        self.drawRectFillColorBtn.setObjectName("drawRectFillColorBtn")
+        self.drawRectFillColorBtn.setToolTip("Выбрать цвет заливки прямоугольника")
+        self.drawRectFillColorBtn.setFixedHeight(30)
+        self.drawRectFillColorBtn.setStyleSheet(
+            "QPushButton { padding: 4px 8px; border: 1px solid #bbb; border-radius: 3px; "
+            "background: #f0f0f0; text-align: left; }"
+            "QPushButton:hover { background: #e0e0e0; }"
+        )
+        self._update_rect_fill_btn_icon()
+        rect_layout.addWidget(self.drawRectFillColorBtn)
+
+        # Border colour
+        rect_border_color_label = QLabel("Цвет рамки:")
+        rect_border_color_label.setStyleSheet("font-size: 11px;")
+        rect_layout.addWidget(rect_border_color_label)
+
+        self._draw_rect_border_color: QColor = QColor(Qt.black)
+        self.drawRectBorderColorBtn = QPushButton(self.drawingPanel)
+        self.drawRectBorderColorBtn.setObjectName("drawRectBorderColorBtn")
+        self.drawRectBorderColorBtn.setToolTip("Выбрать цвет рамки прямоугольника")
+        self.drawRectBorderColorBtn.setFixedHeight(30)
+        self.drawRectBorderColorBtn.setStyleSheet(
+            "QPushButton { padding: 4px 8px; border: 1px solid #bbb; border-radius: 3px; "
+            "background: #f0f0f0; text-align: left; }"
+            "QPushButton:hover { background: #e0e0e0; }"
+        )
+        self._update_rect_border_btn_icon()
+        rect_layout.addWidget(self.drawRectBorderColorBtn)
+
+        # Border width
+        border_width_label = QLabel("Толщина рамки:")
+        border_width_label.setStyleSheet("font-size: 11px;")
+        rect_layout.addWidget(border_width_label)
+
+        border_width_row = QHBoxLayout()
+        self.drawRectBorderWidthSlider = QSlider(Qt.Horizontal, self.drawingPanel)
+        self.drawRectBorderWidthSlider.setMinimum(0)
+        self.drawRectBorderWidthSlider.setMaximum(20)
+        self.drawRectBorderWidthSlider.setValue(2)
+        self.drawRectBorderWidthSlider.setToolTip("0 = без рамки")
+        border_width_row.addWidget(self.drawRectBorderWidthSlider)
+
+        self.drawRectBorderWidthSpinBox = QSpinBox(self.drawingPanel)
+        self.drawRectBorderWidthSpinBox.setMinimum(0)
+        self.drawRectBorderWidthSpinBox.setMaximum(20)
+        self.drawRectBorderWidthSpinBox.setValue(2)
+        self.drawRectBorderWidthSpinBox.setFixedWidth(46)
+        self.drawRectBorderWidthSlider.valueChanged.connect(self.drawRectBorderWidthSpinBox.setValue)
+        self.drawRectBorderWidthSpinBox.valueChanged.connect(self.drawRectBorderWidthSlider.setValue)
+        border_width_row.addWidget(self.drawRectBorderWidthSpinBox)
+        rect_layout.addLayout(border_width_row)
+
+        layout.addWidget(self.rectSettingsWidget)
+        self.rectSettingsWidget.hide()   # shown only when Rect tool is active
+
+        # Switch panels on tool change
+        self.drawBrushBtn.toggled.connect(
+            lambda checked: self._on_draw_tool_toggled("brush", checked))
+        self.drawRectBtn.toggled.connect(
+            lambda checked: self._on_draw_tool_toggled("rect", checked))
+
         sep1 = QFrame(); sep1.setFrameShape(QFrame.HLine); sep1.setFrameShadow(QFrame.Sunken)
         layout.addWidget(sep1)
 
         # ── Clear buttons ─────────────────────────────────────────────────
-        self.drawClearPageBtn = QPushButton("Очистить страницу", self.drawingPanel)
-        self.drawClearPageBtn.setFixedHeight(32)
-        self.drawClearPageBtn.setStyleSheet(
-            "QPushButton { border: 1px solid #bbb; border-radius: 3px; background: #f0f0f0; }"
-            "QPushButton:hover { background: #e0e0e0; }"
-        )
-        layout.addWidget(self.drawClearPageBtn)
-
         self.drawClearAllBtn = QPushButton("Очистить все страницы", self.drawingPanel)
         self.drawClearAllBtn.setFixedHeight(32)
         self.drawClearAllBtn.setStyleSheet(
@@ -422,7 +521,7 @@ class UiMainWindow(object):
         sep2 = QFrame(); sep2.setFrameShape(QFrame.HLine); sep2.setFrameShadow(QFrame.Sunken)
         layout.addWidget(sep2)
 
-        self.drawCloseBtn = QPushButton("✕  Выйти из режима рисования", self.drawingPanel)
+        self.drawCloseBtn = QPushButton("✕  Закрыть", self.drawingPanel)
         self.drawCloseBtn.setFixedHeight(36)
         self.drawCloseBtn.setStyleSheet(
             "QPushButton { color: #c0392b; font-weight: bold; border: 1px solid #e0a0a0; "
@@ -431,13 +530,50 @@ class UiMainWindow(object):
         )
         layout.addWidget(self.drawCloseBtn)
 
+    def _on_draw_tool_toggled(self, tool: str, checked: bool):
+        """Show the correct settings sub-panel when a tool button is toggled."""
+        if not checked:
+            return
+        show_brush = (tool == "brush")
+        self.brushSettingsWidget.setVisible(show_brush)
+        self.rectSettingsWidget.setVisible(not show_brush)
+
+    def _update_rect_fill_btn_icon(self):
+        """Refresh the fill-colour swatch. None fill -> hatched icon."""
+        fill = getattr(self, "_draw_rect_fill_color", None)
+        px = QPixmap(18, 18)
+        if fill is not None:
+            px.fill(fill)
+            text = "  Цвет заливки"
+        else:
+            px.fill(QColor("#f0f0f0"))
+            from PySide6.QtGui import QPainter, QPen
+            p = QPainter(px)
+            p.setPen(QPen(QColor("#888"), 1))
+            p.drawLine(0, 18, 18, 0)
+            p.drawLine(0, 9, 9, 0)
+            p.drawLine(9, 18, 18, 9)
+            p.end()
+            text = "  Без заливки"
+        self.drawRectFillColorBtn.setIcon(QIcon(px))
+        self.drawRectFillColorBtn.setIconSize(QSize(18, 18))
+        self.drawRectFillColorBtn.setText(text)
+
+    def _update_rect_border_btn_icon(self):
+        """Refresh the border-colour swatch on the button."""
+        color = getattr(self, "_draw_rect_border_color", QColor(Qt.black))
+        px = QPixmap(18, 18)
+        px.fill(color)
+        self.drawRectBorderColorBtn.setIcon(QIcon(px))
+        self.drawRectBorderColorBtn.setIconSize(QSize(18, 18))
+        self.drawRectBorderColorBtn.setText("  Цвет рамки")
     def _update_draw_color_btn_icon(self):
-        """Refresh the colour swatch on the colour picker button."""
+        """Refresh the brush colour swatch on the colour picker button."""
         px = QPixmap(18, 18)
         px.fill(self._draw_current_color)
         self.drawColorBtn.setIcon(QIcon(px))
         self.drawColorBtn.setIconSize(QSize(18, 18))
-        self.drawColorBtn.setText("  Выбрать цвет")
+        self.drawColorBtn.setText("  Цвет кисти")
 
     def show_drawing_panel(self):
         """Switch the sidepanel to drawing tools, hiding the tab-button strip."""
@@ -595,6 +731,9 @@ class UiMainWindow(object):
         self.actionAbout = QAction(main_window)
         self.actionAbout.setObjectName("actionAbout")
 
+        self.actionOpenHelp = QAction(main_window)
+        self.actionOpenHelp.setObjectName("actionOpenHelp")
+
         # Recent files management actions
         self.actionClearRecentFiles = QAction(main_window)
         self.actionClearRecentFiles.setObjectName("actionClearRecentFiles")
@@ -711,6 +850,8 @@ class UiMainWindow(object):
 
         # Help menu
         self.menuHelp.addAction(self.actionAbout)
+        self.menuHelp.addSeparator()
+        self.menuHelp.addAction(self.actionOpenHelp)
 
     def define_toolbar_elements(self, main_window):
         """Create toolbar and its elements"""
@@ -895,6 +1036,7 @@ class UiMainWindow(object):
 
             # Help actions
             self.actionAbout: "help.png",
+            self.actionOpenHelp: "help.png",
         }
 
         # Apply icons
