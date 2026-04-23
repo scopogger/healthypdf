@@ -4,7 +4,7 @@ from PySide6.QtCore import QEvent, Qt
 from PySide6.QtGui import QDragEnterEvent, QDropEvent
 from PySide6.QtPdf import QPdfBookmarkModel
 from PySide6.QtWidgets import (
-    QMainWindow, QMessageBox, QInputDialog
+    QMainWindow, QMessageBox, QInputDialog, QMenu
 )
 
 # Single source of truth for the application name used in window titles
@@ -217,6 +217,26 @@ class MainWindow(QMainWindow):
             self.ui.drawClearAllBtn.clicked.connect(self._draw_clear_all_pages)
         if hasattr(self.ui, 'drawCloseBtn'):
             self.ui.drawCloseBtn.clicked.connect(self._draw_close_mode)
+
+        # Brush size
+        if hasattr(self.ui, 'drawBrushSizeSpinBox'):
+            self.ui.drawBrushSizeSpinBox.valueChanged.connect(self._draw_set_brush_size)
+
+        # Rect fill colour
+        if hasattr(self.ui, 'drawRectFillColorBtn'):
+            self.ui.drawRectFillColorBtn.clicked.connect(self._draw_open_rect_fill_color_dialog)
+
+        # Rect border colour
+        if hasattr(self.ui, 'drawRectBorderColorBtn'):
+            self.ui.drawRectBorderColorBtn.clicked.connect(self._draw_open_rect_border_color_dialog)
+
+        # Rect border width
+        if hasattr(self.ui, 'drawRectBorderWidthSpinBox'):
+            self.ui.drawRectBorderWidthSpinBox.valueChanged.connect(self._draw_set_rect_border_width)
+
+        # Context menu on PDF viewer
+        self.ui.pdfView.setContextMenuPolicy(Qt.CustomContextMenu)
+        self.ui.pdfView.customContextMenuRequested.connect(self._show_page_context_menu)
 
     # All action connections are now handled by ActionsHandler
 
@@ -504,16 +524,10 @@ class MainWindow(QMainWindow):
                 total_pages = self.get_total_display_pages()
                 if 1 <= display_page_num <= total_pages:
                     layout_index = self.get_actual_page_from_display_number(display_page_num)
-                    if hasattr(self.ui.pdfView, 'scroll_to_page'):
+                    if hasattr(self.ui.pdfView, 'go_to_page'):
+                        # self.ui.pdfView.go_to_page(layout_index)
+
                         self.ui.pdfView.scroll_to_page(layout_index)
-                        # Sync thumbnail highlight + scroll to match
-                        try:
-                            orig_page = self.ui.pdfView.page_widget_controller \
-                                .getPageInfoByIndex(layout_index).page_num
-                            if hasattr(self.ui.thumbnailList, 'set_current_page'):
-                                self.ui.thumbnailList.set_current_page(orig_page)
-                        except Exception as e:
-                            print(f"[go_to_page_input] thumbnail sync: {e}")
                 else:
                     current_display_page = self.get_current_display_page_number()
                     self.ui.m_pageInput.setText(str(current_display_page))
@@ -563,7 +577,7 @@ class MainWindow(QMainWindow):
     # Event handlers
     def on_page_changed(self, orig_page_num: int):
         """pdfView now emits ORIGINAL page numbers; thumbnail widget likely expects original page ids"""
-        print(f"Calling 'on_page_changed' from main_window to page {orig_page_num}")
+        # print(f"Calling 'on_page_changed' from main_window to page {orig_page_num}")
         if hasattr(self.ui.thumbnailList, 'set_current_page'):
             # thumbnailList probably expects original page number; if it expects layout index adjust accordingly
             try:
@@ -578,50 +592,60 @@ class MainWindow(QMainWindow):
 
     def on_action_draw_toggled(self, checked: bool):
         """Toggle drawing mode. If turning off and there are unsaved drawings prompt Save/Discard/Cancel."""
-
-        if self.ui.pdfView.drawing_mode == checked:
+        ui = self.ui
+        pv = ui.pdfView
+        if pv.drawing_mode == checked:
             return
-        is_has_value = self.ui.pdfView.page_widget_controller.dict_vectors.isHasValue()
+
+        # При включении режима рисования dict_vectors ВСЕГДА пустой (иначе - где-то произошла ошибка)
+        is_has_value = pv.page_widget_controller.dict_vectors.isHasValue()
 
         if is_has_value:
+            #  при да - все выполняется как обычно (даже не смотрим)
+            #  при нет - dict_vectors очищается и далее как обычно
+            #  при отмене - Возвращаем обратный сhecked и return
             reply = self.ask_save_changes()
             if reply == QMessageBox.Discard:
-                self.ui.pdfView.page_widget_controller.dict_vectors.Clear()
+                self._draw_clear_all_pages()
             elif reply == QMessageBox.Cancel:
-                self.ui.actionDraw.setChecked(not checked)
+                ui.actionDraw.setChecked(not checked)
                 return
 
-        self.ui.pdfView.drawing_mode = checked
+        pv.drawing_mode = checked
 
         if checked:
             # Hide page navigation widgets in toolbar
-            self.ui.m_pageInput.hide()
-            self.ui.m_pageLabel.hide()
+            ui.m_pageInput.hide()
+            ui.m_pageLabel.hide()
             # Switch sidepanel to drawing tools (hides tab-button strip too)
-            self.ui.show_drawing_panel()
-            # Suppress any old floating overlay if it was ever created
-            if hasattr(self.ui.pdfView, 'drawing_tools'):
-                try:
-                    self.ui.pdfView.drawing_tools.hide()
-                except Exception:
-                    pass
-            self.ui.pdfView.wheelCtrl = self.ui.pdfView.ctrlDrawing
+            ui.show_drawing_panel()
+            pv.wheelCtrl = pv.ctrlDrawing
+
+            # Надо будет прочистить код чтобы другая рисовалка не вызывалась - и потом это удалить
+            # if hasattr(pv, 'drawing_tools'):
+            #     try:
+            #         pv.drawing_tools.hide()
+            #     except Exception:
+            #         pass
+
         else:
             # Restore page navigation
-            self.ui.m_pageInput.show()
-            self.ui.m_pageLabel.show()
+            ui.m_pageInput.show()
+            ui.m_pageLabel.show()
             # Restore normal sidepanel
-            self.ui.hide_drawing_panel()
-            # Hide floating overlay if present
-            if hasattr(self.ui.pdfView, 'drawing_tools'):
-                try:
-                    self.ui.pdfView.drawing_tools.hide()
-                except Exception:
-                    pass
-            self.ui.pdfView.wheelCtrl = self.ui.pdfView.ctrlMain
+            ui.hide_drawing_panel()
+            pv.wheelCtrl = pv.ctrlMain
+
+            # # Надо будет прочистить код чтобы другая рисовалка не вызывалась - и потом это удалить
+            # if hasattr(pv, 'drawing_tools'):
+            #     try:
+            #         pv.drawing_tools.hide()
+            #     except Exception:
+            #         pass
 
         self.update_ui_state()
-        self.ui.thumbnailList.refresh_thumbnails(self.ui.pdfView.document)
+        # refresh UI (как будто бы не самый лучший способ вызова, подумать)
+        ui.thumbnailList.refresh_thumbnails(pv.document)
 
     # ------------------------------------------------------------------ #
     # Drawing sidebar helpers
@@ -663,8 +687,7 @@ class MainWindow(QMainWindow):
 
     def _draw_clear_all_pages(self):
         """Clear annotations on all pages."""
-        if hasattr(self.ui.pdfView, '_clear_all_pages_overlay'):
-            self.ui.pdfView._clear_all_pages_overlay()
+        self.ui.pdfView.clear_all_pages_overlay()
 
     def _draw_close_mode(self):
         """Uncheck the Draw action, which triggers on_action_draw_toggled(False)."""
@@ -758,6 +781,113 @@ class MainWindow(QMainWindow):
 
     # def pageInputEditing(self):
     #     self.ui.pdfView.zoom_action[self.ui.pdfView.zoom_type]()
+
+    # ------------------------------------------------------------------ #
+    # Context menu on PDF viewer
+    # ------------------------------------------------------------------ #
+    def _show_page_context_menu(self, pos):
+        """Show right-click context menu for page operations."""
+        pv = self.ui.pdfView
+        if not pv or not pv.document:
+            return
+
+        menu = QMenu(self)
+
+        act_cw  = menu.addAction("↻  Повернуть по часовой")
+        act_ccw = menu.addAction("↺  Повернуть против часовой")
+        menu.addSeparator()
+        act_up   = menu.addAction("▲  Переместить вверх")
+        act_down = menu.addAction("▼  Переместить вниз")
+        menu.addSeparator()
+        act_del  = menu.addAction("✕  Удалить страницу")
+
+        chosen = menu.exec(self.ui.pdfView.mapToGlobal(pos))
+        if chosen is None:
+            return
+
+        if chosen == act_cw:
+            self.actions_handler.rotate_page_clockwise()
+        elif chosen == act_ccw:
+            self.actions_handler.rotate_page_counterclockwise()
+        elif chosen == act_up:
+            self.actions_handler.move_page_up()
+        elif chosen == act_down:
+            self.actions_handler.move_page_down()
+        elif chosen == act_del:
+            self.actions_handler.delete_pages(current_page=True)
+
+    # ------------------------------------------------------------------ #
+    # New drawing-panel helpers
+    # ------------------------------------------------------------------ #
+    def _draw_set_brush_size(self, size: int):
+        """Propagate brush size to all current page overlays."""
+        for w in self.ui.pdfView.page_widget_controller.page_widgets:
+            try:
+                w.overlay.set_brush_size(size)
+            except Exception:
+                pass
+
+    def _draw_open_rect_fill_color_dialog(self):
+        """Open colour picker for rectangle fill (None = no fill)."""
+        from PySide6.QtWidgets import QColorDialog, QMessageBox
+        from PySide6.QtGui import QColor
+
+        # We add a special "No fill" button via an info dialog approach.
+        # Simpler: use standard color dialog; user can press Cancel to mean
+        # "keep current". We offer a separate "Remove fill" via a small QMenu.
+        menu = QMenu(self)
+        act_pick   = menu.addAction("Выбрать цвет заливки…")
+        act_no_fill = menu.addAction("Без заливки (прозрачно)")
+        btn = self.ui.drawRectFillColorBtn
+        chosen = menu.exec(btn.mapToGlobal(btn.rect().bottomLeft()))
+        if chosen == act_no_fill:
+            self.ui._draw_rect_fill_color = None
+            self.ui._update_rect_fill_btn_icon()
+            for w in self.ui.pdfView.page_widget_controller.page_widgets:
+                try:
+                    w.overlay.set_rect_fill_color(None)
+                except Exception:
+                    pass
+        elif chosen == act_pick:
+            current = getattr(self.ui, "_draw_rect_fill_color", None) or QColor(Qt.black)
+            color = QColorDialog.getColor(
+                current, self, "Цвет заливки прямоугольника",
+                options=QColorDialog.DontUseNativeDialog
+            )
+            if color.isValid():
+                self.ui._draw_rect_fill_color = color
+                self.ui._update_rect_fill_btn_icon()
+                for w in self.ui.pdfView.page_widget_controller.page_widgets:
+                    try:
+                        w.overlay.set_rect_fill_color(color)
+                    except Exception:
+                        pass
+
+    def _draw_open_rect_border_color_dialog(self):
+        """Open colour picker for rectangle border colour."""
+        from PySide6.QtWidgets import QColorDialog
+        from PySide6.QtGui import QColor
+        current = getattr(self.ui, "_draw_rect_border_color", QColor(Qt.black))
+        color = QColorDialog.getColor(
+            current, self, "Цвет рамки прямоугольника",
+            options=QColorDialog.DontUseNativeDialog
+        )
+        if color.isValid():
+            self.ui._draw_rect_border_color = color
+            self.ui._update_rect_border_btn_icon()
+            for w in self.ui.pdfView.page_widget_controller.page_widgets:
+                try:
+                    w.overlay.set_rect_border_color(color)
+                except Exception:
+                    pass
+
+    def _draw_set_rect_border_width(self, width: int):
+        """Propagate border width to all current page overlays."""
+        for w in self.ui.pdfView.page_widget_controller.page_widgets:
+            try:
+                w.overlay.set_rect_border_width(width)
+            except Exception:
+                pass
 
     def closeEvent(self, event):
         """Handle application close event"""
