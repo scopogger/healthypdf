@@ -9,6 +9,11 @@ class PDFPrinter:
     mm_per_inch = 25.4
     points_per_inch = 72.0
 
+    # DPI used when rendering pages for the on-screen preview (lower = faster)
+    PREVIEW_DPI = 96
+    # DPI used when actually sending pages to the printer
+    PRINT_DPI = 300
+
     @staticmethod
     def print_pdf_with_settings(main_window, doc):
         total_pages = len(doc)
@@ -19,57 +24,77 @@ class PDFPrinter:
         printer = QPrinter(QPrinter.HighResolution)
         printer.setFromTo(1, total_pages)
 
-        # QPrintPreviewDialog has its own Print and Page Setup buttons in its toolbar,
-        # so there is no need for a separate QPrintDialog first.
+        # Cache: maps (page_num, dpi) -> QImage so each page is rendered only once
+        # per preview session. The dict is captured by the lambda closure.
+        _cache: dict = {}
+
+        def _on_paint(p: QPrinter):
+            # Distinguish preview (screen) from final print pass by resolution:
+            # QPrintPreviewDialog uses a low-res virtual printer for the preview
+            # widget; the real print pass uses the actual printer DPI.
+            is_preview = (p.outputFormat() == QPrinter.OutputFormat.PdfFormat or
+                          p.resolution() <= 150)
+            dpi = PDFPrinter.PREVIEW_DPI if is_preview else PDFPrinter.PRINT_DPI
+            PDFPrinter._paint_to_printer(p, doc, main_window, dpi, _cache)
+
         preview = QPrintPreviewDialog(printer, main_window)
         preview.setWindowTitle("Предпросмотр и печать")
-        preview.paintRequested.connect(
-            lambda p: PDFPrinter._paint_to_printer(p, doc, main_window)
-        )
+        preview.paintRequested.connect(_on_paint)
         preview.exec()
 
     # ------------------------------------------------------------------ #
     @staticmethod
-    def _paint_to_printer(printer: QPrinter, doc, main_window):
+    def _paint_to_printer(printer: QPrinter, doc, main_window,
+                          render_dpi: int = PRINT_DPI, cache: dict = None):
         """
         Render all requested pages onto *printer*.
         Called both by the preview widget and the final print pass.
-        """
-        total_pages = len(doc)
 
-        # Получаем настройки
+        *cache* is a dict keyed by (page_num, dpi) -> QImage.
+        Passing the same dict across multiple paintRequested calls means each
+        page is only decoded from PyMuPDF once per DPI level.
+        """
+        if cache is None:
+            cache = {}
+
+        total_pages = len(doc)
         mode = printer.printRange()
         pages_to_print = PDFPrinter._extract_pages_from_printer(printer, total_pages, mode)
         if not pages_to_print:
-            # QMessageBox.information(main_window, "Нет страниц", "Диапазон страниц пуст.")
             return
 
-        # тут уже всё в пикселях устройства, ничего считать заново не надо
         paint_rect_px = printer.pageLayout().paintRectPixels(printer.resolution())
         paper_w_px = paint_rect_px.width()
         paper_h_px = paint_rect_px.height()
 
-        # рендер на принтерном dpi
-        render_dpi = min(printer.resolution(), 300)
-
         painter = QPainter(printer)
-
         try:
             for idx, page_num in enumerate(pages_to_print):
-                page = doc.load_page(page_num)
-                rect = page.rect
-                is_landscape = rect.width > rect.height
+                cache_key = (page_num, render_dpi)
+                qimg = cache.get(cache_key)
 
-                # рендерим с фиксированным DPI
-                base_scale = render_dpi / PDFPrinter.points_per_inch
-                mat = fitz.Matrix(base_scale, base_scale)
-                pix = page.get_pixmap(matrix=mat)
-                qimg = QImage.fromData(pix.tobytes("png"), "png")
-                if qimg.isNull():
-                    continue
+                if qimg is None:
+                    page = doc.load_page(page_num)
+                    rect = page.rect
+                    is_landscape = rect.width > rect.height
 
-                if is_landscape:
-                    qimg = qimg.transformed(QTransform().rotate(90))
+                    base_scale = render_dpi / PDFPrinter.points_per_inch
+                    mat = fitz.Matrix(base_scale, base_scale)
+                    # Use ppm (faster than png — no compression step)
+                    pix = page.get_pixmap(matrix=mat, alpha=False, colorspace=fitz.csRGB)
+                    qimg = QImage.fromData(pix.tobytes("ppm"), "ppm")
+                    del pix, mat
+
+                    if qimg.isNull():
+                        continue
+
+                    if is_landscape:
+                        qimg = qimg.transformed(QTransform().rotate(90))
+
+                    cache[cache_key] = qimg
+                    # Let Qt process events so the UI stays responsive while
+                    # we build the preview for large documents.
+                    QApplication.processEvents()
 
                 img_w = qimg.width()
                 img_h = qimg.height()
