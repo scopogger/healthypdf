@@ -123,6 +123,8 @@ class ActionsHandler:
             self.ui.actionAboutPdf.triggered.connect(self.show_pdf_info)
         if hasattr(self.ui, 'actionAbout'):
             self.ui.actionAbout.triggered.connect(self.show_about)
+        if hasattr(self.ui, 'actionOpenHelp'):
+            self.ui.actionOpenHelp.triggered.connect(self.open_help_document)
 
     def connect_view_actions(self):
         """Connect view actions"""
@@ -576,8 +578,9 @@ class ActionsHandler:
 
         if ok:
             self.main_window.current_document_path = file_path
-            if hasattr(self.main_window, 'update_window_title'):
-                self.main_window.update_window_title()
+            if hasattr(self.main_window, 'setWindowTitle'):
+                filename = os.path.basename(file_path)
+                self.main_window.setWindowTitle(f"{APP_NAME} — {filename}")
             self._mark_not_modified()
             settings_manager.add_recent_file(file_path)
             self.update_recent_files_menu()
@@ -771,31 +774,34 @@ class ActionsHandler:
     # Panel ops (respecting new splitter sizing)
     # -----------------------------
     def toggle_side_panel(self):
-        if not hasattr(self.ui, 'sidebarStack') or not hasattr(self.ui, 'splitter'):
+        if not hasattr(self.ui, 'sidePanelContent'):
             return
-        # Don't toggle if in drawing mode
-        if self.ui.sidebarStack.currentIndex() == 1:
-            return
-        sizes = self.ui.splitter.sizes()
-        is_visible = len(sizes) >= 2 and sizes[1] > 0
+        is_visible = self.ui.sidePanelContent.isVisible()
 
         if not is_visible:
+            self.ui.sidePanelContent.show()
             # Prefer opening the Pages tab
-            pages_btn = getattr(self.ui, 'pagesButton', None)
-            if pages_btn:
-                pages_btn.setChecked(True)
-                self.ui.toggle_pages_tab()
+            for name in ('pagesButton', 'pagesTab'):
+                w = getattr(self.ui, name, None)
+                if hasattr(w, 'setChecked'):
+                    w.setChecked(True)
+                if hasattr(w, 'show'):
+                    w.show()
 
-            total = sum(sizes) if sizes else self.main_window.width()
-            tab_buttons_width = 25
-            try:
-                _, panel_width, _ = settings_manager.load_panel_state()
-            except Exception:
-                panel_width = 150
-            panel_width = max(150, min(300, int(panel_width or 150)))
-            self.ui.splitter.setSizes(
-                [tab_buttons_width, panel_width, max(400, total - tab_buttons_width - panel_width)])
+            if hasattr(self.ui, 'splitter'):
+                sizes = self.ui.splitter.sizes()
+                total = sum(sizes) if sizes else self.main_window.width()
+                tab_buttons_width = 25
+                # try to restore preferred width from settings if present
+                try:
+                    _, panel_width, _ = settings_manager.load_panel_state()
+                except Exception:
+                    panel_width = 150
+                panel_width = max(150, min(300, int(panel_width or 150)))
+                self.ui.splitter.setSizes(
+                    [tab_buttons_width, panel_width, max(400, total - tab_buttons_width - panel_width)])
         else:
+            self.ui.sidePanelContent.hide()
             if hasattr(self.ui, 'splitter'):
                 total = sum(self.ui.splitter.sizes())
                 self.ui.splitter.setSizes([25, 0, max(0, total - 25)])
@@ -1186,6 +1192,49 @@ class ActionsHandler:
             print(f"Error parsing PDF date '{pdf_date_str}': {e}")
             return pdf_date_str
 
+    def open_help_document(self):
+        """
+        Открыть файл справки-инструкции.
+        Ищем 'help.pdf' рядом с исполняемым файлом (или в папке ресурсов).
+        Если файл не найден — сообщаем пользователю.
+        """
+        import sys, subprocess
+        # Possible locations for the help PDF
+        candidates = []
+        if getattr(sys, 'frozen', False):
+            base = os.path.dirname(sys.executable)
+            candidates.append(os.path.join(base, 'help.pdf'))
+            candidates.append(os.path.join(sys._MEIPASS, 'help.pdf'))
+        else:
+            base = os.path.dirname(os.path.abspath(__file__))
+            candidates.append(os.path.join(base, 'help.pdf'))
+            candidates.append(os.path.join(base, 'docs', 'help.pdf'))
+
+        help_path = next((p for p in candidates if os.path.isfile(p)), None)
+
+        if help_path is None:
+            QMessageBox.information(
+                self.main_window,
+                'Справка',
+                'Файл справки (help.pdf) не найден.\n'
+                'Поместите файл help.pdf рядом с приложением.'
+            )
+            return
+
+        # Open with the system default PDF viewer
+        try:
+            if sys.platform.startswith('win'):
+                os.startfile(help_path)
+            elif sys.platform == 'darwin':
+                subprocess.Popen(['open', help_path])
+            else:
+                subprocess.Popen(['xdg-open', help_path])
+        except Exception as e:
+            QMessageBox.critical(
+                self.main_window, 'Ошибка',
+                f'Не удалось открыть файл справки:\n{e}'
+            )
+
     def show_about(self):
         """Показать информацию о приложении"""
         APP_VERSION = "0.831"
@@ -1351,7 +1400,7 @@ class ActionsHandler:
                 base_dir = os.path.join(gs_path, "ghostscript")
             else:
                 # for windows r"C:\Program Files\gs\gs10.04.0\bin\gswin64c.exe"
-                base_dir = r"C:/Scopogstall/DevEnv/repos/py/altpdf/gs/lib"  # os.path.dirname(os.path.abspath(__file__))
+                base_dir = r"C:\Scopogger\DevEnv\py\pdf_editor\healthypdf\ghostscript"  # os.path.dirname(os.path.abspath(__file__))
             gs_exe_name = "gswin64c.exe"
 
         else:  # Linux
@@ -1371,6 +1420,7 @@ class ActionsHandler:
 
     def compress_pdf(self):
         gs_path = self.get_ghostscript_path()  # r"C:\Program Files\gs\gs10.04.0\bin\gswin64c.exe"
+        # gs_path = r"C:/Scopogger/DevEnv/py/pdf_editor/healthypdf/ghostscript/gswin64c.exe"
 
         if not gs_path:
             QMessageBox.warning(self.main_window, "Ошибка сжатия",

@@ -339,6 +339,10 @@ class PageWidgetStack(QVBoxLayout):
                         print(
                             f"[PDFViewer] create_placeholder_widgets: connect failed for orig {page_info_i.page_num}: {e}")
 
+                    # Apply live draw state so newly created widgets inherit
+                    # current tool/colour/size settings.
+                    self._apply_draw_state(newWidget)
+
                     map_pages.append(newWidget)
 
             # print(f"Current pages: {[x.layout_index for x in self.page_widgets]}")
@@ -409,6 +413,42 @@ class PageWidgetStack(QVBoxLayout):
 
         if self.isSpacer:
             self.removeSpacer()
+
+    def _apply_draw_state(self, widget):
+        """Copy the current draw_state (stored on the owner PDFViewer) to a widget overlay."""
+        # draw_state lives on the PDFViewer instance; PageWidgetStack has no direct
+        # reference to it, so we walk up via the parent QWidget chain.
+        try:
+            viewer = getattr(self, '_viewer', None)
+            state = getattr(viewer, 'draw_state', None)
+            if state is None:
+                return
+
+            from PySide6.QtGui import QColor
+            ov = widget.overlay
+
+            tool = state.get('tool', 'brush')
+            ov.set_tool(tool)
+
+            bc = state.get('brush_color')
+            if bc is not None:
+                ov.set_color(bc)
+
+            ov.set_brush_size(state.get('brush_size', 6))
+
+            rfc = state.get('rect_fill_color', None)   # may be None (no fill) or QColor
+            ov.set_rect_fill_color(rfc)
+
+            rbc = state.get('rect_border_color')
+            if rbc is not None:
+                ov.set_rect_border_color(rbc)
+
+            ov.set_rect_border_width(state.get('rect_border_width', 2))
+
+            if widget.page_info.page_num == getattr(self, '_drawing_page_num', -1):
+                ov.set_enabled(True)
+        except Exception as e:
+            print(f"[PageWidgetStack] _apply_draw_state error: {e}")
 
     def _save_vector_immediate(self, widget, orig_page_num: int):
         # print(f"num {widget}")

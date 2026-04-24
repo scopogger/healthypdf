@@ -69,6 +69,7 @@ def translate_ui(self, main_window, language):
         # Help menu and actions
         self.menuHelp.setTitle(QCoreApplication.translate("MainWindow", "Help", None))
         self.actionAbout.setText(QCoreApplication.translate("MainWindow", "About PDF Editor", None))
+        self.actionOpenHelp.setText(QCoreApplication.translate("MainWindow", "Open Help...", None))
 
         # Tab buttons
         self.bookmarksButton.setText(QCoreApplication.translate("MainWindow", "Bookmarks", None))
@@ -140,7 +141,8 @@ def translate_ui(self, main_window, language):
 
         # Help menu and actions
         self.menuHelp.setTitle(QCoreApplication.translate("MainWindow", "Справка", None))
-        self.actionAbout.setText(QCoreApplication.translate("MainWindow", "О программе PDF Редактор", None))
+        self.actionAbout.setText(QCoreApplication.translate("MainWindow", "О программе", None))
+        self.actionOpenHelp.setText(QCoreApplication.translate("MainWindow", "Открыть справку...", None))
 
         # Tab buttons
         self.bookmarksButton.setText(QCoreApplication.translate("MainWindow", "Закладки", None))

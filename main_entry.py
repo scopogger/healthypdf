@@ -67,10 +67,11 @@ def setup_application():
         QGuiApplication.styleHints().setColorScheme(Qt.ColorScheme.Light)
 
     # Set application properties
-    # Note: do NOT set applicationDisplayName — on Linux (KDE/GNOME) the DE appends it
-    # to the window title, producing "Редактор PDF Альт — file.pdf — Редактор PDF Альт".
-    app.setApplicationName("AltPDF")
-    app.setApplicationVersion("0.8.81")
+    # мб не устанавливать applicationDisplayName на альте так как DE склеивает их
+    # в тайтле окна, делая некрасиво типа "Редактор PDF Альт — file.pdf — Редактор PDF Альт"?
+    app.setApplicationName("Редактор PDF Альт")
+    app.setApplicationVersion("0.8.85")
+    # app.setApplicationDisplayName("Редактор PDF Альт")
     app.setOrganizationName("SngPdfTools")
     app.setOrganizationDomain("sng.ru")
 
