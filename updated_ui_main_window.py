@@ -335,16 +335,13 @@ class UiMainWindow(object):
         sep0 = QFrame(); sep0.setFrameShape(QFrame.HLine); sep0.setFrameShadow(QFrame.Sunken)
         layout.addWidget(sep0)
 
-        # ── Tool buttons ─────────────────────────────────────────────────
+        # ── Tool buttons ──────────────────────────────────────────────────
         tools_label = QLabel("Инструмент:")
         tools_label.setStyleSheet("font-size: 11px;")
         layout.addWidget(tools_label)
 
         _draw_tool_group = QButtonGroup(self.drawingPanel)
         _draw_tool_group.setExclusive(True)
-
-        tools_row = QHBoxLayout()
-        tools_row.setSpacing(4)
 
         _btn_style = (
             "QPushButton { padding: 4px; border: 1px solid #bbb; border-radius: 3px; background: #f0f0f0; }"
@@ -372,6 +369,9 @@ class UiMainWindow(object):
 
         _draw_tool_group.addButton(self.drawBrushBtn)
         _draw_tool_group.addButton(self.drawRectBtn)
+
+        tools_row = QHBoxLayout()
+        tools_row.setSpacing(4)
         tools_row.addWidget(self.drawBrushBtn)
         tools_row.addWidget(self.drawRectBtn)
         tools_row.addStretch()
@@ -403,12 +403,14 @@ class UiMainWindow(object):
         self._update_draw_color_btn_icon()
         brush_layout.addWidget(self.drawColorBtn)
 
-        # Brush size slider + spinbox
+        # Brush size: label + slider + thickness-preview icon
         brush_size_label = QLabel("Толщина кисти:")
         brush_size_label.setStyleSheet("font-size: 11px;")
         brush_layout.addWidget(brush_size_label)
 
         brush_size_row = QHBoxLayout()
+        brush_size_row.setSpacing(6)
+
         self.drawBrushSizeSlider = QSlider(Qt.Horizontal, self.drawingPanel)
         self.drawBrushSizeSlider.setMinimum(1)
         self.drawBrushSizeSlider.setMaximum(40)
@@ -416,20 +418,20 @@ class UiMainWindow(object):
         self.drawBrushSizeSlider.setToolTip("Толщина кисти")
         brush_size_row.addWidget(self.drawBrushSizeSlider)
 
-        self.drawBrushSizeSpinBox = QSpinBox(self.drawingPanel)
-        self.drawBrushSizeSpinBox.setMinimum(1)
-        self.drawBrushSizeSpinBox.setMaximum(40)
-        self.drawBrushSizeSpinBox.setValue(6)
-        self.drawBrushSizeSpinBox.setFixedWidth(46)
-        # Keep slider and spinbox in sync
-        self.drawBrushSizeSlider.valueChanged.connect(self.drawBrushSizeSpinBox.setValue)
-        self.drawBrushSizeSpinBox.valueChanged.connect(self.drawBrushSizeSlider.setValue)
-        brush_size_row.addWidget(self.drawBrushSizeSpinBox)
+        # Thickness preview: a small label showing a filled circle
+        self.drawBrushSizePreview = QLabel(self.drawingPanel)
+        self.drawBrushSizePreview.setFixedSize(32, 32)
+        self.drawBrushSizePreview.setToolTip("Предпросмотр толщины")
+        brush_size_row.addWidget(self.drawBrushSizePreview)
         brush_layout.addLayout(brush_size_row)
+
+        # Wire slider → preview update
+        self.drawBrushSizeSlider.valueChanged.connect(self._update_brush_size_preview)
+        self._update_brush_size_preview(6)   # initial render
 
         layout.addWidget(self.brushSettingsWidget)
 
-        # ── Rectangle settings ─────────────────────────────────────────────
+        # ── Rectangle settings ────────────────────────────────────────────
         self.rectSettingsWidget = QWidget(self.drawingPanel)
         rect_layout = QVBoxLayout(self.rectSettingsWidget)
         rect_layout.setContentsMargins(0, 0, 0, 0)
@@ -440,10 +442,10 @@ class UiMainWindow(object):
         rect_fill_label.setStyleSheet("font-size: 11px;")
         rect_layout.addWidget(rect_fill_label)
 
-        self._draw_rect_fill_color: QColor | None = QColor(Qt.black)
+        self._draw_rect_fill_color = QColor(Qt.black)
         self.drawRectFillColorBtn = QPushButton(self.drawingPanel)
         self.drawRectFillColorBtn.setObjectName("drawRectFillColorBtn")
-        self.drawRectFillColorBtn.setToolTip("Выбрать цвет заливки прямоугольника")
+        self.drawRectFillColorBtn.setToolTip("Выбрать цвет заливки")
         self.drawRectFillColorBtn.setFixedHeight(30)
         self.drawRectFillColorBtn.setStyleSheet(
             "QPushButton { padding: 4px 8px; border: 1px solid #bbb; border-radius: 3px; "
@@ -458,10 +460,10 @@ class UiMainWindow(object):
         rect_border_color_label.setStyleSheet("font-size: 11px;")
         rect_layout.addWidget(rect_border_color_label)
 
-        self._draw_rect_border_color: QColor = QColor(Qt.black)
+        self._draw_rect_border_color = QColor(Qt.black)
         self.drawRectBorderColorBtn = QPushButton(self.drawingPanel)
         self.drawRectBorderColorBtn.setObjectName("drawRectBorderColorBtn")
-        self.drawRectBorderColorBtn.setToolTip("Выбрать цвет рамки прямоугольника")
+        self.drawRectBorderColorBtn.setToolTip("Выбрать цвет рамки")
         self.drawRectBorderColorBtn.setFixedHeight(30)
         self.drawRectBorderColorBtn.setStyleSheet(
             "QPushButton { padding: 4px 8px; border: 1px solid #bbb; border-radius: 3px; "
@@ -471,12 +473,14 @@ class UiMainWindow(object):
         self._update_rect_border_btn_icon()
         rect_layout.addWidget(self.drawRectBorderColorBtn)
 
-        # Border width
+        # Border width: label + slider + thickness-preview icon
         border_width_label = QLabel("Толщина рамки:")
         border_width_label.setStyleSheet("font-size: 11px;")
         rect_layout.addWidget(border_width_label)
 
         border_width_row = QHBoxLayout()
+        border_width_row.setSpacing(6)
+
         self.drawRectBorderWidthSlider = QSlider(Qt.Horizontal, self.drawingPanel)
         self.drawRectBorderWidthSlider.setMinimum(0)
         self.drawRectBorderWidthSlider.setMaximum(20)
@@ -484,20 +488,19 @@ class UiMainWindow(object):
         self.drawRectBorderWidthSlider.setToolTip("0 = без рамки")
         border_width_row.addWidget(self.drawRectBorderWidthSlider)
 
-        self.drawRectBorderWidthSpinBox = QSpinBox(self.drawingPanel)
-        self.drawRectBorderWidthSpinBox.setMinimum(0)
-        self.drawRectBorderWidthSpinBox.setMaximum(20)
-        self.drawRectBorderWidthSpinBox.setValue(2)
-        self.drawRectBorderWidthSpinBox.setFixedWidth(46)
-        self.drawRectBorderWidthSlider.valueChanged.connect(self.drawRectBorderWidthSpinBox.setValue)
-        self.drawRectBorderWidthSpinBox.valueChanged.connect(self.drawRectBorderWidthSlider.setValue)
-        border_width_row.addWidget(self.drawRectBorderWidthSpinBox)
+        self.drawRectBorderWidthPreview = QLabel(self.drawingPanel)
+        self.drawRectBorderWidthPreview.setFixedSize(32, 32)
+        self.drawRectBorderWidthPreview.setToolTip("Предпросмотр толщины рамки")
+        border_width_row.addWidget(self.drawRectBorderWidthPreview)
         rect_layout.addLayout(border_width_row)
+
+        self.drawRectBorderWidthSlider.valueChanged.connect(self._update_border_width_preview)
+        self._update_border_width_preview(2)   # initial render
 
         layout.addWidget(self.rectSettingsWidget)
         self.rectSettingsWidget.hide()   # shown only when Rect tool is active
 
-        # Switch panels on tool change
+        # Switch sub-panels on tool toggle
         self.drawBrushBtn.toggled.connect(
             lambda checked: self._on_draw_tool_toggled("brush", checked))
         self.drawRectBtn.toggled.connect(
@@ -506,7 +509,7 @@ class UiMainWindow(object):
         sep1 = QFrame(); sep1.setFrameShape(QFrame.HLine); sep1.setFrameShadow(QFrame.Sunken)
         layout.addWidget(sep1)
 
-        # ── Clear buttons ─────────────────────────────────────────────────
+        # ── Clear button ──────────────────────────────────────────────────
         self.drawClearAllBtn = QPushButton("Очистить все страницы", self.drawingPanel)
         self.drawClearAllBtn.setFixedHeight(32)
         self.drawClearAllBtn.setStyleSheet(
@@ -529,7 +532,6 @@ class UiMainWindow(object):
             "QPushButton:hover { background: #fad7d7; }"
         )
         layout.addWidget(self.drawCloseBtn)
-
     def _on_draw_tool_toggled(self, tool: str, checked: bool):
         """Show the correct settings sub-panel when a tool button is toggled."""
         if not checked:
@@ -537,6 +539,47 @@ class UiMainWindow(object):
         show_brush = (tool == "brush")
         self.brushSettingsWidget.setVisible(show_brush)
         self.rectSettingsWidget.setVisible(not show_brush)
+
+    def _update_brush_size_preview(self, value: int):
+        """Render a filled circle whose diameter reflects the brush size."""
+        from PySide6.QtGui import QPainter, QColor
+        from PySide6.QtCore import QSize
+        sz = 32
+        pm = QPixmap(sz, sz)
+        pm.fill(Qt.transparent)
+        p = QPainter(pm)
+        p.setRenderHint(QPainter.Antialiasing)
+        # diameter scaled so max value (40) fills the icon
+        diam = max(2, int(value / 40 * (sz - 4))) + 2
+        x = (sz - diam) // 2
+        color = getattr(self, '_draw_current_color', QColor(Qt.black))
+        p.setBrush(color)
+        p.setPen(Qt.NoPen)
+        p.drawEllipse(x, x, diam, diam)
+        p.end()
+        self.drawBrushSizePreview.setPixmap(pm)
+
+    def _update_border_width_preview(self, value: int):
+        """Render a square outline whose stroke reflects the border width."""
+        from PySide6.QtGui import QPainter, QPen, QColor
+        sz = 32
+        pm = QPixmap(sz, sz)
+        pm.fill(Qt.transparent)
+        p = QPainter(pm)
+        p.setRenderHint(QPainter.Antialiasing)
+        if value == 0:
+            # Show a hatched "none" icon
+            p.setPen(QPen(QColor("#aaa"), 1))
+            p.drawLine(4, sz - 4, sz - 4, 4)
+        else:
+            pen_w = max(1, int(value / 20 * (sz - 4)))
+            color = getattr(self, '_draw_rect_border_color', QColor(Qt.black))
+            p.setPen(QPen(color, pen_w))
+            p.setBrush(Qt.NoBrush)
+            margin = pen_w // 2 + 2
+            p.drawRect(margin, margin, sz - margin * 2, sz - margin * 2)
+        p.end()
+        self.drawRectBorderWidthPreview.setPixmap(pm)
 
     def _update_rect_fill_btn_icon(self):
         """Refresh the fill-colour swatch. None fill -> hatched icon."""
