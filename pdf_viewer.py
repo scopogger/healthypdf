@@ -59,6 +59,17 @@ class PDFViewer(QScrollArea):
         # per-original-page vector storage (orig_page_num => {"strokes":[...], "rects":[...]})
         self.page_vectors = {}
 
+        # Live drawing state — applied to every newly created PageWidget overlay.
+        # Keys match DrawingOverlay public setters.
+        self.draw_state = {
+            'tool':              'brush',
+            'brush_color':       None,   # QColor, None = black
+            'brush_size':        6,
+            'rect_fill_color':   None,   # QColor or None (no fill)
+            'rect_border_color': None,   # QColor, None = black
+            'rect_border_width': 2,
+        }
+
         print("Initializing PDFViewer")
 
         # Core properties
@@ -69,6 +80,7 @@ class PDFViewer(QScrollArea):
         # self.page_widgets: list[PageWidget] = []  # same order as pages_info
         self.pages_container = QWidget()
         self.page_widget_controller: PageWidgetStack = PageWidgetStack(self.pages_container)
+        self.page_widget_controller._viewer = self  # back-reference for draw_state lookup
         # self.page_widget_controller.pagePainted.connect(lambda: self.document_modified.emit(True))
         self.pages_container.setSizePolicy(QSizePolicy.Policy.Preferred, QSizePolicy.Policy.Preferred)
         self.zoom_level = 1.0
@@ -148,26 +160,6 @@ class PDFViewer(QScrollArea):
         cur_page_widget.overlay.set_enabled(value)
 
         self.reinitializePageWidgets()
-
-        # TODO - сюда ввести отключение/включение миниатюр, инструментов рисования, отключение зума и т.д.
-        # Включение/отключение инструментов
-        # if value:
-        #
-        #     # 1) Закрыть панель миниатюр/закладок
-        #     # 2) Открыть панель инструментов (новую)
-        #     # 3) Перехват события колесика мыши (чтобы избавиться от зума)
-        #
-        #
-        #     self.verticalScrollBar().setValue(0)
-        # else:
-        #     # Обратные действия пунктам из условия выше
-        #
-        #     # self.drawing_tools.hide()
-        #     # is_has_value = self.page_widget_controller.dict_vectors.isHasValue()
-        #
-        #     # При выходе закрепляем изменения (при наличии)
-        #     # if is_has_value:
-        #     self.overlay_render(self.document.get_page(cur_page_widget.page_info.page_num))
         self.verticalScrollBar().setValue(0)
         self.overlay_render(self.document.get_page(cur_page_widget.page_info.page_num))
         self.refresh_render()
@@ -1556,205 +1548,208 @@ class PDFViewer(QScrollArea):
         return any(
             (getattr(w, "overlay", None) and w.overlay.is_dirty()) for w in self.page_widget_controller.page_widgets)
 
-    def set_drawing_mode(self, enabled: bool):
-        """Enable or disable drawing mode for all page widgets and show tools panel."""
-        # self.drawing_mode = bool(enabled)
-        # Проходим по каждому загруженному pageWidget и активируем у него Overlay
-        # TODO - активировать только у той страницы, на которой находимся
-        #  плюс ограничиваем только редактируемой страницей
-        for w in self.page_widget_controller:
-            try:
-                w.overlay.set_enabled(enabled)
-            except Exception:
-                pass
-        if enabled:
-            if not hasattr(self, "drawing_tools"):
-                self._create_drawing_tools()
-            try:
-                self.drawing_tools.show()
-            except Exception:
-                pass
-        else:
-            if hasattr(self, "drawing_tools"):
-                try:
-                    self.drawing_tools.hide()
-                except Exception:
-                    pass
-
-    def _create_drawing_tools(self):
-        panel = QFrame(self.viewport())
-        panel.setObjectName("drawingTools")
-        panel.setStyleSheet("""
-            QFrame {
-                background: rgba(255,255,255,0.92);
-                border: 1px solid #bbb;
-                padding: 4px;
-            }
-            QPushButton {
-                padding: 4px 8px;
-                border: 1px solid #ccc;
-                border-radius: 3px;
-                background: #f0f0f0;
-            }
-            QPushButton:checked {
-                background: #e0e0e0;
-                border: 2px solid #0078d7;
-                font-weight: bold;
-            }
-            QPushButton#colorBtn {
-                border: 2px solid #333;
-                min-width: 28px;
-            }
-        """)
-
-        main_layout = QVBoxLayout(panel)
-        main_layout.setContentsMargins(4, 4, 4, 4)
-
-        tool_layout = QHBoxLayout()
-        tool_layout.setSpacing(2)
-        tool_layout.setContentsMargins(0, 0, 0, 0)
-
-        self._tool_group = QButtonGroup(panel)
-        self._tool_group.setExclusive(True)
-
-        brush_btn = QPushButton("", panel)
-        brush_btn.setCheckable(True)
-        brush_btn.setObjectName("brushBtn")
-        # brush_btn.setMinimumWidth(80)
-        brush_btn.setIcon(QIcon(f":/light_theme_v2/brush.png"))
-        brush_btn.setIconSize(QSize(24, 24))
-
-        rect_btn = QPushButton("", panel)
-        rect_btn.setCheckable(True)
-        rect_btn.setObjectName("rectBtn")
-        # rect_btn.setMinimumWidth(120)
-        rect_btn.setIcon(QIcon(f":/light_theme_v2/rectangle.png"))
-        rect_btn.setIconSize(QSize(24, 24))
-
-        self._current_draw_color = QColor(Qt.black)
-
-        preview_btn = QPushButton("", panel)
-        preview_btn.setCheckable(False)
-        preview_btn.setObjectName("colorBtn")
-        preview_btn.setToolTip("Select drawing color")
-        self._update_color_button_icon(preview_btn)
-
-        self._tool_group.addButton(brush_btn)
-        self._tool_group.addButton(rect_btn)
-
-        brush_btn.setChecked(True)
-
-        tool_layout.addWidget(brush_btn)
-        tool_layout.addWidget(rect_btn)
-        tool_layout.addWidget(preview_btn)
-
-        main_layout.addLayout(tool_layout)
-
-        clear_btn = QPushButton("Очистить холст", panel)
-        all_clear_btn = QPushButton("Очистить все страницы", panel)
-
-        main_layout.addWidget(clear_btn)
-        main_layout.addWidget(all_clear_btn)
-
-        panel.adjustSize()
-
-        def place_panel():
-            vp = self.viewport()
-            x = max(8, vp.width() - panel.width() - 8)
-            y = 8
-            panel.move(x, y)
-
-        place_panel()
-
-        self._tool_group.buttonToggled.connect(self._on_tool_toggled)
-
-        preview_btn.clicked.connect(self._open_color_dialog)
-
-        clear_btn.clicked.connect(self._clear_current_page_overlay)
-        all_clear_btn.clicked.connect(self._clear_all_pages_overlay)
-
-        self.drawing_tools = panel
-
-    def _update_color_button_icon(self, btn: QPushButton):
-        pixmap = QPixmap(24, 24)
-        pixmap.fill(self._current_draw_color)
-
-        btn.setIcon(QIcon(pixmap))
-        btn.setIconSize(QSize(24, 24))
-
-    def _on_tool_toggled(self, button: QAbstractButton, checked: bool):
-        if not checked:
-            return
-
-        name = button.objectName()
-        if name == "brushBtn":
-            self._set_tool_for_all("brush")
-        elif name == "rectBtn":
-            self._set_tool_for_all("rect")
-
-    def _open_color_dialog(self):
-        color = QColorDialog.getColor(
-            self._current_draw_color,
-            self,
-            "Выберите цвет рисования",
-            options=QColorDialog.DontUseNativeDialog
-        )
-        if color.isValid():
-            self._current_draw_color = color
-            self._update_color_button_icon(self.drawing_tools.findChild(QPushButton, "colorBtn"))
-            self._set_color_for_all(color)
-
-    def _set_color_for_all(self, color: QColor):
-        """Apply the given color to all page overlays."""
-        for w in self.page_widget_controller:
-            try:
-                w.overlay.set_color(color)
-            except Exception as e:
-                print(f"[PDFViewer] Failed to set color: {e}")
-
-    def _set_tool_for_all(self, tool: str):
-        for w in self.page_widget_controller:
-            try:
-                w.overlay.set_tool(tool)
-            except Exception:
-                pass
-
-    def _toggle_color_for_all(self):
-        for w in self.page_widget_controller:
-            try:
-                cur = w.overlay.color
-                new = QColor(Qt.white) if cur == QColor(Qt.black) else QColor(Qt.black)
-                w.overlay.set_color(new)
-            except Exception:
-                pass
-
-    def _clear_current_page_overlay(self):
-        cur_page = self.get_current_page()
-        layout_idx = self.layout_index_for_original(cur_page)
-        if layout_idx is not None and 0 <= layout_idx < self.page_widget_controller.getLastPageWidget().layout_index:
-            try:
-                self.page_widget_controller.getPageWidgetByIndex(layout_idx).overlay.clear_annotations()
-                self.page_widget_controller.dict_vectors.Remove(layout_idx)
-            except Exception:
-                pass
-
-    def _clear_all_pages_overlay(self):
+    def clear_all_pages_overlay(self):
         for i, widget_unit in enumerate(self.page_widget_controller):
             widget_unit.overlay.clear_annotations()
         self.page_widget_controller.dict_vectors.Clear()
 
-    def resizeEvent(self, ev):
-        # Событие при изменении ширины миниатюр
-        super().resizeEvent(ev)
-        try:
-            # self.resize_window_timer.start(400)
-            if hasattr(self, "drawing_tools") and self.drawing_tools.isVisible():
-                vp = self.viewport()
-                x = max(8, vp.width() - self.drawing_tools.width() - 8)
-                y = 8
-                self.drawing_tools.move(x, y)
-        except Exception:
-            pass
+    # def set_drawing_mode(self, enabled: bool):
+    #     """Enable or disable drawing mode for all page widgets and show tools panel."""
+    #     # Проходим по каждому загруженному pageWidget и активируем у него Overlay
+    #     # TODO - активировать только у той страницы, на которой находимся
+    #     #  плюс ограничиваем только редактируемой страницей
+    #     for w in self.page_widget_controller:
+    #         try:
+    #             w.overlay.set_enabled(enabled)
+    #         except Exception:
+    #             pass
+    #     if enabled:
+    #         if not hasattr(self, "drawing_tools"):
+    #             # self._create_drawing_tools()
+    #             pass
+    #         try:
+    #             # self.drawing_tools.show()
+    #             pass
+    #         except Exception:
+    #             pass
+    #     else:
+    #         if hasattr(self, "drawing_tools"):
+    #             try:
+    #                 # self.drawing_tools.hide()
+    #                 pass
+    #             except Exception:
+    #                 pass
+    #
+    # def _create_drawing_tools(self):
+    #     panel = QFrame(self.viewport())
+    #     panel.setObjectName("drawingTools")
+    #     panel.setStyleSheet("""
+    #         QFrame {
+    #             background: rgba(255,255,255,0.92);
+    #             border: 1px solid #bbb;
+    #             padding: 4px;
+    #         }
+    #         QPushButton {
+    #             padding: 4px 8px;
+    #             border: 1px solid #ccc;
+    #             border-radius: 3px;
+    #             background: #f0f0f0;
+    #         }
+    #         QPushButton:checked {
+    #             background: #e0e0e0;
+    #             border: 2px solid #0078d7;
+    #             font-weight: bold;
+    #         }
+    #         QPushButton#colorBtn {
+    #             border: 2px solid #333;
+    #             min-width: 28px;
+    #         }
+    #     """)
+    #
+    #     main_layout = QVBoxLayout(panel)
+    #     main_layout.setContentsMargins(4, 4, 4, 4)
+    #
+    #     tool_layout = QHBoxLayout()
+    #     tool_layout.setSpacing(2)
+    #     tool_layout.setContentsMargins(0, 0, 0, 0)
+    #
+    #     self._tool_group = QButtonGroup(panel)
+    #     self._tool_group.setExclusive(True)
+    #
+    #     brush_btn = QPushButton("", panel)
+    #     brush_btn.setCheckable(True)
+    #     brush_btn.setObjectName("brushBtn")
+    #     # brush_btn.setMinimumWidth(80)
+    #     brush_btn.setIcon(QIcon(f":/light_theme_v2/brush.png"))
+    #     brush_btn.setIconSize(QSize(24, 24))
+    #
+    #     rect_btn = QPushButton("", panel)
+    #     rect_btn.setCheckable(True)
+    #     rect_btn.setObjectName("rectBtn")
+    #     # rect_btn.setMinimumWidth(120)
+    #     rect_btn.setIcon(QIcon(f":/light_theme_v2/rectangle.png"))
+    #     rect_btn.setIconSize(QSize(24, 24))
+    #
+    #     self._current_draw_color = QColor(Qt.black)
+    #
+    #     preview_btn = QPushButton("", panel)
+    #     preview_btn.setCheckable(False)
+    #     preview_btn.setObjectName("colorBtn")
+    #     preview_btn.setToolTip("Select drawing color")
+    #     self._update_color_button_icon(preview_btn)
+    #
+    #     self._tool_group.addButton(brush_btn)
+    #     self._tool_group.addButton(rect_btn)
+    #
+    #     brush_btn.setChecked(True)
+    #
+    #     tool_layout.addWidget(brush_btn)
+    #     tool_layout.addWidget(rect_btn)
+    #     tool_layout.addWidget(preview_btn)
+    #
+    #     main_layout.addLayout(tool_layout)
+    #
+    #     clear_btn = QPushButton("Очистить холст", panel)
+    #     all_clear_btn = QPushButton("Очистить все страницы", panel)
+    #
+    #     main_layout.addWidget(clear_btn)
+    #     main_layout.addWidget(all_clear_btn)
+    #
+    #     panel.adjustSize()
+    #
+    #     def place_panel():
+    #         vp = self.viewport()
+    #         x = max(8, vp.width() - panel.width() - 8)
+    #         y = 8
+    #         panel.move(x, y)
+    #
+    #     place_panel()
+    #
+    #     self._tool_group.buttonToggled.connect(self._on_tool_toggled)
+    #
+    #     preview_btn.clicked.connect(self._open_color_dialog)
+    #
+    #     clear_btn.clicked.connect(self._clear_current_page_overlay)
+    #     all_clear_btn.clicked.connect(self._clear_all_pages_overlay)
+    #
+    #     self.drawing_tools = panel
+    #
+    # def _update_color_button_icon(self, btn: QPushButton):
+    #     pixmap = QPixmap(24, 24)
+    #     pixmap.fill(self._current_draw_color)
+    #
+    #     btn.setIcon(QIcon(pixmap))
+    #     btn.setIconSize(QSize(24, 24))
+    #
+    # def _on_tool_toggled(self, button: QAbstractButton, checked: bool):
+    #     if not checked:
+    #         return
+    #
+    #     name = button.objectName()
+    #     if name == "brushBtn":
+    #         self._set_tool_for_all("brush")
+    #     elif name == "rectBtn":
+    #         self._set_tool_for_all("rect")
+    #
+    # def _open_color_dialog(self):
+    #     color = QColorDialog.getColor(
+    #         self._current_draw_color,
+    #         self,
+    #         "Выберите цвет рисования",
+    #         options=QColorDialog.DontUseNativeDialog
+    #     )
+    #     if color.isValid():
+    #         self._current_draw_color = color
+    #         self._update_color_button_icon(self.drawing_tools.findChild(QPushButton, "colorBtn"))
+    #         self._set_color_for_all(color)
+    #
+    # def _set_color_for_all(self, color: QColor):
+    #     """Apply the given color to all page overlays."""
+    #     for w in self.page_widget_controller:
+    #         try:
+    #             w.overlay.set_color(color)
+    #         except Exception as e:
+    #             print(f"[PDFViewer] Failed to set color: {e}")
+    #
+    # def _set_tool_for_all(self, tool: str):
+    #     for w in self.page_widget_controller:
+    #         try:
+    #             w.overlay.set_tool(tool)
+    #         except Exception:
+    #             pass
+    #
+    # def _toggle_color_for_all(self):
+    #     for w in self.page_widget_controller:
+    #         try:
+    #             cur = w.overlay.color
+    #             new = QColor(Qt.white) if cur == QColor(Qt.black) else QColor(Qt.black)
+    #             w.overlay.set_color(new)
+    #         except Exception:
+    #             pass
+    #
+    # def _clear_current_page_overlay(self):
+    #     cur_page = self.get_current_page()
+    #     layout_idx = self.layout_index_for_original(cur_page)
+    #     if layout_idx is not None and 0 <= layout_idx < self.page_widget_controller.getLastPageWidget().layout_index:
+    #         try:
+    #             self.page_widget_controller.getPageWidgetByIndex(layout_idx).overlay.clear_annotations()
+    #             self.page_widget_controller.dict_vectors.Remove(layout_idx)
+    #         except Exception:
+    #             pass
+    #
+    #
+    # def resizeEvent(self, ev):
+    #     # Событие при изменении ширины миниатюр
+    #     super().resizeEvent(ev)
+    #     try:
+    #         # self.resize_window_timer.start(400)
+    #         if hasattr(self, "drawing_tools") and self.drawing_tools.isVisible():
+    #             vp = self.viewport()
+    #             x = max(8, vp.width() - self.drawing_tools.width() - 8)
+    #             y = 8
+    #             self.drawing_tools.move(x, y)
+    #     except Exception:
+    #         pass
 
     # ---------------- Fit helpers ----------------
     def toggle_fit_to_width(self):
