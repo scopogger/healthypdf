@@ -218,9 +218,9 @@ class MainWindow(QMainWindow):
         if hasattr(self.ui, 'drawCloseBtn'):
             self.ui.drawCloseBtn.clicked.connect(self._draw_close_mode)
 
-        # Brush size
-        if hasattr(self.ui, 'drawBrushSizeSpinBox'):
-            self.ui.drawBrushSizeSpinBox.valueChanged.connect(self._draw_set_brush_size)
+        # Brush size slider
+        if hasattr(self.ui, 'drawBrushSizeSlider'):
+            self.ui.drawBrushSizeSlider.valueChanged.connect(self._draw_set_brush_size)
 
         # Rect fill colour
         if hasattr(self.ui, 'drawRectFillColorBtn'):
@@ -230,9 +230,9 @@ class MainWindow(QMainWindow):
         if hasattr(self.ui, 'drawRectBorderColorBtn'):
             self.ui.drawRectBorderColorBtn.clicked.connect(self._draw_open_rect_border_color_dialog)
 
-        # Rect border width
-        if hasattr(self.ui, 'drawRectBorderWidthSpinBox'):
-            self.ui.drawRectBorderWidthSpinBox.valueChanged.connect(self._draw_set_rect_border_width)
+        # Rect border width slider
+        if hasattr(self.ui, 'drawRectBorderWidthSlider'):
+            self.ui.drawRectBorderWidthSlider.valueChanged.connect(self._draw_set_rect_border_width)
 
         # Context menu on PDF viewer
         self.ui.pdfView.setContextMenuPolicy(Qt.CustomContextMenu)
@@ -659,26 +659,8 @@ class MainWindow(QMainWindow):
                 pass
 
     def _draw_open_color_dialog(self):
-        """Open colour picker and propagate chosen colour to overlays."""
-        from PySide6.QtWidgets import QColorDialog
-        current = getattr(self.ui, '_draw_current_color', None)
-        from PySide6.QtGui import QColor
-        if current is None:
-            current = QColor(0, 0, 0)
-        color = QColorDialog.getColor(
-            current, self,
-            "Выберите цвет рисования",
-            options=QColorDialog.DontUseNativeDialog
-        )
-        if color.isValid():
-            self.ui._draw_current_color = color
-            if hasattr(self.ui, '_update_draw_color_btn_icon'):
-                self.ui._update_draw_color_btn_icon()
-            for w in self.ui.pdfView.page_widget_controller.page_widgets:
-                try:
-                    w.overlay.set_color(color)
-                except Exception:
-                    pass
+        """Alias kept for backward compatibility — delegates to brush dialog."""
+        self._draw_open_color_dialog_brush()
 
     def _draw_clear_current_page(self):
         """Clear annotations on the current page."""
@@ -786,20 +768,30 @@ class MainWindow(QMainWindow):
     # Context menu on PDF viewer
     # ------------------------------------------------------------------ #
     def _show_page_context_menu(self, pos):
-        """Show right-click context menu for page operations."""
+        """Show right-click context menu for page operations.
+        Suppressed while in drawing mode."""
         pv = self.ui.pdfView
         if not pv or not pv.document:
             return
+        # No context menu in drawing mode
+        if pv.drawing_mode:
+            return
 
+        from PySide6.QtGui import QIcon
         menu = QMenu(self)
 
-        act_cw  = menu.addAction("↻  Повернуть по часовой")
-        act_ccw = menu.addAction("↺  Повернуть против часовой")
+        act_cw  = menu.addAction(QIcon(":/light_theme_v2/rotate_temp_clockwise.png"),
+                                  "Повернуть по часовой")
+        act_ccw = menu.addAction(QIcon(":/light_theme_v2/rotate_temp_counterclockwise.png"),
+                                  "Повернуть против часовой")
         menu.addSeparator()
-        act_up   = menu.addAction("▲  Переместить вверх")
-        act_down = menu.addAction("▼  Переместить вниз")
+        act_up   = menu.addAction(QIcon(":/light_theme_v2/move_page_up.png"),
+                                   "Переместить вверх")
+        act_down = menu.addAction(QIcon(":/light_theme_v2/move_page_down.png"),
+                                   "Переместить вниз")
         menu.addSeparator()
-        act_del  = menu.addAction("✕  Удалить страницу")
+        act_del  = menu.addAction(QIcon(":/light_theme_v2/delete_pages.png"),
+                                   "Удалить страницу")
 
         chosen = menu.exec(self.ui.pdfView.mapToGlobal(pos))
         if chosen is None:
@@ -817,31 +809,41 @@ class MainWindow(QMainWindow):
             self.actions_handler.delete_pages(current_page=True)
 
     # ------------------------------------------------------------------ #
-    # New drawing-panel helpers
+    # Drawing-panel helpers  (all update pdfView.draw_state so that newly
+    # created page widgets during scrolling inherit the correct settings)
     # ------------------------------------------------------------------ #
+
+    def _draw_apply_state_all(self):
+        """Push draw_state to every currently loaded page widget overlay."""
+        pv = self.ui.pdfView
+        for w in pv.page_widget_controller.page_widgets:
+            try:
+                pv.page_widget_controller._apply_draw_state(w)
+            except Exception:
+                pass
+
     def _draw_set_brush_size(self, size: int):
-        """Propagate brush size to all current page overlays."""
+        self.ui.pdfView.draw_state['brush_size'] = size
         for w in self.ui.pdfView.page_widget_controller.page_widgets:
             try:
                 w.overlay.set_brush_size(size)
             except Exception:
                 pass
+        # Refresh brush thickness-preview icon
+        if hasattr(self.ui, '_update_brush_size_preview'):
+            self.ui._update_brush_size_preview(size)
 
     def _draw_open_rect_fill_color_dialog(self):
-        """Open colour picker for rectangle fill (None = no fill)."""
-        from PySide6.QtWidgets import QColorDialog, QMessageBox
+        from PySide6.QtWidgets import QColorDialog
         from PySide6.QtGui import QColor
-
-        # We add a special "No fill" button via an info dialog approach.
-        # Simpler: use standard color dialog; user can press Cancel to mean
-        # "keep current". We offer a separate "Remove fill" via a small QMenu.
         menu = QMenu(self)
-        act_pick   = menu.addAction("Выбрать цвет заливки…")
+        act_pick    = menu.addAction("Выбрать цвет заливки…")
         act_no_fill = menu.addAction("Без заливки (прозрачно)")
         btn = self.ui.drawRectFillColorBtn
         chosen = menu.exec(btn.mapToGlobal(btn.rect().bottomLeft()))
         if chosen == act_no_fill:
             self.ui._draw_rect_fill_color = None
+            self.ui.pdfView.draw_state['rect_fill_color'] = None
             self.ui._update_rect_fill_btn_icon()
             for w in self.ui.pdfView.page_widget_controller.page_widgets:
                 try:
@@ -856,6 +858,7 @@ class MainWindow(QMainWindow):
             )
             if color.isValid():
                 self.ui._draw_rect_fill_color = color
+                self.ui.pdfView.draw_state['rect_fill_color'] = color
                 self.ui._update_rect_fill_btn_icon()
                 for w in self.ui.pdfView.page_widget_controller.page_widgets:
                     try:
@@ -864,30 +867,60 @@ class MainWindow(QMainWindow):
                         pass
 
     def _draw_open_rect_border_color_dialog(self):
-        """Open colour picker for rectangle border colour."""
         from PySide6.QtWidgets import QColorDialog
         from PySide6.QtGui import QColor
-        current = getattr(self.ui, "_draw_rect_border_color", QColor(Qt.black))
+        current = getattr(self.ui, "_draw_rect_border_color", None) or QColor(Qt.black)
         color = QColorDialog.getColor(
             current, self, "Цвет рамки прямоугольника",
             options=QColorDialog.DontUseNativeDialog
         )
         if color.isValid():
             self.ui._draw_rect_border_color = color
+            self.ui.pdfView.draw_state['rect_border_color'] = color
             self.ui._update_rect_border_btn_icon()
             for w in self.ui.pdfView.page_widget_controller.page_widgets:
                 try:
                     w.overlay.set_rect_border_color(color)
                 except Exception:
                     pass
+            # Refresh border thickness-preview icon (uses border colour)
+            if hasattr(self.ui, '_update_border_width_preview') and hasattr(self.ui, 'drawRectBorderWidthSlider'):
+                self.ui._update_border_width_preview(self.ui.drawRectBorderWidthSlider.value())
 
     def _draw_set_rect_border_width(self, width: int):
-        """Propagate border width to all current page overlays."""
+        self.ui.pdfView.draw_state['rect_border_width'] = width
         for w in self.ui.pdfView.page_widget_controller.page_widgets:
             try:
                 w.overlay.set_rect_border_width(width)
             except Exception:
                 pass
+        # Refresh border thickness-preview icon
+        if hasattr(self.ui, '_update_border_width_preview'):
+            self.ui._update_border_width_preview(width)
+
+    def _draw_open_color_dialog_brush(self):
+        """Open colour picker for brush and propagate to overlays."""
+        from PySide6.QtWidgets import QColorDialog
+        from PySide6.QtGui import QColor
+        current = getattr(self.ui, '_draw_current_color', None) or QColor(0, 0, 0)
+        color = QColorDialog.getColor(
+            current, self, "Выберите цвет кисти",
+            options=QColorDialog.DontUseNativeDialog
+        )
+        if color.isValid():
+            self.ui._draw_current_color = color
+            self.ui.pdfView.draw_state['brush_color'] = color
+            if hasattr(self.ui, '_update_draw_color_btn_icon'):
+                self.ui._update_draw_color_btn_icon()
+            for w in self.ui.pdfView.page_widget_controller.page_widgets:
+                try:
+                    w.overlay.set_color(color)
+                except Exception:
+                    pass
+            # Refresh thickness-preview icon (circle uses brush colour)
+            if hasattr(self.ui, '_update_brush_size_preview') and hasattr(self.ui, 'drawBrushSizeSlider'):
+                self.ui._update_brush_size_preview(self.ui.drawBrushSizeSlider.value())
+
 
     def closeEvent(self, event):
         """Handle application close event"""
