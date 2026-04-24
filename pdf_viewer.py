@@ -64,7 +64,7 @@ class PDFViewer(QScrollArea):
         self.draw_state = {
             'tool':              'brush',
             'brush_color':       None,   # QColor, None = black
-            'brush_size':        6,
+            'brush_size':        4,
             'rect_fill_color':   None,   # QColor or None (no fill)
             'rect_border_color': None,   # QColor, None = black
             'rect_border_width': 2,

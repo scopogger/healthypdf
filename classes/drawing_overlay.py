@@ -1,46 +1,75 @@
 from PySide6.QtWidgets import QWidget
-from PySide6.QtGui import QPainter, QPen, QColor, QPixmap, QMouseEvent, QPaintEvent
+from PySide6.QtGui import QPainter, QPen, QColor, QPixmap, QMouseEvent, QPaintEvent, QKeyEvent
 from PySide6.QtCore import Qt, QRect, QPoint, QBuffer, Signal, QSize
 
 
 class DrawingOverlay(QWidget):
-    """Vector-first annotation layer (defensively coded to avoid racey paint calls)."""
+    """Vector-first annotation layer.
+
+    All primitives (strokes AND rects) are stored in a single ordered list
+    `self.primitives` so they render in the exact order the user drew them —
+    no more rects always appearing on top of strokes.
+
+    Undo / redo is implemented as a simple stack:
+      • Ctrl+Z  — undo last primitive
+      • Ctrl+Shift+Z — redo
+    """
     annotation_changed = Signal()
 
     TOOL_BRUSH = "brush"
-    TOOL_RECT = "rect"
+    TOOL_RECT  = "rect"
+
+    # Maximum selectable thicknesses (reduced from 40/20)
+    MAX_BRUSH_SIZE   = 20
+    MAX_BORDER_WIDTH = 10
 
     def __init__(self, parent=None):
         super().__init__(parent)
 
-        # --- Minimal defensive defaults (so paintEvent won't crash if called early) ---
+        # ── Ordered list of all committed primitives ──────────────────────
+        # Each item is a dict with a "kind" key: "stroke" or "rect"
+        self.primitives: list[dict] = []
+        # Redo stack — items popped off primitives land here
+        self._redo_stack: list[dict] = []
+
+        # Legacy compatibility properties (kept so external code that reads
+        # .strokes / .rects still works — they are computed views)
+        # NOTE: do NOT write to these directly; use primitives instead.
+
         self.annot_pixmap = QPixmap(1, 1)
         self.annot_pixmap.fill(Qt.transparent)
-        self.strokes = []   # list of stroke dicts
-        self.rects = []     # list of rect dicts
-        self.tool = self.TOOL_BRUSH
+
+        self.tool  = self.TOOL_BRUSH
         self.color = QColor(Qt.black)
-        self.brush_size = 6
+        self.brush_size = 4
 
         # Rectangle-specific settings
-        # fill_color=None means "no fill" (outline-only mode)
-        self.rect_fill_color: QColor | None = QColor(Qt.black)  # filled by default
-        self.rect_border_color: QColor = QColor(Qt.black)
-        self.rect_border_width: int = 2   # px; 0 = no border
+        self.rect_fill_color:   QColor | None = QColor(Qt.black)
+        self.rect_border_color: QColor        = QColor(Qt.black)
+        self.rect_border_width: int           = 2
 
-        self._drawing = False
-        self._current_stroke = []
-        self._rect_start = QPoint()
-        self._rect_current = QRect()
-        self._dirty = False
-        self.enabled = False
+        self._drawing       = False
+        self._current_stroke: list[QPoint] = []
+        self._rect_start    = QPoint()
+        self._rect_current  = QRect()
+        self._dirty         = False
+        self.enabled        = False
 
-        # Widget attributes
         self.setAttribute(Qt.WA_TransparentForMouseEvents, True)
         self.setAttribute(Qt.WA_NoSystemBackground, True)
         self.setAttribute(Qt.WA_StaticContents, True)
+        self.setFocusPolicy(Qt.StrongFocus)
 
-    # ------------------- Public API -------------------
+    # ── Legacy read-only views ─────────────────────────────────────────
+    @property
+    def strokes(self) -> list:
+        return [p for p in self.primitives if p.get("kind") == "stroke"]
+
+    @property
+    def rects(self) -> list:
+        return [p for p in self.primitives if p.get("kind") == "rect"]
+
+    # ── Public API ─────────────────────────────────────────────────────
     def set_enabled(self, enabled: bool):
         self.enabled = bool(enabled)
         self.setAttribute(Qt.WA_TransparentForMouseEvents, not self.enabled)
@@ -52,28 +81,48 @@ class DrawingOverlay(QWidget):
             self.tool = tool
 
     def set_color(self, color: QColor):
-        """Set brush colour AND sync rect colours for convenience."""
         self.color = color
 
     def set_brush_size(self, size: int):
-        self.brush_size = max(1, int(size))
+        self.brush_size = max(1, min(int(size), self.MAX_BRUSH_SIZE))
 
-    def set_rect_fill_color(self, color: QColor | None):
-        """None = no fill (transparent interior)."""
+    def set_rect_fill_color(self, color: "QColor | None"):
         self.rect_fill_color = color
 
     def set_rect_border_color(self, color: QColor):
         self.rect_border_color = color
 
     def set_rect_border_width(self, width: int):
-        self.rect_border_width = max(0, int(width))
+        self.rect_border_width = max(0, min(int(width), self.MAX_BORDER_WIDTH))
+
+    # ── Undo / Redo ────────────────────────────────────────────────────
+    def undo(self):
+        if not self.primitives:
+            return
+        self._redo_stack.append(self.primitives.pop())
+        self._dirty = bool(self.primitives)
+        self.update()
+        try:
+            self.annotation_changed.emit()
+        except Exception:
+            pass
+
+    def redo(self):
+        if not self._redo_stack:
+            return
+        self.primitives.append(self._redo_stack.pop())
+        self._dirty = True
+        self.update()
+        try:
+            self.annotation_changed.emit()
+        except Exception:
+            pass
 
     def clear_annotations(self, emit: bool = True):
-        self.strokes = []
-        self.rects = []
-        if getattr(self, "annot_pixmap", None) is not None:
-            self.annot_pixmap = QPixmap(1, 1)
-            self.annot_pixmap.fill(Qt.transparent)
+        self.primitives.clear()
+        self._redo_stack.clear()
+        self.annot_pixmap = QPixmap(1, 1)
+        self.annot_pixmap.fill(Qt.transparent)
         self._dirty = False
         self.update()
         if emit:
@@ -83,13 +132,19 @@ class DrawingOverlay(QWidget):
                 pass
 
     def is_dirty(self) -> bool:
-        return bool(getattr(self, "_dirty", False))
+        return bool(self._dirty)
 
     def has_vector(self) -> bool:
-        return bool(getattr(self, "strokes", []) or getattr(self, "rects", []))
+        return bool(self.primitives)
+
+    def get_vector_shapes(self) -> dict:
+        """Return legacy-format dict for compatibility with overlay_render / save."""
+        return {
+            "strokes": self.strokes,
+            "rects":   self.rects,
+        }
 
     def export_png_bytes(self, target_width: int, target_height: int) -> bytes:
-        """Render vector primitives to a raster PNG sized target_width x target_height."""
         try:
             if target_width <= 0 or target_height <= 0:
                 return b""
@@ -97,67 +152,86 @@ class DrawingOverlay(QWidget):
             pm.fill(Qt.transparent)
             p = QPainter(pm)
             p.setRenderHint(QPainter.Antialiasing)
-
-            for s in self.strokes:
-                pts = s.get("points", [])
-                if not pts:
-                    continue
-                pen = QPen(QColor(*s.get("color", (0, 0, 0))),
-                           s.get("width", 1), Qt.SolidLine, Qt.RoundCap, Qt.RoundJoin)
-                p.setPen(pen)
-                prev = None
-                for nx, ny in pts:
-                    x = nx * target_width
-                    y = ny * target_height
-                    if prev is None:
-                        prev = (x, y)
-                    else:
-                        p.drawLine(prev[0], prev[1], x, y)
-                        prev = (x, y)
-
-            for r in self.rects:
-                x0, y0, x1, y1 = r.get("rect", (0, 0, 0, 0))
-                x = x0 * target_width
-                y = y0 * target_height
-                w = (x1 - x0) * target_width
-                h = (y1 - y0) * target_height
-
-                fill_raw = r.get("fill_color")
-                border_raw = r.get("border_color", (0, 0, 0))
-                border_w = r.get("border_width", 0)
-
-                if fill_raw is not None:
-                    p.setBrush(QColor(*fill_raw))
-                else:
-                    p.setBrush(Qt.NoBrush)
-
-                if border_w > 0:
-                    p.setPen(QPen(QColor(*border_raw), border_w))
-                else:
-                    p.setPen(Qt.NoPen)
-
-                p.drawRect(x, y, w, h)
-
+            self._paint_primitives(p, target_width, target_height)
             p.end()
-            buffer = QBuffer()
-            buffer.open(QBuffer.ReadWrite)
-            pm.save(buffer, "PNG")
-            data = buffer.data()
-            buffer.close()
-            return bytes(data)
+            buf = QBuffer()
+            buf.open(QBuffer.ReadWrite)
+            pm.save(buf, "PNG")
+            data = bytes(buf.data())
+            buf.close()
+            return data
         except Exception as e:
             print(f"[DrawingOverlay] export_png_bytes error: {e}")
             return b""
 
-    def get_vector_shapes(self) -> dict:
-        return {"strokes": list(getattr(self, "strokes", []) or []),
-                "rects": list(getattr(self, "rects", []) or [])}
+    # ── Internal paint helper ──────────────────────────────────────────
+    def _paint_primitives(self, painter: QPainter, w: int, h: int,
+                          extra_stroke: list | None = None,
+                          extra_rect: QRect | None = None):
+        """Draw all committed primitives in order, then any in-progress preview."""
+        for prim in self.primitives:
+            kind = prim.get("kind")
+            if kind == "stroke":
+                pts = prim.get("points", [])
+                if len(pts) < 2:
+                    continue
+                pen = QPen(QColor(*prim.get("color", (0, 0, 0))),
+                           prim.get("width", 1),
+                           Qt.SolidLine, Qt.RoundCap, Qt.RoundJoin)
+                painter.setPen(pen)
+                painter.setBrush(Qt.NoBrush)
+                prev = None
+                for nx, ny in pts:
+                    x, y = nx * w, ny * h
+                    if prev is None:
+                        prev = (x, y)
+                    else:
+                        painter.drawLine(prev[0], prev[1], x, y)
+                        prev = (x, y)
+            elif kind == "rect":
+                x0, y0, x1, y1 = prim.get("rect", (0, 0, 0, 0))
+                rx, ry = x0 * w, y0 * h
+                rw, rh = (x1 - x0) * w, (y1 - y0) * h
+                fill_raw   = prim.get("fill_color")
+                border_raw = prim.get("border_color", (0, 0, 0))
+                border_w   = prim.get("border_width", 0)
+                painter.setBrush(QColor(*fill_raw) if fill_raw is not None else Qt.NoBrush)
+                painter.setPen(QPen(QColor(*border_raw), border_w) if border_w > 0 else Qt.NoPen)
+                painter.drawRect(rx, ry, rw, rh)
 
-    # ------------------- Events -------------------
+        # ── In-progress preview ──────────────────────────────────────────
+        if extra_stroke and len(extra_stroke) >= 2:
+            pen = QPen(self.color, self.brush_size,
+                       Qt.SolidLine, Qt.RoundCap, Qt.RoundJoin)
+            painter.setPen(pen)
+            painter.setBrush(Qt.NoBrush)
+            prev = extra_stroke[0]
+            for pt in extra_stroke[1:]:
+                painter.drawLine(prev, pt)
+                prev = pt
+
+        if extra_rect and not extra_rect.isNull():
+            fill_raw = (self._color_to_tuple(self.rect_fill_color)
+                        if self.rect_fill_color is not None else None)
+            painter.setBrush(QColor(*fill_raw) if fill_raw is not None else Qt.NoBrush)
+            painter.setPen(
+                QPen(self.rect_border_color, self.rect_border_width)
+                if self.rect_border_width > 0 else Qt.NoPen
+            )
+            painter.drawRect(extra_rect)
+
+    # ── Helpers ────────────────────────────────────────────────────────
+    def _to_normalized(self, pt: QPoint):
+        return (pt.x() / max(1, self.width()),
+                pt.y() / max(1, self.height()))
+
+    def _color_to_tuple(self, color: QColor):
+        return (color.red(), color.green(), color.blue())
+
+    # ── Resize ────────────────────────────────────────────────────────
     def resizeEvent(self, event):
         try:
-            w = max(1, self.width())
-            h = max(1, self.height())
+            w, h = max(1, self.width()), max(1, self.height())
             if self.annot_pixmap.width() < w or self.annot_pixmap.height() < h:
                 new_pix = QPixmap(w, h)
                 new_pix.fill(Qt.transparent)
@@ -169,60 +243,64 @@ class DrawingOverlay(QWidget):
             pass
         super().resizeEvent(event)
 
-    def _to_normalized(self, pt):
-        w = max(1, self.width())
-        h = max(1, self.height())
-        return (pt.x() / w, pt.y() / h)
+    # ── Keyboard: Ctrl+Z / Ctrl+Shift+Z ───────────────────────────────
+    def keyPressEvent(self, ev: QKeyEvent):
+        if not self.enabled:
+            super().keyPressEvent(ev)
+            return
+        mods = ev.modifiers()
+        if mods & Qt.ControlModifier:
+            if ev.key() == Qt.Key_Z:
+                if mods & Qt.ShiftModifier:
+                    self.redo()
+                else:
+                    self.undo()
+                ev.accept()
+                return
+        super().keyPressEvent(ev)
 
-    def _color_to_tuple(self, color: QColor):
-        return (color.red(), color.green(), color.blue())
-
+    # ── Mouse ─────────────────────────────────────────────────────────
     def mousePressEvent(self, ev: QMouseEvent):
-        if not getattr(self, "enabled", False):
+        if not self.enabled:
             return
         if ev.button() != Qt.LeftButton:
             return
+        # Any new stroke clears the redo stack (standard UX)
+        self._redo_stack.clear()
         self._drawing = True
         p = ev.position().toPoint() if hasattr(ev, "position") else ev.pos()
-        if getattr(self, "tool", None) == self.TOOL_BRUSH:
+        if self.tool == self.TOOL_BRUSH:
             self._current_stroke = [p]
         else:
-            self._rect_start = p
+            self._rect_start   = p
             self._rect_current = QRect(p, p)
         ev.accept()
 
     def mouseMoveEvent(self, ev: QMouseEvent):
-        if not getattr(self, "enabled", False) or not getattr(self, "_drawing", False):
+        if not self.enabled or not self._drawing:
             return
         p = ev.position().toPoint() if hasattr(ev, "position") else ev.pos()
-        if getattr(self, "tool", None) == self.TOOL_BRUSH:
-            try:
-                self._current_stroke.append(p)
-                self.update()
-            except Exception:
-                pass
+        if self.tool == self.TOOL_BRUSH:
+            self._current_stroke.append(p)
         else:
             self._rect_current = QRect(self._rect_start, p).normalized()
-            self._dirty = True
-            self.update()
+        self.update()
         ev.accept()
 
     def mouseReleaseEvent(self, ev: QMouseEvent):
-        if not getattr(self, "enabled", False) or not getattr(self, "_drawing", False):
+        if not self.enabled or not self._drawing:
             return
         p = ev.position().toPoint() if hasattr(ev, "position") else ev.pos()
 
-        if getattr(self, "tool", None) == self.TOOL_BRUSH:
+        if self.tool == self.TOOL_BRUSH:
             normalized = [self._to_normalized(pt) for pt in self._current_stroke]
             if len(normalized) >= 2:
-                color_tuple = self._color_to_tuple(self.color)
-                self.strokes.append({
+                self.primitives.append({
+                    "kind":   "stroke",
                     "points": normalized,
-                    "width": int(self.brush_size),
-                    "color": color_tuple,
+                    "width":  int(self.brush_size),
+                    "color":  self._color_to_tuple(self.color),
                 })
-            self.annot_pixmap = QPixmap(1, 1)
-            self.annot_pixmap.fill(Qt.transparent)
             self._current_stroke = []
         else:
             rect = QRect(self._rect_start, p).normalized()
@@ -230,23 +308,22 @@ class DrawingOverlay(QWidget):
             y0 = rect.top()    / max(1, self.height())
             x1 = rect.right()  / max(1, self.width())
             y1 = rect.bottom() / max(1, self.height())
-
-            fill_raw = (self._color_to_tuple(self.rect_fill_color)
-                        if self.rect_fill_color is not None else None)
+            fill_raw   = (self._color_to_tuple(self.rect_fill_color)
+                          if self.rect_fill_color is not None else None)
             border_raw = self._color_to_tuple(self.rect_border_color)
-
-            self.rects.append({
-                "rect": (x0, y0, x1, y1),
-                # legacy "color" key kept for backward-compat with overlay_render
-                "color": fill_raw if fill_raw is not None else border_raw,
-                "fill_color": fill_raw,
+            self.primitives.append({
+                "kind":         "rect",
+                "rect":         (x0, y0, x1, y1),
+                # legacy key for overlay_render compatibility
+                "color":        fill_raw if fill_raw is not None else border_raw,
+                "fill_color":   fill_raw,
                 "border_color": border_raw,
                 "border_width": int(self.rect_border_width),
             })
             self._rect_current = QRect()
 
         self._drawing = False
-        self._dirty = True
+        self._dirty   = True
         self.update()
         try:
             self.annotation_changed.emit()
@@ -254,82 +331,19 @@ class DrawingOverlay(QWidget):
             pass
         ev.accept()
 
+    # ── Paint ─────────────────────────────────────────────────────────
     def paintEvent(self, ev: QPaintEvent):
-        strokes = getattr(self, "strokes", []) or []
-        rects   = getattr(self, "rects",   []) or []
         try:
             painter = QPainter(self)
             painter.setRenderHint(QPainter.Antialiasing)
 
-            if getattr(self, "annot_pixmap", None) is not None and not self.annot_pixmap.isNull():
-                try:
-                    painter.drawPixmap(0, 0, self.annot_pixmap)
-                except Exception:
-                    pass
+            w, h = max(1, self.width()), max(1, self.height())
 
-            # ── Committed strokes ────────────────────────────────────────
-            for s in strokes:
-                pts = s.get("points", [])
-                if not pts:
-                    continue
-                pen = QPen(QColor(*s.get("color", (0, 0, 0))),
-                           s.get("width", 1), Qt.SolidLine, Qt.RoundCap, Qt.RoundJoin)
-                painter.setPen(pen)
-                prev = None
-                w = max(1, self.width())
-                h = max(1, self.height())
-                for nx, ny in pts:
-                    x = nx * w
-                    y = ny * h
-                    if prev is None:
-                        prev = (x, y)
-                    else:
-                        painter.drawLine(prev[0], prev[1], x, y)
-                        prev = (x, y)
-
-            # ── Committed rects ──────────────────────────────────────────
-            for r in rects:
-                x0, y0, x1, y1 = r.get("rect", (0, 0, 0, 0))
-                x = x0 * self.width()
-                y = y0 * self.height()
-                w = (x1 - x0) * self.width()
-                h = (y1 - y0) * self.height()
-
-                fill_raw   = r.get("fill_color")
-                border_raw = r.get("border_color", (0, 0, 0))
-                border_w   = r.get("border_width", 0)
-
-                painter.setBrush(QColor(*fill_raw) if fill_raw is not None else Qt.NoBrush)
-                painter.setPen(QPen(QColor(*border_raw), border_w) if border_w > 0 else Qt.NoPen)
-                painter.drawRect(x, y, w, h)
-
-            # ── In-progress drawing preview ──────────────────────────────
-            if getattr(self, "_drawing", False):
-                if getattr(self, "tool", None) == self.TOOL_BRUSH:
-                    current_stroke = getattr(self, "_current_stroke", [])
-                    if len(current_stroke) >= 2:
-                        pen = QPen(self.color, self.brush_size,
-                                   Qt.SolidLine, Qt.RoundCap, Qt.RoundJoin)
-                        painter.setPen(pen)
-                        prev = current_stroke[0]
-                        for i in range(1, len(current_stroke)):
-                            curr = current_stroke[i]
-                            painter.drawLine(prev, curr)
-                            prev = curr
-
-                elif (getattr(self, "tool", None) == self.TOOL_RECT and
-                      not getattr(self, "_rect_current", QRect()).isNull()):
-                    fill_raw   = (self._color_to_tuple(self.rect_fill_color)
-                                  if self.rect_fill_color is not None else None)
-                    border_w   = self.rect_border_width
-
-                    painter.setBrush(QColor(*fill_raw) if fill_raw is not None else Qt.NoBrush)
-                    painter.setPen(
-                        QPen(self.rect_border_color, border_w) if border_w > 0 else Qt.NoPen
-                    )
-                    painter.drawRect(self._rect_current)
-
+            self._paint_primitives(
+                painter, w, h,
+                extra_stroke = self._current_stroke if self._drawing and self.tool == self.TOOL_BRUSH else None,
+                extra_rect   = self._rect_current   if self._drawing and self.tool == self.TOOL_RECT  else None,
+            )
             painter.end()
-
         except Exception as e:
             print(f"[DrawingOverlay] paintEvent error: {e}")

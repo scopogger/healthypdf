@@ -6,6 +6,7 @@ from PySide6.QtPdf import QPdfBookmarkModel
 from PySide6.QtWidgets import (
     QMainWindow, QMessageBox, QInputDialog, QMenu
 )
+from PySide6.QtGui import QShortcut, QKeySequence
 
 # Single source of truth for the application name used in window titles
 APP_NAME = "Редактор PDF Альт"
@@ -237,6 +238,12 @@ class MainWindow(QMainWindow):
         # Context menu on PDF viewer
         self.ui.pdfView.setContextMenuPolicy(Qt.CustomContextMenu)
         self.ui.pdfView.customContextMenuRequested.connect(self._show_page_context_menu)
+
+        # Undo / Redo shortcuts for drawing mode
+        undo_sc = QShortcut(QKeySequence('Ctrl+Z'), self)
+        undo_sc.activated.connect(self._draw_undo)
+        redo_sc = QShortcut(QKeySequence('Ctrl+Shift+Z'), self)
+        redo_sc.activated.connect(self._draw_redo)
 
     # All action connections are now handled by ActionsHandler
 
@@ -921,6 +928,32 @@ class MainWindow(QMainWindow):
             if hasattr(self.ui, '_update_brush_size_preview') and hasattr(self.ui, 'drawBrushSizeSlider'):
                 self.ui._update_brush_size_preview(self.ui.drawBrushSizeSlider.value())
 
+
+    def _draw_undo(self):
+        """Undo last drawing action on the current page overlay."""
+        pv = self.ui.pdfView
+        if not pv.drawing_mode:
+            return
+        for w in pv.page_widget_controller.page_widgets:
+            try:
+                if w.overlay.enabled:
+                    w.overlay.undo()
+                    break
+            except Exception:
+                pass
+
+    def _draw_redo(self):
+        """Redo last undone drawing action on the current page overlay."""
+        pv = self.ui.pdfView
+        if not pv.drawing_mode:
+            return
+        for w in pv.page_widget_controller.page_widgets:
+            try:
+                if w.overlay.enabled:
+                    w.overlay.redo()
+                    break
+            except Exception:
+                pass
 
     def closeEvent(self, event):
         """Handle application close event"""

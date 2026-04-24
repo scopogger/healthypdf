@@ -413,8 +413,8 @@ class UiMainWindow(object):
 
         self.drawBrushSizeSlider = QSlider(Qt.Horizontal, self.drawingPanel)
         self.drawBrushSizeSlider.setMinimum(1)
-        self.drawBrushSizeSlider.setMaximum(40)
-        self.drawBrushSizeSlider.setValue(6)
+        self.drawBrushSizeSlider.setMaximum(20)
+        self.drawBrushSizeSlider.setValue(4)
         self.drawBrushSizeSlider.setToolTip("Толщина кисти")
         brush_size_row.addWidget(self.drawBrushSizeSlider)
 
@@ -427,7 +427,7 @@ class UiMainWindow(object):
 
         # Wire slider → preview update
         self.drawBrushSizeSlider.valueChanged.connect(self._update_brush_size_preview)
-        self._update_brush_size_preview(6)   # initial render
+        self._update_brush_size_preview(4)   # initial render
 
         layout.addWidget(self.brushSettingsWidget)
 
@@ -483,7 +483,7 @@ class UiMainWindow(object):
 
         self.drawRectBorderWidthSlider = QSlider(Qt.Horizontal, self.drawingPanel)
         self.drawRectBorderWidthSlider.setMinimum(0)
-        self.drawRectBorderWidthSlider.setMaximum(20)
+        self.drawRectBorderWidthSlider.setMaximum(10)
         self.drawRectBorderWidthSlider.setValue(2)
         self.drawRectBorderWidthSlider.setToolTip("0 = без рамки")
         border_width_row.addWidget(self.drawRectBorderWidthSlider)
@@ -550,7 +550,7 @@ class UiMainWindow(object):
         p = QPainter(pm)
         p.setRenderHint(QPainter.Antialiasing)
         # diameter scaled so max value (40) fills the icon
-        diam = max(2, int(value / 40 * (sz - 4))) + 2
+        diam = max(2, int(value / 20 * (sz - 4))) + 2
         x = (sz - diam) // 2
         color = getattr(self, '_draw_current_color', QColor(Qt.black))
         p.setBrush(color)
@@ -568,13 +568,14 @@ class UiMainWindow(object):
         p = QPainter(pm)
         p.setRenderHint(QPainter.Antialiasing)
         if value == 0:
-            # Show a hatched "none" icon
+            # Diagonal slash = "no border"
             p.setPen(QPen(QColor("#aaa"), 1))
             p.drawLine(4, sz - 4, sz - 4, 4)
         else:
-            pen_w = max(1, int(value / 20 * (sz - 4)))
+            # Cap pen width so the square outline stays visible at all values
+            pen_w = max(1, min(int(value / 10 * 10), 10))  # 1–10 px in the icon
             color = getattr(self, '_draw_rect_border_color', QColor(Qt.black))
-            p.setPen(QPen(color, pen_w))
+            p.setPen(QPen(color, pen_w, Qt.SolidLine, Qt.SquareCap, Qt.MiterJoin))
             p.setBrush(Qt.NoBrush)
             margin = pen_w // 2 + 2
             p.drawRect(margin, margin, sz - margin * 2, sz - margin * 2)

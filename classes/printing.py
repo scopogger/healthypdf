@@ -1,50 +1,48 @@
 import fitz  # PyMuPDF
 from PySide6.QtWidgets import (QMessageBox, QApplication, QDialog, QVBoxLayout,
                                 QHBoxLayout, QLabel, QLineEdit, QCheckBox,
-                                QDialogButtonBox, QPushButton, QSpinBox)
+                                QDialogButtonBox, QPushButton)
 from PySide6.QtPrintSupport import QPrinter, QPrintPreviewDialog
 from PySide6.QtGui import QPainter, QImage, QTransform
 from PySide6.QtCore import QRectF, Qt
 
 
 class PrintSetupDialog(QDialog):
-    """Ask the user which pages to print and whether to show a preview."""
+    """Ask the user which pages to print and whether to show a preview.
+    Pages are entered as a comma/dash range string like '1,3,5-7,10'."""
 
     def __init__(self, parent=None, total_pages: int = 1, current_page: int = 1):
         super().__init__(parent)
         self.total_pages = total_pages
         self.setWindowTitle("Печать")
         self.setModal(True)
-        self.setMinimumWidth(300)
+        self.setMinimumWidth(340)
 
         layout = QVBoxLayout(self)
-        layout.setSpacing(10)
+        layout.setSpacing(8)
 
-        # ── Page range ──────────────────────────────────────────────────
-        range_layout = QHBoxLayout()
-        range_layout.addWidget(QLabel("С:"))
-        self.from_input = QLineEdit(str(current_page))
-        self.from_input.setFixedWidth(55)
-        range_layout.addWidget(self.from_input)
-        range_layout.addWidget(QLabel("по:"))
-        self.to_input = QLineEdit(str(total_pages))
-        self.to_input.setFixedWidth(55)
-        range_layout.addWidget(self.to_input)
-        range_layout.addWidget(QLabel(f"из {total_pages}"))
-        range_layout.addStretch()
-        layout.addLayout(range_layout)
+        # ── Instruction ─────────────────────────────────────────────────
+        instr = QLabel(f"Введите номера страниц для печати (например: 1,3,5-7,10):")
+        layout.addWidget(instr)
+
+        # ── Range input field ────────────────────────────────────────────
+        self.range_input = QLineEdit()
+        self.range_input.setPlaceholderText("например: 1,3,5-7,10  или  1-" + str(total_pages))
+        # Default: all pages
+        self.range_input.setText(f"1-{total_pages}")
+        layout.addWidget(self.range_input)
 
         self.error_label = QLabel("")
         self.error_label.setStyleSheet("color: red;")
         self.error_label.setVisible(False)
         layout.addWidget(self.error_label)
 
-        # ── Show preview checkbox ───────────────────────────────────────
+        # ── Show preview checkbox ────────────────────────────────────────
         self.preview_checkbox = QCheckBox("Показать предпросмотр перед печатью")
         self.preview_checkbox.setChecked(True)
         layout.addWidget(self.preview_checkbox)
 
-        # ── Buttons ─────────────────────────────────────────────────────
+        # ── Buttons ──────────────────────────────────────────────────────
         btn_layout = QHBoxLayout()
         btn_layout.addStretch()
         self.print_btn = QPushButton("Печать")
@@ -56,19 +54,44 @@ class PrintSetupDialog(QDialog):
         btn_layout.addWidget(cancel_btn)
         layout.addLayout(btn_layout)
 
-    def _parse(self):
-        try:
-            f = int(self.from_input.text().strip())
-            t = int(self.to_input.text().strip())
-        except ValueError:
-            raise ValueError("Введите целые числа в поля «С» и «по».")
-        if not (1 <= f <= self.total_pages):
-            raise ValueError(f"Начальная страница должна быть от 1 до {self.total_pages}.")
-        if not (1 <= t <= self.total_pages):
-            raise ValueError(f"Конечная страница должна быть от 1 до {self.total_pages}.")
-        if f > t:
-            raise ValueError("Начальная страница не может быть больше конечной.")
-        return f - 1, t - 1   # 0-based
+    def _parse(self) -> list:
+        """Parse range string -> sorted list of 0-based page indices."""
+        text = self.range_input.text().strip()
+        if not text:
+            raise ValueError("Введите диапазон страниц.")
+
+        pages = set()
+        for part in text.split(","):
+            part = part.strip()
+            if not part:
+                continue
+            if "-" in part:
+                halves = part.split("-", 1)
+                try:
+                    a, b = int(halves[0].strip()), int(halves[1].strip())
+                except ValueError:
+                    raise ValueError(f"Неверный диапазон: «{part}».")
+                if not (1 <= a <= self.total_pages and 1 <= b <= self.total_pages):
+                    raise ValueError(
+                        f"Страницы {a}-{b} выходят за пределы документа (1–{self.total_pages})."
+                    )
+                if a > b:
+                    raise ValueError(f"В диапазоне «{part}» начало больше конца.")
+                pages.update(range(a - 1, b))   # 0-based
+            else:
+                try:
+                    n = int(part)
+                except ValueError:
+                    raise ValueError(f"Неверный номер страницы: «{part}».")
+                if not (1 <= n <= self.total_pages):
+                    raise ValueError(
+                        f"Страница {n} выходит за пределы документа (1–{self.total_pages})."
+                    )
+                pages.add(n - 1)   # 0-based
+
+        if not pages:
+            raise ValueError("Не выбрано ни одной страницы.")
+        return sorted(pages)
 
     def _on_print_clicked(self):
         self.error_label.setVisible(False)
@@ -80,9 +103,9 @@ class PrintSetupDialog(QDialog):
             return
         self.accept()
 
-    def get_page_range(self):
-        f0, t0 = self._parse()
-        return list(range(f0, t0 + 1))   # 0-based list
+    def get_page_range(self) -> list:
+        """Return sorted list of 0-based page indices to print."""
+        return self._parse()
 
     def show_preview(self) -> bool:
         return self.preview_checkbox.isChecked()
