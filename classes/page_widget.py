@@ -1,178 +1,486 @@
-from PySide6.QtWidgets import QWidget, QLabel, QVBoxLayout, QSizePolicy
-from PySide6.QtGui import QPixmap
-from PySide6.QtCore import Qt, QSize
+import gc
+import math
+
+from PySide6.QtWidgets import QWidget, QVBoxLayout, QSpacerItem, QSizePolicy
+from PySide6.QtCore import Qt, Signal
 
 from classes.document import PageInfo
-from classes.drawing_overlay import DrawingOverlay
+from classes.vector_manager import VectorManager
+from classes.page_widget import PageWidget
+from classes.mapPage import MapPage
 
 
-class PageWidget(QWidget):
-    """Container: QLabel base + DrawingOverlay overlay (with compatibility shims)."""
+class PageWidgetStack(QVBoxLayout):
 
-    __slots__ = ['prev', 'next', 'page_info', 'zoom_level', 'base_pixmap', 'layout_index', 'orig_page_num']
+    # pagePainted = Signal()
 
-    def __init__(self, page_info: PageInfo, index: int = -1, prev=None, next=None, parent=None, zoom=1.0):
-        super(PageWidget, self).__init__()
+    def __init__(self, mainWidget: QWidget, spacing: int = 10, all_margins: int = 10, map_step: int = 10):
+        super(PageWidgetStack, self).__init__(mainWidget)
+        # super().__init__(mainWidget)
 
-        self.prev = prev
+        self.dict_vectors = VectorManager()
 
-        if prev is not None:
-            if prev.next is not None:
-                prev.next.clear()
-            prev.next = self
+        self.setSpacing(spacing)
+        self.setAlignment(Qt.AlignmentFlag.AlignTop | Qt.AlignmentFlag.AlignHCenter)
+        # self.set
 
-        self.next = next
+        self.setContentsMargins(all_margins, all_margins, all_margins, all_margins)
 
-        if next is not None:
-            if next.prev is not None:
-                next.prev.clear()
-            next.prev = self
+        self.pages_info: list[PageInfo] = []
+        self.countTotalPagesInfo: int = 0
 
-        self.page_info = page_info
+        self.page_widgets: list[PageWidget] = []
+        self.zoom = 1.0
+        self.spacer: QSpacerItem = QSpacerItem(0, 0)
+        self.isSpacer = False
 
-        self.zoom_level = zoom
+        # self._map_pages: list[list[int]] = list(list)
+        # self._map_step: int = map_step
+        # # self._map_max: int = (self._map_step * 2) + 1
+        # self._map_size_tail = 3
 
-        self.setAttribute(Qt.WidgetAttribute.WA_StyledBackground, True)
-        self.setAttribute(Qt.WidgetAttribute.WA_SetStyle, True)
-        self.setStyleSheet("background-color: rgba(250, 250, 250, 1);")
+        self.map_page = MapPage(map_step, 3)
 
-        display_size = self.calculate_display_size()
-        width = display_size.width()
-        height = display_size.height()
+        self.rotation_view_deg = 0
+        self.chunks = [[0, 0]]
+        self.current_chunk_index = 0
+        self.MAX_HEIGHT_CHUNK = 16000000
 
-        self.base_label = QLabel(self)
-        self.base_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        self.base_label.setStyleSheet("QLabel { border: none; }")
+    def __getitem__(self, item) -> PageWidget:
+        return self.page_widgets[item]
 
-        self.setMinimumSize(width, height)
-        self.setMaximumSize(width, height)
-        self.setSizePolicy(QSizePolicy.Policy.Preferred, QSizePolicy.Policy.Preferred)
+    # Как же я эти чанки терпеть не могу ааааааааааааааааааааааааааааааааааааааааааааааааааааааааааааааааааааааааааааааа
+    def _build_chunks(self, total_height: int = -1):
+        self.chunks.clear()
+        self.chunks = []
+        # TODO 24.12.2025 - переработать момент с чисткой
+        # if aggr_clean:
+        # self.clearWidgets()
+        if total_height == -1:
+            total_height = self.getTotalHeightByCountPages(self.countTotalPagesInfo)
+        count_chunks = int(total_height // self.MAX_HEIGHT_CHUNK) + 1
+        if count_chunks <= 1:
+            self.chunks.append([0, self.countTotalPagesInfo - 1])
+        else:
+            # TODO 24.12.2025 - идея - чистка ПРИ наличии доп чанков, см ниже
+            self.clearWidgets()
+            left_index = 0
+            for i in range(count_chunks):
+                right_index = self.getCurrPageIndexByHeightScroll(self.MAX_HEIGHT_CHUNK * (i + 1), False)
+                if left_index > right_index:
+                    return
+                self.chunks.append([left_index, right_index])
+                left_index = right_index
 
-        self.base_label.setText(f"Страница {page_info.page_num}\nЗагрузка...")
-        self.base_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+    def getChunkByScroll(self, scroll: int) -> int:
+        page_index = self.getCurrPageIndexByHeightScroll(scroll)
+        return self.getChunkByPageIndex(page_index)
 
-        self.overlay = DrawingOverlay(self)
-        self.overlay.setFixedSize(width, height)
+    def getChunkByPageIndex(self, page_index):
+        for i, chunk in enumerate(self.chunks):
+            if chunk[0] <= page_index <= chunk[1]:
+                return i
+        return len(self.chunks)
 
-        layout = QVBoxLayout(self)
-        layout.setContentsMargins(0, 0, 0, 0)
-        layout.addWidget(self.base_label)
+    def setCurrentChunkByScroll(self, scroll):
+        new_current_chunk = self.getChunkByScroll(scroll)
+        self.current_chunk_index = new_current_chunk
 
-        # self.is_empty = True
-        self.base_pixmap = None
-        # self.tmp_pixmap = None
+    def setCurrentChunkByPageIndex(self, page_index):
+        new_current_chunk = self.getChunkByPageIndex(page_index)
+        self.current_chunk_index = new_current_chunk
 
-        self.layout_index: int = index
-        self.orig_page_num: int = page_info.page_num
+    def setCurrentChunk(self, new_current_chunk):
+        if 0 <= new_current_chunk <= len(self.chunks) - 1 and new_current_chunk != self.current_chunk_index:
+            self.current_chunk_index = new_current_chunk
 
-    def calculate_display_size(self) -> QSize:
-        """Calculate the actual display size for a page at current zoom.
-        This matches what PyMuPDF will render."""
-        # PyMuPDF uses the matrix to scale, resulting in dimensions = original * zoom
-        # We need to ensure we're calculating the exact same dimensions
-        width = int(self.page_info.width * self.zoom_level + 0.5)  # Round to nearest
-        height = int(self.page_info.height * self.zoom_level + 0.5)
-
-        # Ensure minimum size for visibility
-        width = max(width, 100)
-        height = max(height, 100)
-
-        return QSize(width, height)
-
-    def isVisibleByViewport(self, scroll: int, viewport_height: int):
-        top = scroll  # a_min
-        bottom = scroll + viewport_height  # a_max
-
-        # TODO: Костыль. При первом рендеринге задаётся y. До этого - он нулевой
-        if self.y() == 0: return True
-
-        # print(f"y: {self.y()}; height: {self.height()}")
-
-        # return top <= self.y() <= bottom or top <= self.y() + self.height() <= bottom
-
-        return max(top, self.y()) <= min(bottom, self.y() + self.height())
-
-    def resizeEvent(self, ev):
-        sz = self.base_label.size()
-        self.overlay.setFixedSize(sz)
-        super().resizeEvent(ev)
-        # if not self.base_pixmap is None:
-        #     scaled = self.base_pixmap.scaled(self.width(), self.height(), Qt.IgnoreAspectRatio, Qt.SmoothTransformation)
-        #     self.set_base_pixmap(scaled)  # self.setPixmap(scaled)
-
-    def set_base_pixmap(self, pixmap: QPixmap):
-        if pixmap is None or pixmap.isNull():
+    def nextChunk(self):
+        if self.current_chunk_index == len(self.chunks) - 1:
             return
-        self.base_pixmap = pixmap
-        self.base_label.setPixmap(pixmap)
-        self.base_label.setFixedSize(pixmap.size())
-        self.overlay.setFixedSize(pixmap.size())
-        # self.is_empty = False
-        self.overlay.update()
+        self.current_chunk_index += 1
 
-    def clear_base(self, emit: bool = True):
-        # 20.01.2026 - is_empty - помечает виджет-страницу на перезапись
-        # (для бесшовного зума)
-        # self.is_empty = True
+    def prevChunk(self):
+        if self.current_chunk_index == 0:
+            return
+        self.current_chunk_index -= 1
+
+    def isLastChunk(self):
+        return self.current_chunk_index == len(self.chunks) - 1
+
+    def isFirstChunk(self):
+        return self.current_chunk_index == 0
+
+    def setZoom(self, newZoom):
+        self.zoom = newZoom
+
+        if newZoom < 1:
+            newStep = round(3.2 - 2.95 * math.log(newZoom))
+        else:
+            newStep = 3
+
+        # self._map_step = newStep + 3
+        # self._map_size_tail = newStep
+        self.map_page.update(newStep)
+
+        self.updateSpacerWithZoom()
+        self._build_chunks()
+
+    def setRotationView(self, deg):
+        self.rotation_view_deg = deg
+
+    def initPageInfoList(self, pages_info: list[PageInfo]):
+        self.pages_info = pages_info
+        self.countTotalPagesInfo = len(self.pages_info)
+        self._build_chunks()
+
+    def addPageWidget(self, pageWidget: PageWidget, addLayout: bool = True):
+        try:
+            self.page_widgets.append(pageWidget)
+            if addLayout:
+                self.addWidget(pageWidget, 0, Qt.AlignmentFlag.AlignHCenter)
+        except Exception as e:
+            raise Exception(f"Ошибка при добавлении страницы: {e}")
+
+    def insertPageWidget(self, index: int, widget: PageWidget):
+        try:
+            self.page_widgets.insert(index, widget)
+            if self.isSpacer:
+                index += 1
+            self.insertWidget(index, widget, alignment=Qt.AlignmentFlag.AlignHCenter)
+        except Exception as e:
+            raise Exception(f"Ошибка при вставке страницы: {e}")
+
+    def removePageWidget(self, pageWidget: PageWidget):
+        try:
+            self.page_widgets.remove(pageWidget)
+            self.removeWidget(pageWidget)
+            pageWidget.clear_base()
+            pageWidget.clear()
+            pageWidget.deleteLater()
+        except Exception as e:
+            raise Exception(f"Ошибка при удалении страницы: {e}")
+
+    # "Обрезка" всех виджетов, кроме указанного, и его возврат на дальнейшую обработку
+    def clipPageWidget(self, page_num: int) -> PageWidget:
+        clip_page_widget = self.getPageWidgetByIndex(page_num)
+
+        # Собираем все неиспользуемые виджеты
+        inactive_widgets = [w for w in self
+                            if w.page_info.page_num != page_num]
+        for w in inactive_widgets:
+            self.removePageWidget(w)
+        clip_page_widget.layout_index = 0
+
+        if self.isSpacer:
+            self.removeSpacer()
+
+        return clip_page_widget
+
+    def addPageWidgetByIndexInLayout(self, index: int):
+        try:
+            widget = list(filter(lambda x: x.layout_index == index, self.page_widgets))
+            if len(widget):
+                raise Exception(f"PageWidget с таким layout_index не найден")
+            self.addWidget(widget[0])
+        except Exception as e:
+            raise Exception(f"Ошиька при добавлении в Layout: {e}")
+
+    def addSpacer(self, height):
+        try:
+            if self.isSpacer:
+                self.removeItem(self.spacer)
+            self.spacer = QSpacerItem(0, height, QSizePolicy.Policy.Fixed, QSizePolicy.Policy.Fixed)
+            self.insertSpacerItem(0, self.spacer)
+            self.isSpacer = True
+            print(f"Added spacer height: {height}")
+        except Exception as e:
+            raise Exception(f"Ошибка при добавлении пространства: {e}")
+
+    def removeSpacer(self):
+        try:
+            if not self.isSpacer:
+                return
+            self.removeItem(self.spacer)
+            self.isSpacer = False
+        except Exception as e:
+            raise Exception(f"Ошибка при удалении пространства: {e}")
+
+    def updateSpacerWithZoom(self):
+        if len(self.page_widgets) > 0:
+            self.addSpacer(self.getTotalHeightByCountPages(self.page_widgets[0].layout_index, True))
+
+    def getLastPageWidget(self) -> PageWidget:
+        return self.page_widgets[-1:][0]
+
+    def getFirstPageWidget(self) -> PageWidget:
+        return self.page_widgets[0]
+
+    def getPageWidgetByIndex(self, index: int) -> PageWidget:
+        widgets = list(filter(lambda x: x.layout_index == index, self.page_widgets))
+        if len(widgets) == 0:
+            return None
+        return widgets[0]
+
+    def getPageInfoByIndex(self, index: int) -> PageInfo:
+        return self.pages_info[index]
+
+    def getTotalHeightByCountPages(self, count: int, withChunk: bool = False):
+        spacing = self.spacing()
+        total_height = self.contentsMargins().top() + spacing
+        zoom = self.zoom
+
+        start_range = self.chunks[self.current_chunk_index][0] if withChunk else 0
+
+        # print(f"Chunks: {self.chunks}")
+        # print(f"Start {start_range}, count {count}")
+
+        for i in range(start_range, count):
+            height = self.pages_info[i].width if abs(self.rotation_view_deg) == 90 else self.pages_info[i].height
+            total_height += (height * zoom + 0.5)
+            total_height += spacing
+
+        if count == self.countTotalPagesInfo:
+            total_height += self.contentsMargins().bottom()
+
+        # print(f"TH: {total_height}")
+        return total_height
+
+    def getCurrPageIndexByHeightScroll(self, heightScroll, withChunk: bool = True):
+        spacing = self.spacing()
+        total_height = self.contentsMargins().top() + spacing
+        zoom = self.zoom
+
+        # print(f"Current Chunk Index: {self.current_chunk_index}")
+
+        heightScrollWithChunk = heightScroll + \
+                                self.MAX_HEIGHT_CHUNK * self.current_chunk_index - 1 \
+            if self.current_chunk_index > 0 and withChunk \
+            else heightScroll
+
+        # print(f"HSWC: {heightScrollWithChunk}; ")
+
+        for i in range(self.countTotalPagesInfo):
+            height = self.pages_info[i].width if abs(self.rotation_view_deg) == 90 else self.pages_info[i].height
+            total_height += (height * zoom + 0.5)
+            total_height += spacing
+
+            if heightScrollWithChunk < total_height:
+                return i
+
+        if heightScrollWithChunk > total_height:
+            return self.countTotalPagesInfo - 1
+
+        return -1
+
+    def needCalculateByScrollHeight(self, scroll: int):
+        index = self.getCurrPageIndexByHeightScroll(scroll)
+
+        # print(f"index: {index} in scroll: {scroll}")
+
+        widget = self.getPageWidgetByIndex(index)
+
+        if widget is None:
+            return True
+
+        indexInList = self.page_widgets.index(widget)
+
+        print(f"index in List: {indexInList}")
+
+        if indexInList == -1:
+            return False
+
+        # print(f"{self._map_size_tail} >= {indexInList} or {indexInList} >= {len(self.page_widgets) - self._map_size_tail}")
+
+        # topTail = min(index - 1, self._map_size_tail) + 1
+        # bottomTail = len(self.page_widgets) - min(self._map_size_tail, self.countTotalPagesInfo - index)
+
+        tail = self.map_page.map_size_tail
+        top_tail = min(index - 1, tail)
+        bottom_tail = len(self.page_widgets) - min(tail, self.countTotalPagesInfo - index)
+
+        if not top_tail <= indexInList <= bottom_tail:
+            # self.calculateMapPagesByIndex(index)
+            return True
+
+        return False
+
+    def calculateMapPagesByIndex(self, index: int):
+        map_pages = []
+
+        # cur_min = index - min(self._map_step, index)
+        # cur_max = index + min(self._map_step, self.countTotalPagesInfo - index - 1)
+
+        cur_min, cur_max = self.map_page.calculate(index, self.countTotalPagesInfo)
+
+        if self.countTotalPagesInfo == 0:
+            raise Exception(f"PageInfo не инициализирован")
 
         try:
-            self.base_label.clear()
-        except Exception:
-            pass
-        self.base_pixmap = None
 
-        try:
-            self.overlay.clear_annotations(emit=emit)
-        except Exception:
-            pass
+            for indexI, i in enumerate(range(cur_min, cur_max + 1)):
+
+                widget = list(filter(lambda x: x.layout_index == i, self.page_widgets))
+
+                if widget:
+                    map_pages.append(widget[0])
+                else:
+                    page_info_i = self.pages_info[i]
+                    newWidget = PageWidget(
+                        page_info_i,
+                        i,
+                        zoom=self.zoom
+                    )
+
+                    try:
+                        newWidget.overlay.annotation_changed.connect(
+                            lambda pw=newWidget, orig=page_info_i.page_num: self._save_vector_immediate(pw, orig)
+                        )
+                    except Exception as e:
+                        print(
+                            f"[PDFViewer] create_placeholder_widgets: connect failed for orig {page_info_i.page_num}: {e}")
+
+                    # Apply live draw state so newly created widgets inherit
+                    # current tool/colour/size settings.
+                    self._apply_draw_state(newWidget)
+
+                    map_pages.append(newWidget)
+
+            # print(f"Current pages: {[x.layout_index for x in self.page_widgets]}")
+            # print(f"New pages: {[x.layout_index for x in map_pages]}")
+
+            widget_for_delete = list((set(self.page_widgets) ^ set(map_pages)) & set(self.page_widgets))
+            widget_for_add = list((set(self.page_widgets) ^ set(map_pages)) & set(map_pages))
+
+            widget_for_delete.sort(key=lambda x: x.layout_index)
+            widget_for_add.sort(key=lambda x: x.layout_index)
+
+            # print(f"Deleting: {[x.layout_index for x in widget_for_delete]}")
+            # print(f"Adding: {[x.layout_index for x in widget_for_add]}")
+
+            for widget in widget_for_delete:
+                self.removePageWidget(widget)
+
+            indexFirst = self.page_widgets[0].layout_index if len(self.page_widgets) > 0 else -1
+            widget_for_add.reverse()
+
+            lastIndex = len(self.page_widgets)
+
+            for widget in widget_for_add:
+                if indexFirst < widget.layout_index:
+                    insertIndex = lastIndex
+                else:
+                    insertIndex = 0
+
+                # print(f"Add widget {widget.layout_index} in index {insertIndex}")
+                self.insertPageWidget(insertIndex, widget)
+                # print(f"Pages: {[x.layout_index for x in self.page_widgets]}")
+
+            if self.page_widgets[0].layout_index > 0:
+                self.addSpacer(self.getTotalHeightByCountPages(self.page_widgets[0].layout_index, True))
+            else:
+                self.removeSpacer()
+
+            gc.collect()
+
+        except Exception as e:
+            raise Exception(f"Ошибка расчёта карты страниц: {e}")
+
+        # print(f"END Pages: {[x.layout_index for x in self.page_widgets]}")
 
     def clear(self):
-        self.clear_base(emit=False)
+        self.countTotalPagesInfo = 0
+        self.pages_info = []
 
-    def has_annotations(self) -> bool:
-        return self.overlay.is_dirty() or self.overlay.has_vector()
+        for i in range(len(self.page_widgets)):
+            self.removePageWidget(self.page_widgets[0])
 
-    def export_annotations_png(self, target_width: int, target_height: int) -> bytes:
-        return self.overlay.export_png_bytes(target_width, target_height)
+        if self.isSpacer:
+            self.removeSpacer()
 
-    # compatibility shims
-    def setText(self, text: str):
-        self.base_label.setText(text)
+        self.chunks.clear()
+        self.chunks = []
+        self.current_chunk_index = 0
 
-    def text(self) -> str:
-        return self.base_label.text()
+        self.zoom = 1.0
+        self.dict_vectors.Clear()
 
-    def setPixmap(self, pixmap: QPixmap):
+    def clearWidgets(self):
+        for i in range(len(self.page_widgets)):
+            self.removePageWidget(self.page_widgets[0])
+
+        # self.page_widgets.clear()
+        # self.page_widgets = []
+
+        if self.isSpacer:
+            self.removeSpacer()
+
+    def _apply_draw_state(self, widget):
+        """Copy the current draw_state (stored on the owner PDFViewer) to a widget overlay."""
+        # draw_state lives on the PDFViewer instance; PageWidgetStack has no direct
+        # reference to it, so we walk up via the parent QWidget chain.
         try:
-            if isinstance(pixmap, QPixmap):
-                self.set_base_pixmap(pixmap)
-            else:
-                pm = QPixmap()
-                ok = pm.loadFromData(pixmap)
-                if ok and not pm.isNull():
-                    self.set_base_pixmap(pm)
-        except Exception:
+            viewer = getattr(self, '_viewer', None)
+            state = getattr(viewer, 'draw_state', None)
+            if state is None:
+                return
+
+            from PySide6.QtGui import QColor
+            ov = widget.overlay
+
+            tool = state.get('tool', 'brush')
+            ov.set_tool(tool)
+
+            bc = state.get('brush_color')
+            if bc is not None:
+                ov.set_color(bc)
+
+            ov.set_brush_size(state.get('brush_size', 6))
+
+            rfc = state.get('rect_fill_color', None)   # may be None (no fill) or QColor
+            ov.set_rect_fill_color(rfc)
+
+            rbc = state.get('rect_border_color')
+            if rbc is not None:
+                ov.set_rect_border_color(rbc)
+
+            ov.set_rect_border_width(state.get('rect_border_width', 2))
+
+            if widget.page_info.page_num == getattr(self, '_drawing_page_num', -1):
+                ov.set_enabled(True)
+        except Exception as e:
+            print(f"[PageWidgetStack] _apply_draw_state error: {e}")
+
+    def _save_vector_immediate(self, widget, orig_page_num: int):
+        # print(f"num {widget}")
+        """
+        Immediately export the widget.overlay vector shapes and store them in self.page_vectors.
+        """
+
+        try:
+            if not hasattr(self, "page_vectors") or self.page_vectors is None:
+                self.page_vectors = {}
+
+            if widget is None or not getattr(widget, "overlay", None):
+                return
+
             try:
-                self.base_label.setPixmap(pixmap)
-            except Exception:
-                pass
+                vec = widget.overlay.get_vector_shapes()
+            except Exception as e:
+                print(f"[PDFViewer] _save_vector_immediate: get_vector_shapes failed for orig {orig_page_num}: {e}")
+                vec = {"strokes": [], "rects": []}
 
-    def setStyleSheet(self, sheet: str):
-        try:
-            QWidget.setStyleSheet(self, sheet)
-        except Exception:
-            pass
-        try:
-            self.base_label.setStyleSheet(sheet)
-        except Exception:
-            pass
+            strokes = vec.get("strokes") or []
+            rects = vec.get("rects") or []
 
-    def setZoom(self, zoom):
-        self.zoom_level = zoom
+            if (len(strokes) > 0) or (len(rects) > 0):
+                self.page_vectors[orig_page_num] = {"strokes": list(strokes), "rects": list(rects)}
+                self.dict_vectors.Add(self.page_vectors[orig_page_num], orig_page_num)
+                # 16.04.2026 - убрал, т.к. будет реализовано через pdfView
+                # self.pagePainted.emit()
+                print(f"[PDFViewer] _save_vector_immediate: saved vector for orig {orig_page_num}")
+            else:
+                if orig_page_num in self.page_vectors:
+                    self.page_vectors.pop(orig_page_num, None)
 
-        display_size = self.calculate_display_size()
-        width = display_size.width()
-        height = display_size.height()
-
-        self.setMinimumSize(width, height)
-        self.setMaximumSize(width, height)
+        except Exception as e:
+            print(f"[PDFViewer] _save_vector_immediate error for orig {orig_page_num}: {e}")
