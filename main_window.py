@@ -218,6 +218,10 @@ class MainWindow(QMainWindow):
             self.ui.drawClearAllBtn.clicked.connect(self._draw_clear_all_pages)
         if hasattr(self.ui, 'drawCloseBtn'):
             self.ui.drawCloseBtn.clicked.connect(self._draw_close_mode)
+        if hasattr(self.ui, 'drawUndoBtn'):
+            self.ui.drawUndoBtn.clicked.connect(self._draw_undo)
+        if hasattr(self.ui, 'drawRedoBtn'):
+            self.ui.drawRedoBtn.clicked.connect(self._draw_redo)
 
         # Brush size slider
         if hasattr(self.ui, 'drawBrushSizeSlider'):
