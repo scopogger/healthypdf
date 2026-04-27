@@ -22,7 +22,7 @@ class PrintSetupDialog(QDialog):
         layout.setSpacing(8)
 
         # ── Instruction ─────────────────────────────────────────────────
-        instr = QLabel(f"Введите номера страниц для печати (например: 1,3,5-7,10):")
+        instr = QLabel(f"Страницы для печати (всего {total_pages}):")
         layout.addWidget(instr)
 
         # ── Range input field ────────────────────────────────────────────

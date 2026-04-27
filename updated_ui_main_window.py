@@ -509,6 +509,29 @@ class UiMainWindow(object):
         sep1 = QFrame(); sep1.setFrameShape(QFrame.HLine); sep1.setFrameShadow(QFrame.Sunken)
         layout.addWidget(sep1)
 
+        # ── Undo / Redo buttons ───────────────────────────────────────────
+        _undo_redo_style = (
+            "QPushButton { border: 1px solid #bbb; border-radius: 3px; background: #f0f0f0; }"
+            "QPushButton:hover { background: #e0e0e0; }"
+            "QPushButton:pressed { background: #d0d8e8; }"
+        )
+        undo_redo_row = QHBoxLayout()
+        undo_redo_row.setSpacing(4)
+
+        self.drawUndoBtn = QPushButton("↩  Отмена  Ctrl+Z", self.drawingPanel)
+        self.drawUndoBtn.setFixedHeight(30)
+        self.drawUndoBtn.setToolTip("Отменить последнее действие (Ctrl+Z)")
+        self.drawUndoBtn.setStyleSheet(_undo_redo_style)
+        undo_redo_row.addWidget(self.drawUndoBtn)
+
+        self.drawRedoBtn = QPushButton("↪  Вернуть", self.drawingPanel)
+        self.drawRedoBtn.setFixedHeight(30)
+        self.drawRedoBtn.setToolTip("Вернуть отменённое действие (Ctrl+Shift+Z)")
+        self.drawRedoBtn.setStyleSheet(_undo_redo_style)
+        undo_redo_row.addWidget(self.drawRedoBtn)
+
+        layout.addLayout(undo_redo_row)
+
         # ── Clear button ──────────────────────────────────────────────────
         self.drawClearAllBtn = QPushButton("Очистить все страницы", self.drawingPanel)
         self.drawClearAllBtn.setFixedHeight(32)
