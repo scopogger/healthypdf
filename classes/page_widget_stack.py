@@ -464,20 +464,24 @@ class PageWidgetStack(QVBoxLayout):
                 return
 
             try:
-                vec = widget.overlay.get_vector_shapes()
+                primitives = list(getattr(widget.overlay, "primitives", []))
             except Exception as e:
-                print(f"[PDFViewer] _save_vector_immediate: get_vector_shapes failed for orig {orig_page_num}: {e}")
-                vec = {"strokes": [], "rects": []}
+                print(f"[PDFViewer] _save_vector_immediate: get primitives failed for orig {orig_page_num}: {e}")
+                primitives = []
 
-            strokes = vec.get("strokes") or []
-            rects = vec.get("rects") or []
-
-            if (len(strokes) > 0) or (len(rects) > 0):
-                self.page_vectors[orig_page_num] = {"strokes": list(strokes), "rects": list(rects)}
-                self.dict_vectors.Add(self.page_vectors[orig_page_num], orig_page_num)
-                # 16.04.2026 - убрал, т.к. будет реализовано через pdfView
-                # self.pagePainted.emit()
-                print(f"[PDFViewer] _save_vector_immediate: saved vector for orig {orig_page_num}")
+            if primitives:
+                # Store full ordered list AND legacy strokes/rects views for
+                # overlay_render fallback compatibility.
+                strokes = [p for p in primitives if p.get("kind") == "stroke"]
+                rects   = [p for p in primitives if p.get("kind") == "rect"]
+                payload = {
+                    "primitives": primitives,
+                    "strokes":    strokes,
+                    "rects":      rects,
+                }
+                self.page_vectors[orig_page_num] = payload
+                self.dict_vectors.Add(payload, orig_page_num)
+                print(f"[PDFViewer] _save_vector_immediate: saved {len(primitives)} primitives for orig {orig_page_num}")
             else:
                 if orig_page_num in self.page_vectors:
                     self.page_vectors.pop(orig_page_num, None)
