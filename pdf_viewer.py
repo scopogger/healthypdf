@@ -1134,8 +1134,14 @@ class PDFViewer(QScrollArea):
                 return False
 
             try:
-                widget.overlay.strokes = list(vec.get("strokes", []))
-                widget.overlay.rects = list(vec.get("rects", []))
+                primitives = vec.get("primitives")
+                if primitives is not None:
+                    widget.overlay.primitives = list(primitives)
+                else:
+                    # Legacy fallback: reconstruct ordered list from separate lists
+                    strokes = [dict(s, kind="stroke") for s in vec.get("strokes", [])]
+                    rects   = [dict(r, kind="rect")   for r in vec.get("rects",   [])]
+                    widget.overlay.primitives = strokes + rects
                 widget.overlay._dirty = True
                 widget.overlay.update()
                 return True
@@ -1399,65 +1405,71 @@ class PDFViewer(QScrollArea):
     def overlay_render(self, new_page: Page):
         layout_idx = new_page.number
         rect = new_page.rect
-        vec = self.page_widget_controller.dict_vectors.getByIndex(layout_idx)  # vectors[layout_idx]
+        vec = self.page_widget_controller.dict_vectors.getByIndex(layout_idx)
         if vec is None:
             return
 
-        shape = new_page.new_shape()
-        # page_rect = rect  # src_page.rect mapped to new_page
-        # If the PageWidget has a base_pixmap, compute mapping factors
-        widget_w = int(self.document.get_page_size(layout_idx)[0] * self.zoom_level)
-        # widget_w = pw.base_pixmap.width() if getattr(pw, "base_pixmap",
-        #                                              None) is not None else pw.width() or 1
-        # widget_h = pw.base_pixmap.height() if getattr(pw, "base_pixmap",
-        #                                               None) is not None else pw.height() or 1
         pdf_w = float(rect.width)
         pdf_h = float(rect.height)
+        widget_w = int(self.document.get_page_size(layout_idx)[0] * self.zoom_level)
 
-        # draw strokes: points are normalized (0..1) in overlay
-        for s in vec.get("strokes", []):
-            pts = s.get("points", [])
-            if not pts or len(pts) < 2:
-                continue
-            stroke_color = s.get("color", (0, 0, 0))
-            stroke_width_px = float(s.get("width", 1))
-            # convert width px -> pdf units (use pdf_w/widget_w scale)
-            stroke_width = (stroke_width_px / max(1.0, widget_w)) * pdf_w
+        # Iterate primitives in draw order (strokes and rects interleaved as user drew them)
+        primitives = vec.get("primitives", [])
+        if not primitives:
+            # Fallback: legacy storage with separate strokes/rects lists —
+            # reconstruct a primitives list preserving legacy behaviour (strokes first).
+            primitives = (
+                [dict(p, kind="stroke") for p in vec.get("strokes", [])] +
+                [dict(p, kind="rect")   for p in vec.get("rects",   [])]
+            )
 
-            last_point = None
-            for nx, ny in pts:
-                x = nx * pdf_w
-                y = ny * pdf_h
-                if last_point is None:
-                    last_point = Point(x, y) * new_page.derotation_matrix
-                else:
-                    shape.draw_line(last_point, Point(x, y) * new_page.derotation_matrix)
-                    last_point = Point(x, y) * new_page.derotation_matrix
-
-            # finish this stroke with stroke_color and stroke_width
-            r, g, b = stroke_color
-            # map 0-255 -> 0..1
-            shape.finish(color=(r / 255.0, g / 255.0, b / 255.0), fill=None,
-                         width=stroke_width, closePath=False)
-            shape.commit()
-            # create a fresh shape object for next primitive
+        for prim in primitives:
+            kind = prim.get("kind")
             shape = new_page.new_shape()
 
-        # draw rects (filled)
-        for rdef in vec.get("rects", []):
-            x0, y0, x1, y1 = rdef.get("rect", (0, 0, 0, 0))
-            # normalized -> pdf coords
-            x_a = x0 * pdf_w
-            y_a = y0 * pdf_h
-            x_b = x1 * pdf_w
-            y_b = y1 * pdf_h
-            rcol = rdef.get("color", (0, 0, 0))
-            rr, rg, rb = rcol
-            shape.draw_rect(fitz.Rect(x_a, y_a, x_b, y_b) * new_page.derotation_matrix)
-            shape.finish(color=(rr / 255.0, rg / 255.0, rb / 255.0),
-                         fill=(rr / 255.0, rg / 255.0, rb / 255.0), width=0)
-            shape.commit()
-            shape = new_page.new_shape()
+            if kind == "stroke":
+                pts = prim.get("points", [])
+                if not pts or len(pts) < 2:
+                    continue
+                stroke_color = prim.get("color", (0, 0, 0))
+                stroke_width_px = float(prim.get("width", 1))
+                stroke_width = (stroke_width_px / max(1.0, widget_w)) * pdf_w
+
+                last_point = None
+                for nx, ny in pts:
+                    x = nx * pdf_w
+                    y = ny * pdf_h
+                    if last_point is None:
+                        last_point = Point(x, y) * new_page.derotation_matrix
+                    else:
+                        shape.draw_line(last_point, Point(x, y) * new_page.derotation_matrix)
+                        last_point = Point(x, y) * new_page.derotation_matrix
+
+                r, g, b = stroke_color
+                shape.finish(color=(r / 255.0, g / 255.0, b / 255.0), fill=None,
+                             width=stroke_width, closePath=False)
+                shape.commit()
+
+            elif kind == "rect":
+                x0, y0, x1, y1 = prim.get("rect", (0, 0, 0, 0))
+                x_a, y_a = x0 * pdf_w, y0 * pdf_h
+                x_b, y_b = x1 * pdf_w, y1 * pdf_h
+
+                fill_raw   = prim.get("fill_color")
+                border_raw = prim.get("border_color", prim.get("color", (0, 0, 0)))
+                border_w   = prim.get("border_width", 0)
+                border_w_pdf = (float(border_w) / max(1.0, widget_w)) * pdf_w if border_w else 0
+
+                fill_f   = tuple(c / 255.0 for c in fill_raw)   if fill_raw   else None
+                border_f = tuple(c / 255.0 for c in border_raw) if border_raw else (0, 0, 0)
+
+                shape.draw_rect(fitz.Rect(x_a, y_a, x_b, y_b) * new_page.derotation_matrix)
+                shape.finish(
+                    color=border_f if border_w_pdf > 0 else None,
+                    fill=fill_f,
+                    width=border_w_pdf,
+                )
+                shape.commit()
 
         self.page_widget_controller.dict_vectors.Remove(layout_idx)
         self.doc_changing()
