@@ -631,6 +631,16 @@ class MainWindow(QMainWindow):
             # Switch sidepanel to drawing tools (hides tab-button strip too)
             ui.show_drawing_panel()
             pv.wheelCtrl = pv.ctrlDrawing
+            # Reset undo/redo button states for the fresh drawing session
+            self._update_undo_redo_buttons()
+            # Connect annotation_changed on the active overlay to keep buttons live
+            for w in pv.page_widget_controller.page_widgets:
+                try:
+                    w.overlay.annotation_changed.connect(
+                        lambda _ov=w.overlay: self._update_undo_redo_buttons(_ov)
+                    )
+                except Exception:
+                    pass
 
             # Надо будет прочистить код чтобы другая рисовалка не вызывалась - и потом это удалить
             # if hasattr(pv, 'drawing_tools'):
@@ -681,6 +691,7 @@ class MainWindow(QMainWindow):
     def _draw_clear_all_pages(self):
         """Clear annotations on all pages."""
         self.ui.pdfView.clear_all_pages_overlay()
+        self._update_undo_redo_buttons()
 
     def _draw_close_mode(self):
         """Uncheck the Draw action, which triggers on_action_draw_toggled(False)."""
@@ -942,6 +953,7 @@ class MainWindow(QMainWindow):
             try:
                 if w.overlay.enabled:
                     w.overlay.undo()
+                    self._update_undo_redo_buttons(w.overlay)
                     break
             except Exception:
                 pass
@@ -955,9 +967,27 @@ class MainWindow(QMainWindow):
             try:
                 if w.overlay.enabled:
                     w.overlay.redo()
+                    self._update_undo_redo_buttons(w.overlay)
                     break
             except Exception:
                 pass
+
+    def _update_undo_redo_buttons(self, overlay=None):
+        """Grey out Undo/Redo buttons based on overlay stack state."""
+        if not hasattr(self.ui, 'drawUndoBtn'):
+            return
+        if overlay is None:
+            # Find the currently enabled overlay
+            for w in self.ui.pdfView.page_widget_controller.page_widgets:
+                if getattr(w.overlay, 'enabled', False):
+                    overlay = w.overlay
+                    break
+        if overlay is not None:
+            self.ui.drawUndoBtn.setEnabled(bool(overlay.primitives))
+            self.ui.drawRedoBtn.setEnabled(bool(overlay._redo_stack))
+        else:
+            self.ui.drawUndoBtn.setEnabled(False)
+            self.ui.drawRedoBtn.setEnabled(False)
 
     def closeEvent(self, event):
         """Handle application close event"""
