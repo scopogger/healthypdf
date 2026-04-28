@@ -484,7 +484,7 @@ class UiMainWindow(object):
         self.drawRectBorderWidthSlider = QSlider(Qt.Horizontal, self.drawingPanel)
         self.drawRectBorderWidthSlider.setMinimum(0)
         self.drawRectBorderWidthSlider.setMaximum(10)
-        self.drawRectBorderWidthSlider.setValue(2)
+        self.drawRectBorderWidthSlider.setValue(0)
         self.drawRectBorderWidthSlider.setToolTip("0 = без рамки")
         border_width_row.addWidget(self.drawRectBorderWidthSlider)
 
@@ -495,7 +495,7 @@ class UiMainWindow(object):
         rect_layout.addLayout(border_width_row)
 
         self.drawRectBorderWidthSlider.valueChanged.connect(self._update_border_width_preview)
-        self._update_border_width_preview(2)   # initial render
+        self._update_border_width_preview(0)   # initial render
 
         layout.addWidget(self.rectSettingsWidget)
         self.rectSettingsWidget.hide()   # shown only when Rect tool is active
@@ -522,12 +522,14 @@ class UiMainWindow(object):
         self.drawUndoBtn.setFixedHeight(30)
         self.drawUndoBtn.setToolTip("Отменить последнее действие (Ctrl+Z)")
         self.drawUndoBtn.setStyleSheet(_undo_redo_style)
+        self.drawUndoBtn.setEnabled(False)  # greyed until something is drawn
         undo_redo_row.addWidget(self.drawUndoBtn)
 
         self.drawRedoBtn = QPushButton("↪  Вернуть", self.drawingPanel)
         self.drawRedoBtn.setFixedHeight(30)
         self.drawRedoBtn.setToolTip("Вернуть отменённое действие (Ctrl+Shift+Z)")
         self.drawRedoBtn.setStyleSheet(_undo_redo_style)
+        self.drawRedoBtn.setEnabled(False)  # greyed until something is undone
         undo_redo_row.addWidget(self.drawRedoBtn)
 
         layout.addLayout(undo_redo_row)
