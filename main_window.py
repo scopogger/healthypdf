@@ -212,6 +212,8 @@ class MainWindow(QMainWindow):
             self.ui.drawRectBtn.clicked.connect(lambda: self._draw_set_tool("rect"))
         if hasattr(self.ui, 'drawColorBtn'):
             self.ui.drawColorBtn.clicked.connect(self._draw_open_color_dialog)
+        if hasattr(self.ui, 'drawColorBtn'):
+            self.ui.drawColorBtn.clicked.connect(self._draw_open_color_dialog)
         if hasattr(self.ui, 'drawClearPageBtn'):
             self.ui.drawClearPageBtn.clicked.connect(self._draw_clear_current_page)
         if hasattr(self.ui, 'drawClearAllBtn'):
@@ -633,6 +635,10 @@ class MainWindow(QMainWindow):
             pv.wheelCtrl = pv.ctrlDrawing
             # Reset undo/redo button states for the fresh drawing session
             self._update_undo_redo_buttons()
+            # Sync tool buttons and sub-panels to the current draw_state tool.
+            # This fixes the bug where re-entering draw mode after choosing Rect
+            # left the Rect sub-panel visible while the overlay still used Brush.
+            self._sync_draw_tool_ui(pv.draw_state.get('tool', 'brush'))
             # Connect annotation_changed on the active overlay to keep buttons live
             for w in pv.page_widget_controller.page_widgets:
                 try:
@@ -672,12 +678,15 @@ class MainWindow(QMainWindow):
     # Drawing sidebar helpers
     # ------------------------------------------------------------------ #
     def _draw_set_tool(self, tool: str):
-        """Apply tool selection to all current page overlays."""
+        """Apply tool selection to all current page overlays and persist in draw_state."""
+        self.ui.pdfView.draw_state['tool'] = tool
         for w in self.ui.pdfView.page_widget_controller.page_widgets:
             try:
                 w.overlay.set_tool(tool)
             except Exception:
                 pass
+        # Keep sub-panel visibility in sync
+        self._sync_draw_tool_ui(tool)
 
     def _draw_open_color_dialog(self):
         """Alias kept for backward compatibility — delegates to brush dialog."""
@@ -988,6 +997,24 @@ class MainWindow(QMainWindow):
         else:
             self.ui.drawUndoBtn.setEnabled(False)
             self.ui.drawRedoBtn.setEnabled(False)
+
+    def _sync_draw_tool_ui(self, tool: str):
+        """Sync tool toggle buttons and sub-panel visibility to *tool*.
+        Call this whenever the active tool needs to be reflected in the sidebar UI."""
+        ui = self.ui
+        is_brush = (tool == 'brush')
+        # Block signals so toggled() doesn't fire recursively
+        for btn, active in ((getattr(ui, 'drawBrushBtn', None), is_brush),
+                             (getattr(ui, 'drawRectBtn',  None), not is_brush)):
+            if btn is not None:
+                btn.blockSignals(True)
+                btn.setChecked(active)
+                btn.blockSignals(False)
+        # Show/hide sub-panels
+        if hasattr(ui, 'brushSettingsWidget'):
+            ui.brushSettingsWidget.setVisible(is_brush)
+        if hasattr(ui, 'rectSettingsWidget'):
+            ui.rectSettingsWidget.setVisible(not is_brush)
 
     def closeEvent(self, event):
         """Handle application close event"""
