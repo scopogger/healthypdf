@@ -66,6 +66,21 @@ def setup_application():
 
         QGuiApplication.styleHints().setColorScheme(Qt.ColorScheme.Light)
 
+        # On some Alt Linux configurations the system icon theme has white
+        # icons that become invisible against light backgrounds in Qt dialogs
+        # (e.g. navigation arrows in QFileDialog).  Force a known good theme
+        # with proper contrast, falling back to 'hicolor' if not installed.
+        from PySide6.QtGui import QIcon
+        _theme = QIcon.themeName()
+        if not _theme or _theme in ('', 'hicolor'):
+            # Prefer Adwaita (ships with most ALT desktops)
+            for _candidate in ('Adwaita', 'breeze', 'gnome', 'oxygen'):
+                QIcon.setThemeName(_candidate)
+                if QIcon.hasThemeIcon('document-open'):
+                    break
+            else:
+                QIcon.setThemeName('hicolor')
+
     # Set application properties
     # мб не устанавливать applicationDisplayName на альте так как DE склеивает их
     # в тайтле окна, делая некрасиво типа "Редактор PDF Альт — file.pdf — Редактор PDF Альт"?

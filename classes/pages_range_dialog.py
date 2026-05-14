@@ -32,6 +32,8 @@ class PagesRangeDialog(QDialog):
 
         self.setWindowTitle(config["title"])
         self.setModal(True)
+        self.setMinimumWidth(360)
+        self.setMinimumHeight(160)
 
         layout = QVBoxLayout()
 
@@ -108,7 +110,8 @@ class ExportPagesDialog(QDialog):
         self.total_pages = total_pages
         self.setWindowTitle("Извлечение страниц")
         self.setModal(True)
-        self.setMinimumWidth(320)
+        self.setMinimumWidth(360)
+        self.setMinimumHeight(240)
 
         layout = QVBoxLayout(self)
         layout.setSpacing(10)

@@ -16,7 +16,8 @@ class PrintSetupDialog(QDialog):
         self.total_pages = total_pages
         self.setWindowTitle("Печать")
         self.setModal(True)
-        self.setMinimumWidth(340)
+        self.setMinimumWidth(380)
+        self.setMinimumHeight(180)
 
         layout = QVBoxLayout(self)
         layout.setSpacing(8)

@@ -689,7 +689,7 @@ class MainWindow(QMainWindow):
         self._sync_draw_tool_ui(tool)
 
     def _draw_open_color_dialog(self):
-        """Alias kept for backward compatibility — delegates to brush dialog."""
+        """Alias kept for backward compatibility - delegates to brush dialog."""
         self._draw_open_color_dialog_brush()
 
     def _draw_clear_current_page(self):
