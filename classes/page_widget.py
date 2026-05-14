@@ -53,6 +53,10 @@ class PageWidget(QWidget):
 
         self.overlay = DrawingOverlay(self)
         self.overlay.setFixedSize(width, height)
+        # # Overlay must be the top-most child so it receives mouse events
+        # # even when the page contains interactive PDF annotations (widgets,
+        # # stamps, etc.) that would otherwise steal clicks.
+        # self.overlay.raise_()
 
         layout = QVBoxLayout(self)
         layout.setContentsMargins(0, 0, 0, 0)
@@ -107,6 +111,8 @@ class PageWidget(QWidget):
         self.base_label.setPixmap(pixmap)
         self.base_label.setFixedSize(pixmap.size())
         self.overlay.setFixedSize(pixmap.size())
+        # # Keep overlay on top of any PDF annotation widgets
+        # self.overlay.raise_()
         # self.is_empty = False
         self.overlay.update()
 
