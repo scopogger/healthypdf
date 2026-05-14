@@ -39,7 +39,7 @@ class PrintSetupDialog(QDialog):
 
         # ── Show preview checkbox ────────────────────────────────────────
         self.preview_checkbox = QCheckBox("Показать предпросмотр перед печатью")
-        self.preview_checkbox.setChecked(True)
+        self.preview_checkbox.setChecked(False)
         layout.addWidget(self.preview_checkbox)
 
         # ── Buttons ──────────────────────────────────────────────────────

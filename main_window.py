@@ -212,6 +212,8 @@ class MainWindow(QMainWindow):
             self.ui.drawRectBtn.clicked.connect(lambda: self._draw_set_tool("rect"))
         if hasattr(self.ui, 'drawColorBtn'):
             self.ui.drawColorBtn.clicked.connect(self._draw_open_color_dialog)
+        if hasattr(self.ui, 'drawColorBtn'):
+            self.ui.drawColorBtn.clicked.connect(self._draw_open_color_dialog)
         if hasattr(self.ui, 'drawClearPageBtn'):
             self.ui.drawClearPageBtn.clicked.connect(self._draw_clear_current_page)
         if hasattr(self.ui, 'drawClearAllBtn'):
@@ -631,6 +633,20 @@ class MainWindow(QMainWindow):
             # Switch sidepanel to drawing tools (hides tab-button strip too)
             ui.show_drawing_panel()
             pv.wheelCtrl = pv.ctrlDrawing
+            # Reset undo/redo button states for the fresh drawing session
+            self._update_undo_redo_buttons()
+            # Sync tool buttons and sub-panels to the current draw_state tool.
+            # This fixes the bug where re-entering draw mode after choosing Rect
+            # left the Rect sub-panel visible while the overlay still used Brush.
+            self._sync_draw_tool_ui(pv.draw_state.get('tool', 'brush'))
+            # Connect annotation_changed on the active overlay to keep buttons live
+            for w in pv.page_widget_controller.page_widgets:
+                try:
+                    w.overlay.annotation_changed.connect(
+                        lambda _ov=w.overlay: self._update_undo_redo_buttons(_ov)
+                    )
+                except Exception:
+                    pass
 
             # Надо будет прочистить код чтобы другая рисовалка не вызывалась - и потом это удалить
             # if hasattr(pv, 'drawing_tools'):
@@ -662,12 +678,15 @@ class MainWindow(QMainWindow):
     # Drawing sidebar helpers
     # ------------------------------------------------------------------ #
     def _draw_set_tool(self, tool: str):
-        """Apply tool selection to all current page overlays."""
+        """Apply tool selection to all current page overlays and persist in draw_state."""
+        self.ui.pdfView.draw_state['tool'] = tool
         for w in self.ui.pdfView.page_widget_controller.page_widgets:
             try:
                 w.overlay.set_tool(tool)
             except Exception:
                 pass
+        # Keep sub-panel visibility in sync
+        self._sync_draw_tool_ui(tool)
 
     def _draw_open_color_dialog(self):
         """Alias kept for backward compatibility — delegates to brush dialog."""
@@ -681,6 +700,7 @@ class MainWindow(QMainWindow):
     def _draw_clear_all_pages(self):
         """Clear annotations on all pages."""
         self.ui.pdfView.clear_all_pages_overlay()
+        self._update_undo_redo_buttons()
 
     def _draw_close_mode(self):
         """Uncheck the Draw action, which triggers on_action_draw_toggled(False)."""
@@ -942,6 +962,7 @@ class MainWindow(QMainWindow):
             try:
                 if w.overlay.enabled:
                     w.overlay.undo()
+                    self._update_undo_redo_buttons(w.overlay)
                     break
             except Exception:
                 pass
@@ -955,9 +976,45 @@ class MainWindow(QMainWindow):
             try:
                 if w.overlay.enabled:
                     w.overlay.redo()
+                    self._update_undo_redo_buttons(w.overlay)
                     break
             except Exception:
                 pass
+
+    def _update_undo_redo_buttons(self, overlay=None):
+        """Grey out Undo/Redo buttons based on overlay stack state."""
+        if not hasattr(self.ui, 'drawUndoBtn'):
+            return
+        if overlay is None:
+            # Find the currently enabled overlay
+            for w in self.ui.pdfView.page_widget_controller.page_widgets:
+                if getattr(w.overlay, 'enabled', False):
+                    overlay = w.overlay
+                    break
+        if overlay is not None:
+            self.ui.drawUndoBtn.setEnabled(bool(overlay.primitives))
+            self.ui.drawRedoBtn.setEnabled(bool(overlay._redo_stack))
+        else:
+            self.ui.drawUndoBtn.setEnabled(False)
+            self.ui.drawRedoBtn.setEnabled(False)
+
+    def _sync_draw_tool_ui(self, tool: str):
+        """Sync tool toggle buttons and sub-panel visibility to *tool*.
+        Call this whenever the active tool needs to be reflected in the sidebar UI."""
+        ui = self.ui
+        is_brush = (tool == 'brush')
+        # Block signals so toggled() doesn't fire recursively
+        for btn, active in ((getattr(ui, 'drawBrushBtn', None), is_brush),
+                             (getattr(ui, 'drawRectBtn',  None), not is_brush)):
+            if btn is not None:
+                btn.blockSignals(True)
+                btn.setChecked(active)
+                btn.blockSignals(False)
+        # Show/hide sub-panels
+        if hasattr(ui, 'brushSettingsWidget'):
+            ui.brushSettingsWidget.setVisible(is_brush)
+        if hasattr(ui, 'rectSettingsWidget'):
+            ui.rectSettingsWidget.setVisible(not is_brush)
 
     def closeEvent(self, event):
         """Handle application close event"""

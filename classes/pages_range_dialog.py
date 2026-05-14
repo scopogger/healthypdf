@@ -140,12 +140,16 @@ class ExportPagesDialog(QDialog):
         self.error_label.setVisible(False)
         layout.addWidget(self.error_label)
 
+        single_page_doc = (total_pages == 1)
+
         # ── Row 3: Delete after export checkbox ─────────────────────────
         self.delete_checkbox = QCheckBox("Удалить страницы после извлечения")
+        if single_page_doc:
+            self.delete_checkbox.setEnabled(False)
+            self.delete_checkbox.setToolTip("Нельзя удалить единственную страницу")
         layout.addWidget(self.delete_checkbox)
 
         # ── Row 4: Separate files checkbox ──────────────────────────────
-        single_page_doc = (total_pages == 1)
         self.separate_checkbox = QCheckBox("Извлечь страницы как отдельные файлы:")
         if single_page_doc:
             self.separate_checkbox.setChecked(True)

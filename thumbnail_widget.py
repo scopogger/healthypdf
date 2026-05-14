@@ -792,6 +792,28 @@ class ThumbnailContainerWidget(QScrollArea):
 
     def set_current_page(self, page_num: int):
         """Highlight the thumbnail for the given page number"""
+        # Find the layout index for this page number
+        page_index = -1
+        for i, item in enumerate(self.thumbnail_stack.thumbnails_info):
+            if item.page_num == page_num:
+                page_index = i
+                break
+        if page_index == -1:
+            page_index = page_num
+
+        # Ensure the thumbnail map is calculated so the widget exists
+        try:
+            self.thumbnail_stack.calculateMapPagesByIndex(page_index)
+        except Exception as e:
+            print(f"[ThumbnailContainerWidget] calculateMapPagesByIndex failed: {e}")
+
+        # Load thumbnails that are now in view
+        try:
+            for widget_tn in self.thumbnail_stack.thumbnail_widgets:
+                widget_tn.load_thumbnail()
+        except Exception:
+            pass
+
         self._scroll_to_thumbnail(page_num)
         self.thumbnail_stack.highlight_page(page_num)
 

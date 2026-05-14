@@ -227,7 +227,8 @@ def shortcuts_ui(self):
     self.actionOpen.setShortcut(QKeySequence.StandardKey.Open)  # Ctrl+O
     self.actionSave.setShortcut(QKeySequence.StandardKey.Save)  # Ctrl+S
     self.actionSaveAs.setShortcut(QKeySequence.StandardKey.SaveAs)  # Ctrl+Shift+S
-    self.actionClosePdf.setShortcut(QKeySequence.StandardKey.Close)  # Ctrl+W
+    self.actionClosePdf.setShortcut(QKeySequence.StandardKey.Close)  # Ctrl+F4
+    self.actionClosePdf.setShortcut(QCoreApplication.translate("MainWindow", "Ctrl+W", None))  # Ctrl+W
     self.actionPrint.setShortcut(QKeySequence.StandardKey.Print)  # Ctrl+P
     self.actionQuit.setShortcut(QKeySequence.StandardKey.Quit)  # Ctrl+Q
 

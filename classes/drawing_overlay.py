@@ -7,8 +7,7 @@ class DrawingOverlay(QWidget):
     """Vector-first annotation layer.
 
     All primitives (strokes AND rects) are stored in a single ordered list
-    `self.primitives` so they render in the exact order the user drew them —
-    no more rects always appearing on top of strokes.
+    `self.primitives` so they render in the exact order the user drew them
 
     Undo / redo is implemented as a simple stack:
       • Ctrl+Z  — undo last primitive
@@ -19,7 +18,7 @@ class DrawingOverlay(QWidget):
     TOOL_BRUSH = "brush"
     TOOL_RECT  = "rect"
 
-    # Maximum selectable thicknesses (reduced from 40/20)
+    # Maximum selectable thicknesses
     MAX_BRUSH_SIZE   = 20
     MAX_BORDER_WIDTH = 10
 
@@ -32,9 +31,9 @@ class DrawingOverlay(QWidget):
         # Redo stack — items popped off primitives land here
         self._redo_stack: list[dict] = []
 
-        # Legacy compatibility properties (kept so external code that reads
-        # .strokes / .rects still works — they are computed views)
-        # NOTE: do NOT write to these directly; use primitives instead.
+        # Вот эти штуки не переделал - а наверно стоило бы
+        # .strokes / .rects они до сих пор нужны
+        # но лучше не писать в них ничего и использовать `primitives`
 
         self.annot_pixmap = QPixmap(1, 1)
         self.annot_pixmap.fill(Qt.transparent)
@@ -60,7 +59,7 @@ class DrawingOverlay(QWidget):
         self.setAttribute(Qt.WA_StaticContents, True)
         self.setFocusPolicy(Qt.StrongFocus)
 
-    # ── Legacy read-only views ─────────────────────────────────────────
+    # ── Вот эти штуки стоит переделать как-то ─────────────────────────────────────────
     @property
     def strokes(self) -> list:
         return [p for p in self.primitives if p.get("kind") == "stroke"]
@@ -69,7 +68,6 @@ class DrawingOverlay(QWidget):
     def rects(self) -> list:
         return [p for p in self.primitives if p.get("kind") == "rect"]
 
-    # ── Public API ─────────────────────────────────────────────────────
     def set_enabled(self, enabled: bool):
         self.enabled = bool(enabled)
         self.setAttribute(Qt.WA_TransparentForMouseEvents, not self.enabled)
@@ -138,7 +136,7 @@ class DrawingOverlay(QWidget):
         return bool(self.primitives)
 
     def get_vector_shapes(self) -> dict:
-        """Return legacy-format dict for compatibility with overlay_render / save."""
+        """Возвращают dict в старом формате с overlay_render / save."""
         return {
             "strokes": self.strokes,
             "rects":   self.rects,
