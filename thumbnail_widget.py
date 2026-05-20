@@ -791,7 +791,12 @@ class ThumbnailContainerWidget(QScrollArea):
         # self.thumbnail_stack.highlight_page(0)
 
     def set_current_page(self, page_num: int):
-        """Highlight the thumbnail for the given page number"""
+        """Highlight the thumbnail for the given page number and scroll to it."""
+        # Debounce: if already pending for this same page, skip
+        if getattr(self, '_pending_page_num', None) == page_num:
+            return
+        self._pending_page_num = page_num
+
         # Find the layout index for this page number
         page_index = -1
         for i, item in enumerate(self.thumbnail_stack.thumbnails_info):
@@ -814,12 +819,31 @@ class ThumbnailContainerWidget(QScrollArea):
         except Exception:
             pass
 
+        # Scroll to make the thumbnail visible
         self._scroll_to_thumbnail(page_num)
-        self.thumbnail_stack.highlight_page(page_num)
+
+        # Highlight after a short delay so Qt has time to process layout/scroll
+        QTimer.singleShot(50, lambda: self._highlight_after_scroll(page_num, page_index))
 
         # self.thumbnail_stack._deselect_all_thumbnails()
         # self.thumbnail_stack._select_thumbnail(page_num)
         # # self.thumbnail_stack._scroll
+
+    def _highlight_after_scroll(self, page_num: int, page_index: int):
+        """Called after scroll settles — re-check map and highlight."""
+        # Clear debounce flag
+        if getattr(self, '_pending_page_num', None) == page_num:
+            self._pending_page_num = None
+        try:
+            self.thumbnail_stack.calculateMapPagesByIndex(page_index)
+        except Exception:
+            pass
+        try:
+            for widget_tn in self.thumbnail_stack.thumbnail_widgets:
+                widget_tn.load_thumbnail()
+        except Exception:
+            pass
+        self.thumbnail_stack.highlight_page(page_num)
 
     def rotate_page_thumbnail(self, page_num: int, rotation: int):
         """Rotate a page thumbnail"""
