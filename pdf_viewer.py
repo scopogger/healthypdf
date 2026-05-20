@@ -1182,10 +1182,11 @@ class PDFViewer(QScrollArea):
 
     def center_on_layout_index(self, layout_index: int):
         """Center the viewport on the widget at layout_index."""
-        # if not self.page_widgets or layout_index is None:
-        #     return
+        total = self.page_widget_controller.countTotalPagesInfo
+        if total < 1:
+            return
 
-        layout_index = max(0, min(layout_index, self.page_widget_controller.getLastPageWidget().layout_index - 1))
+        layout_index = max(0, min(layout_index, total - 1))
 
         # widget = next((w for w in self.page_widget_controller.page_widgets if w.layout_index == layout_index), None)
         widget = self.page_widget_controller.getPageWidgetByIndex(layout_index)
@@ -1216,7 +1217,7 @@ class PDFViewer(QScrollArea):
 
     def go_to_page(self, layout_index: int):
         """Public navigation entrypoint."""
-        if not self.page_widget_controller.countTotalPagesInfo < 1:
+        if self.page_widget_controller.countTotalPagesInfo < 1:
             return
 
         if layout_index < 0 or layout_index >= self.page_widget_controller.countTotalPagesInfo:
