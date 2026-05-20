@@ -420,6 +420,11 @@ class MainWindow(QMainWindow):
         print(f"Updating UI state, has_document: {has_document}")
 
         # Update file actions
+        drawing = self.ui.pdfView.drawing_mode
+        if hasattr(self.ui, 'actionOpen'):
+            self.ui.actionOpen.setEnabled(not drawing)
+        if hasattr(self.ui, 'menuOpenRecent'):
+            self.ui.menuOpenRecent.setEnabled(not drawing)
         if hasattr(self.ui, 'actionSave'):
             self.ui.actionSave.setEnabled(has_document and self.is_document_modified)
         if hasattr(self.ui, 'actionSaveAs'):
@@ -759,7 +764,10 @@ class MainWindow(QMainWindow):
 
     # Drag and drop support
     def dragEnterEvent(self, event: QDragEnterEvent):
-        """Handle drag enter events"""
+        """Handle drag enter events — ignored while drawing mode is active."""
+        if self.ui.pdfView.drawing_mode:
+            event.ignore()
+            return
         if event.mimeData().hasUrls():
             urls = event.mimeData().urls()
             if urls and urls[0].toLocalFile().lower().endswith('.pdf'):
@@ -770,7 +778,10 @@ class MainWindow(QMainWindow):
             event.ignore()
 
     def dropEvent(self, event: QDropEvent):
-        """Handle drop events"""
+        """Handle drop events — ignored while drawing mode is active."""
+        if self.ui.pdfView.drawing_mode:
+            event.ignore()
+            return
         urls = event.mimeData().urls()
         if urls:
             file_path = urls[0].toLocalFile()

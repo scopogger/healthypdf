@@ -384,12 +384,6 @@ class ActionsHandler:
 
         # Check if a document is currently open
         pv = getattr(self.ui, 'pdfView', None)
-
-        # Если активен режим рисования — всегда открываем в новом окне
-        if pv and getattr(pv, 'drawing_mode', False):
-            self._launch_new_instance(file_path)
-            return
-
         has_open_doc = bool(pv and hasattr(pv, 'document') and pv.document is not None)
 
         # If no doc is open -> just load (no prompt needed)
@@ -426,22 +420,6 @@ class ActionsHandler:
     # -----------------------------
 
     def open_file(self):
-        pv = getattr(self.ui, 'pdfView', None)
-
-        # Если активен режим рисования — открываем только в новом окне
-        if pv and getattr(pv, 'drawing_mode', False):
-            last_dir = settings_manager.get_last_directory()
-            file_path, _ = QFileDialog.getOpenFileName(
-                self.main_window, "Open PDF", last_dir, "PDF Files (*.pdf)"
-            )
-            if not file_path:
-                return
-            settings_manager.save_last_directory(os.path.dirname(file_path))
-            settings_manager.add_recent_file(file_path)
-            self.update_recent_files_menu()
-            self._launch_new_instance(file_path)
-            return
-
         if getattr(self.main_window, 'is_document_modified', False):
             reply = self.main_window.ask_save_changes()
             if reply == QMessageBox.Cancel:
@@ -465,6 +443,7 @@ class ActionsHandler:
         self.update_recent_files_menu()
 
         # Check if a document is currently open
+        pv = getattr(self.ui, 'pdfView', None)
         has_open_doc = bool(pv and hasattr(pv, 'document') and pv.document is not None)
 
         if not has_open_doc:
@@ -1517,10 +1496,10 @@ class ActionsHandler:
                 return self.compress_pdf()  # Заново вызываем функцию просто
 
         quality_options = {
-            "Наибольшее сжатие (/screen)": "/screen",
-            "Среднее (/ebook)": "/ebook",
-            "Высокое (/printer)": "/printer",
-            "Наименьшее сжатие (/prepress)": "/prepress",
+            "Максимальное сжатие": "/screen",
+            "Среднее": "/ebook",
+            "Высокое": "/printer",
+            "Слабое сжатие": "/prepress",
         }
 
         quality, ok = QInputDialog.getItem(
@@ -1528,7 +1507,7 @@ class ActionsHandler:
             "Качество сжатия:",
             "Выберите уровень сжатия:",
             list(quality_options.keys()),
-            2,  # По-умолчанию ebook - "Среднее"
+            1,  # По-умолчанию /ebook - "Среднее"
             False
         )
 

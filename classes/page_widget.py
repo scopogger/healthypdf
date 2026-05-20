@@ -48,7 +48,7 @@ class PageWidget(QWidget):
         self.setMaximumSize(width, height)
         self.setSizePolicy(QSizePolicy.Policy.Preferred, QSizePolicy.Policy.Preferred)
 
-        self.base_label.setText(f"Страница {page_info.page_num}\nЗагрузка...")
+        self.base_label.setText(f"Страница {page_info.page_num + 1}\nЗагрузка...")
         self.base_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
 
         self.overlay = DrawingOverlay(self)

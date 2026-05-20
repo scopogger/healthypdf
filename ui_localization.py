@@ -123,7 +123,9 @@ def translate_ui(self, main_window, language):
         self.actionPrevious_Page.setText(QCoreApplication.translate("MainWindow", "Предыдущая страница", None))
         self.actionNext_Page.setText(QCoreApplication.translate("MainWindow", "Следующая страница", None))
         self.actionJumpToFirstPage.setText(QCoreApplication.translate("MainWindow", "Первая страница", None))
-        self.actionJumpToLastPage.setText(QCoreApplication.translate("MainWindow", "Последняя страница", None))        # Edit menu and actions
+        self.actionJumpToLastPage.setText(QCoreApplication.translate("MainWindow", "Последняя страница", None))
+
+        # Edit menu and actions
         self.menuEdit.setTitle(QCoreApplication.translate("MainWindow", "Правка", None))
         self.actionDeletePage.setText(QCoreApplication.translate("MainWindow", "Удалить текущую страницу", None))
         self.actionDeleteSpecificPages.setText(
