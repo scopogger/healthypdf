@@ -111,6 +111,8 @@ def translate_ui(self, main_window, language):
             QCoreApplication.translate("MainWindow", "Повернуть вид по часовой", None))
         self.actionRotateViewCounterclockwise.setText(
             QCoreApplication.translate("MainWindow", "Повернуть вид против часовой", None))
+        self.actionRotateAllPagesClockwise.setText(
+            QCoreApplication.translate("MainWindow", "Повернуть все страницы по часовой", None))
 
         # View submenus
         self.menuRotation.setTitle(QCoreApplication.translate("MainWindow", "Поворот", None))
@@ -121,9 +123,7 @@ def translate_ui(self, main_window, language):
         self.actionPrevious_Page.setText(QCoreApplication.translate("MainWindow", "Предыдущая страница", None))
         self.actionNext_Page.setText(QCoreApplication.translate("MainWindow", "Следующая страница", None))
         self.actionJumpToFirstPage.setText(QCoreApplication.translate("MainWindow", "Первая страница", None))
-        self.actionJumpToLastPage.setText(QCoreApplication.translate("MainWindow", "Последняя страница", None))
-
-        # Edit menu and actions
+        self.actionJumpToLastPage.setText(QCoreApplication.translate("MainWindow", "Последняя страница", None))        # Edit menu and actions
         self.menuEdit.setTitle(QCoreApplication.translate("MainWindow", "Правка", None))
         self.actionDeletePage.setText(QCoreApplication.translate("MainWindow", "Удалить текущую страницу", None))
         self.actionDeleteSpecificPages.setText(
@@ -235,8 +235,8 @@ def shortcuts_ui(self):
     # Navigation
     self.actionPrevious_Page.setShortcut(QCoreApplication.translate("MainWindow", "PgUp", None))
     self.actionNext_Page.setShortcut(QCoreApplication.translate("MainWindow", "PgDown", None))
-    self.actionJumpToFirstPage.setShortcut(QCoreApplication.translate("MainWindow", "Ctrl+Home", None))
-    self.actionJumpToLastPage.setShortcut(QCoreApplication.translate("MainWindow", "Ctrl+End", None))
+    self.actionJumpToFirstPage.setShortcut(QCoreApplication.translate("MainWindow", "Home", None))
+    self.actionJumpToLastPage.setShortcut(QCoreApplication.translate("MainWindow", "End", None))
 
     # View operations
     self.actionZoom_In.setShortcut(QCoreApplication.translate("MainWindow", "Ctrl+=", None))  # Ctrl++
@@ -253,6 +253,7 @@ def shortcuts_ui(self):
     self.actionRotateCurrentPageClockwise.setShortcut(QCoreApplication.translate("MainWindow", "Ctrl+Alt+R", None))
     self.actionRotateCurrentPageCounterclockwise.setShortcut(
         QCoreApplication.translate("MainWindow", "Ctrl+Alt+Shift+R", None))
+    # Rotate all pages — no shortcut by default (destructive operation)
 
     # Page operations
     self.actionDeletePage.setShortcut(QCoreApplication.translate("MainWindow", "Del", None))

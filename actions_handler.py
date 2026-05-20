@@ -103,7 +103,8 @@ class ActionsHandler:
         if hasattr(self.ui, 'actionDeletePage'):
             self.ui.actionDeletePage.triggered.connect(lambda checked=False: self.delete_pages(current_page=True))
         if hasattr(self.ui, 'actionDeleteSpecificPages'):
-            self.ui.actionDeleteSpecificPages.triggered.connect(lambda checked=False: self.delete_pages(current_page=False))
+            self.ui.actionDeleteSpecificPages.triggered.connect(
+                lambda checked=False: self.delete_pages(current_page=False))
         if hasattr(self.ui, 'actionMovePageUp'):
             self.ui.actionMovePageUp.triggered.connect(self.move_page_up)
         if hasattr(self.ui, 'actionMovePageDown'):
@@ -140,6 +141,8 @@ class ActionsHandler:
             self.ui.actionRotateViewClockwise.triggered.connect(self.rotate_view_clockwise)
         if hasattr(self.ui, 'actionRotateViewCounterclockwise'):
             self.ui.actionRotateViewCounterclockwise.triggered.connect(self.rotate_view_counterclockwise)
+        if hasattr(self.ui, 'actionRotateAllPagesClockwise'):
+            self.ui.actionRotateAllPagesClockwise.triggered.connect(self.rotate_all_pages_clockwise)
 
     def connect_panel_actions(self):
         """Connect panel actions"""
@@ -381,6 +384,12 @@ class ActionsHandler:
 
         # Check if a document is currently open
         pv = getattr(self.ui, 'pdfView', None)
+
+        # Если активен режим рисования — всегда открываем в новом окне
+        if pv and getattr(pv, 'drawing_mode', False):
+            self._launch_new_instance(file_path)
+            return
+
         has_open_doc = bool(pv and hasattr(pv, 'document') and pv.document is not None)
 
         # If no doc is open -> just load (no prompt needed)
@@ -407,7 +416,7 @@ class ActionsHandler:
             "Очистить список недавних файлов?",
             QMessageBox.Yes | QMessageBox.No,
             QMessageBox.No,
-            )
+        )
         if reply == QMessageBox.Yes:
             settings_manager.clear_recent_files()
             self.update_recent_files_menu()
@@ -417,6 +426,22 @@ class ActionsHandler:
     # -----------------------------
 
     def open_file(self):
+        pv = getattr(self.ui, 'pdfView', None)
+
+        # Если активен режим рисования — открываем только в новом окне
+        if pv and getattr(pv, 'drawing_mode', False):
+            last_dir = settings_manager.get_last_directory()
+            file_path, _ = QFileDialog.getOpenFileName(
+                self.main_window, "Open PDF", last_dir, "PDF Files (*.pdf)"
+            )
+            if not file_path:
+                return
+            settings_manager.save_last_directory(os.path.dirname(file_path))
+            settings_manager.add_recent_file(file_path)
+            self.update_recent_files_menu()
+            self._launch_new_instance(file_path)
+            return
+
         if getattr(self.main_window, 'is_document_modified', False):
             reply = self.main_window.ask_save_changes()
             if reply == QMessageBox.Cancel:
@@ -440,7 +465,6 @@ class ActionsHandler:
         self.update_recent_files_menu()
 
         # Check if a document is currently open
-        pv = getattr(self.ui, 'pdfView', None)
         has_open_doc = bool(pv and hasattr(pv, 'document') and pv.document is not None)
 
         if not has_open_doc:
@@ -769,6 +793,21 @@ class ActionsHandler:
         pv = getattr(self.ui, 'pdfView', None)
         if hasattr(pv, 'rotate_view'):
             pv.rotate_view(-90)
+
+    def rotate_all_pages_clockwise(self):
+        """Permanently rotate all pages in the document 90° clockwise."""
+        pv = getattr(self.ui, 'pdfView', None)
+        if not pv or not getattr(pv, 'document', None):
+            return
+        success = False
+        if hasattr(pv, 'rotate_all_pages_clockwise'):
+            success = bool(pv.rotate_all_pages_clockwise())
+        if success:
+            if hasattr(self.main_window, 'on_document_modified'):
+                self.main_window.on_document_modified(True)
+            else:
+                self.main_window.is_document_modified = True
+            self.ui.thumbnailList.refresh_thumbnails(pv.document)
 
     # -----------------------------
     # Panel ops (respecting new splitter sizing)
@@ -1244,16 +1283,16 @@ class ActionsHandler:
         <b>{APP_NAME}</b><br>
         <b>Версия:</b> {APP_VERSION}<br><br>
         {APP_DESCRIPTION}<br><br>
-    
+
         <b>Разработано с использованием:</b><br>
         • <b>PySide6</b> — кроссплатформенный GUI фреймворк (обёртка Qt {self._get_qt_version()} для Python)<br>
         • <b>PyMuPDF (Fitz)</b> — библиотека для высокопроизводительной работы с PDF-документами<br>
         • <b>Python {sys.version_info.major}.{sys.version_info.minor}.{sys.version_info.micro}</b> — язык программирования<br>
         • Стандартные библиотеки Python<br><br>
-    
+
         <b>Редактор PDF Альт разработан </b>ОППО ГИСиСАПР<br>
         ПУ «СургутАСУнефть», ПАО «Сургутнефтегаз».<br><br>
-    
+
         При возникновении проблем обращаться в<br>
         <b>Naumen Service Desk</b>:<br>
         – ИТ-решение: <u>0085</u><br>
@@ -1478,10 +1517,10 @@ class ActionsHandler:
                 return self.compress_pdf()  # Заново вызываем функцию просто
 
         quality_options = {
-            "Максимальное сжатие": "/prepress",
-            "Высокое": "/printer",
-            "Среднее": "/ebook",
-            "Наименьшее сжатие": "/screen"
+            "Наибольшее сжатие (/screen)": "/screen",
+            "Среднее (/ebook)": "/ebook",
+            "Высокое (/printer)": "/printer",
+            "Наименьшее сжатие (/prepress)": "/prepress",
         }
 
         quality, ok = QInputDialog.getItem(
@@ -1489,7 +1528,7 @@ class ActionsHandler:
             "Качество сжатия:",
             "Выберите уровень сжатия:",
             list(quality_options.keys()),
-            2,  #  По-умолчанию ebook - "Среднее"
+            2,  # По-умолчанию ebook - "Среднее"
             False
         )
 

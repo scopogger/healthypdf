@@ -429,6 +429,31 @@ class UiMainWindow(object):
         self.drawBrushSizeSlider.valueChanged.connect(self._update_brush_size_preview)
         self._update_brush_size_preview(4)   # initial render
 
+        # Brush opacity
+        brush_opacity_label = QLabel("Прозрачность:")
+        brush_opacity_label.setStyleSheet("font-size: 11px;")
+        brush_layout.addWidget(brush_opacity_label)
+
+        brush_opacity_row = QHBoxLayout()
+        brush_opacity_row.setSpacing(6)
+
+        self.drawBrushOpacitySlider = QSlider(Qt.Horizontal, self.drawingPanel)
+        self.drawBrushOpacitySlider.setMinimum(10)
+        self.drawBrushOpacitySlider.setMaximum(100)
+        self.drawBrushOpacitySlider.setValue(100)
+        self.drawBrushOpacitySlider.setToolTip("Прозрачность кисти (100 = непрозрачно)")
+        brush_opacity_row.addWidget(self.drawBrushOpacitySlider)
+
+        self.drawBrushOpacityValueLabel = QLabel("100%", self.drawingPanel)
+        self.drawBrushOpacityValueLabel.setFixedWidth(34)
+        self.drawBrushOpacityValueLabel.setStyleSheet("font-size: 10px;")
+        brush_opacity_row.addWidget(self.drawBrushOpacityValueLabel)
+        brush_layout.addLayout(brush_opacity_row)
+
+        self.drawBrushOpacitySlider.valueChanged.connect(
+            lambda v: self.drawBrushOpacityValueLabel.setText(f"{v}%")
+        )
+
         layout.addWidget(self.brushSettingsWidget)
 
         # ── Rectangle settings ────────────────────────────────────────────
@@ -496,6 +521,31 @@ class UiMainWindow(object):
 
         self.drawRectBorderWidthSlider.valueChanged.connect(self._update_border_width_preview)
         self._update_border_width_preview(0)   # initial render
+
+        # Rect opacity
+        rect_opacity_label = QLabel("Прозрачность:")
+        rect_opacity_label.setStyleSheet("font-size: 11px;")
+        rect_layout.addWidget(rect_opacity_label)
+
+        rect_opacity_row = QHBoxLayout()
+        rect_opacity_row.setSpacing(6)
+
+        self.drawRectOpacitySlider = QSlider(Qt.Horizontal, self.drawingPanel)
+        self.drawRectOpacitySlider.setMinimum(10)
+        self.drawRectOpacitySlider.setMaximum(100)
+        self.drawRectOpacitySlider.setValue(100)
+        self.drawRectOpacitySlider.setToolTip("Прозрачность фигуры (100 = непрозрачно)")
+        rect_opacity_row.addWidget(self.drawRectOpacitySlider)
+
+        self.drawRectOpacityValueLabel = QLabel("100%", self.drawingPanel)
+        self.drawRectOpacityValueLabel.setFixedWidth(34)
+        self.drawRectOpacityValueLabel.setStyleSheet("font-size: 10px;")
+        rect_opacity_row.addWidget(self.drawRectOpacityValueLabel)
+        rect_layout.addLayout(rect_opacity_row)
+
+        self.drawRectOpacitySlider.valueChanged.connect(
+            lambda v: self.drawRectOpacityValueLabel.setText(f"{v}%")
+        )
 
         layout.addWidget(self.rectSettingsWidget)
         self.rectSettingsWidget.hide()   # shown only when Rect tool is active
@@ -811,6 +861,9 @@ class UiMainWindow(object):
         self.actionToggleFullscreen.setObjectName("actionToggleFullscreen")
         self.actionToggleFullscreen.triggered.connect(main_window.toggle_fullscreen)
 
+        self.actionRotateAllPagesClockwise = QAction(main_window)
+        self.actionRotateAllPagesClockwise.setObjectName("actionRotateAllPagesClockwise")
+
     # def toggle_fullscreen(self, main_window):
     #     if main_window.isFullScreen():
     #         main_window.showNormal()
@@ -891,12 +944,16 @@ class UiMainWindow(object):
 
         self.menuView.addAction(self.actionPrevious_Page)
         self.menuView.addAction(self.actionNext_Page)
+        self.menuView.addAction(self.actionJumpToFirstPage)
+        self.menuView.addAction(self.actionJumpToLastPage)
         self.menuView.addSeparator()
         self.menuView.addAction(self.actionZoom_In)
         self.menuView.addAction(self.actionZoom_Out)
         self.menuView.addSeparator()
         self.menuView.addAction(self.actionFitToWidth)
         self.menuView.addAction(self.actionFitToHeight)
+        self.menuView.addSeparator()
+        self.menuView.addAction(self.actionRotateAllPagesClockwise)
         self.menuView.addSeparator()
         self.menuView.addAction(self.actionToggleFullscreen)
 
@@ -994,6 +1051,7 @@ class UiMainWindow(object):
         self.mainToolBar.addAction(self.actionSave)
         self.mainToolBar.addAction(self.actionSaveAs)
         self.mainToolBar.addAction(self.actionPrint)
+        self.mainToolBar.addAction(self.actionEmail)
         self.mainToolBar.addAction(self.actionCompress)
         self.mainToolBar.addAction(self.actionClosePdf)
 
@@ -1085,6 +1143,7 @@ class UiMainWindow(object):
             self.actionFitToHeight: "fit_to_height.png",
             self.actionRotateViewClockwise: "rotate_pages_clockwise.png",
             self.actionRotateViewCounterclockwise: "rotate_pages_counterclockwise.png",
+            self.actionRotateAllPagesClockwise: "rotate_pages_clockwise.png",
 
             # Navigation actions
             self.actionPrevious_Page: "page_up.png",

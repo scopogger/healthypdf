@@ -1262,6 +1262,25 @@ class PDFViewer(QScrollArea):
     def rotate_page_counterclockwise(self):
         return self._rotate_page(-90)
 
+    def rotate_all_pages_clockwise(self):
+        """Rotate every page in the document 90° clockwise (permanent)."""
+        if not self.document:
+            return False
+        try:
+            page_count = self.document.get_page_count()
+            for orig in range(page_count):
+                page = self.document.get_page(orig)
+                new_rotation = (page.rotation + 90) % 360
+                page.set_rotation(new_rotation)
+            self.reinitializePageWidgets()
+            self.page_cache.clear()
+            self.doc_changing()
+            self.refresh_render()
+            return True
+        except Exception as e:
+            print(f"[PDFViewer] rotate_all_pages_clockwise error: {e}")
+            return False
+
     def delete_current_page(self):
         """Delete the current page."""
         if not self.document:

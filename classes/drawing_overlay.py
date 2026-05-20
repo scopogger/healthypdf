@@ -41,11 +41,13 @@ class DrawingOverlay(QWidget):
         self.tool  = self.TOOL_BRUSH
         self.color = QColor(Qt.black)
         self.brush_size = 4
+        self.brush_opacity = 255  # 0-255
 
         # Rectangle-specific settings
         self.rect_fill_color:   QColor | None = QColor(Qt.black)
         self.rect_border_color: QColor        = QColor(Qt.black)
         self.rect_border_width: int           = 2
+        self.rect_opacity: int = 255  # 0-255
 
         self._drawing       = False
         self._current_stroke: list[QPoint] = []
@@ -83,6 +85,14 @@ class DrawingOverlay(QWidget):
 
     def set_brush_size(self, size: int):
         self.brush_size = max(1, min(int(size), self.MAX_BRUSH_SIZE))
+
+    def set_brush_opacity(self, opacity_percent: int):
+        """opacity_percent: 10-100"""
+        self.brush_opacity = max(10, min(100, int(opacity_percent))) * 255 // 100
+
+    def set_rect_opacity(self, opacity_percent: int):
+        """opacity_percent: 10-100"""
+        self.rect_opacity = max(10, min(100, int(opacity_percent))) * 255 // 100
 
     def set_rect_fill_color(self, color: "QColor | None"):
         self.rect_fill_color = color
@@ -169,6 +179,8 @@ class DrawingOverlay(QWidget):
         """Draw all committed primitives in order, then any in-progress preview."""
         for prim in self.primitives:
             kind = prim.get("kind")
+            opacity = prim.get("opacity", 255)
+            painter.setOpacity(opacity / 255.0)
             if kind == "stroke":
                 pts = prim.get("points", [])
                 if len(pts) < 2:
@@ -196,9 +208,11 @@ class DrawingOverlay(QWidget):
                 painter.setBrush(QColor(*fill_raw) if fill_raw is not None else Qt.NoBrush)
                 painter.setPen(QPen(QColor(*border_raw), border_w) if border_w > 0 else Qt.NoPen)
                 painter.drawRect(rx, ry, rw, rh)
+        painter.setOpacity(1.0)  # restore
 
         # ── In-progress preview ──────────────────────────────────────────
         if extra_stroke and len(extra_stroke) >= 2:
+            painter.setOpacity(self.brush_opacity / 255.0)
             pen = QPen(self.color, self.brush_size,
                        Qt.SolidLine, Qt.RoundCap, Qt.RoundJoin)
             painter.setPen(pen)
@@ -207,8 +221,10 @@ class DrawingOverlay(QWidget):
             for pt in extra_stroke[1:]:
                 painter.drawLine(prev, pt)
                 prev = pt
+            painter.setOpacity(1.0)
 
         if extra_rect and not extra_rect.isNull():
+            painter.setOpacity(self.rect_opacity / 255.0)
             fill_raw = (self._color_to_tuple(self.rect_fill_color)
                         if self.rect_fill_color is not None else None)
             painter.setBrush(QColor(*fill_raw) if fill_raw is not None else Qt.NoBrush)
@@ -217,6 +233,7 @@ class DrawingOverlay(QWidget):
                 if self.rect_border_width > 0 else Qt.NoPen
             )
             painter.drawRect(extra_rect)
+            painter.setOpacity(1.0)
 
     # ── Helpers ────────────────────────────────────────────────────────
     def _to_normalized(self, pt: QPoint):
@@ -294,10 +311,11 @@ class DrawingOverlay(QWidget):
             normalized = [self._to_normalized(pt) for pt in self._current_stroke]
             if len(normalized) >= 2:
                 self.primitives.append({
-                    "kind":   "stroke",
-                    "points": normalized,
-                    "width":  int(self.brush_size),
-                    "color":  self._color_to_tuple(self.color),
+                    "kind":    "stroke",
+                    "points":  normalized,
+                    "width":   int(self.brush_size),
+                    "color":   self._color_to_tuple(self.color),
+                    "opacity": self.brush_opacity,
                 })
             self._current_stroke = []
         else:
@@ -312,11 +330,11 @@ class DrawingOverlay(QWidget):
             self.primitives.append({
                 "kind":         "rect",
                 "rect":         (x0, y0, x1, y1),
-                # legacy key for overlay_render compatibility
                 "color":        fill_raw if fill_raw is not None else border_raw,
                 "fill_color":   fill_raw,
                 "border_color": border_raw,
                 "border_width": int(self.rect_border_width),
+                "opacity":      self.rect_opacity,
             })
             self._rect_current = QRect()
 

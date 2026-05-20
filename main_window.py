@@ -229,6 +229,10 @@ class MainWindow(QMainWindow):
         if hasattr(self.ui, 'drawBrushSizeSlider'):
             self.ui.drawBrushSizeSlider.valueChanged.connect(self._draw_set_brush_size)
 
+        # Brush opacity slider
+        if hasattr(self.ui, 'drawBrushOpacitySlider'):
+            self.ui.drawBrushOpacitySlider.valueChanged.connect(self._draw_set_brush_opacity)
+
         # Rect fill colour
         if hasattr(self.ui, 'drawRectFillColorBtn'):
             self.ui.drawRectFillColorBtn.clicked.connect(self._draw_open_rect_fill_color_dialog)
@@ -240,6 +244,10 @@ class MainWindow(QMainWindow):
         # Rect border width slider
         if hasattr(self.ui, 'drawRectBorderWidthSlider'):
             self.ui.drawRectBorderWidthSlider.valueChanged.connect(self._draw_set_rect_border_width)
+
+        # Rect opacity slider
+        if hasattr(self.ui, 'drawRectOpacitySlider'):
+            self.ui.drawRectOpacitySlider.valueChanged.connect(self._draw_set_rect_opacity)
 
         # Context menu on PDF viewer
         self.ui.pdfView.setContextMenuPolicy(Qt.CustomContextMenu)
@@ -412,11 +420,6 @@ class MainWindow(QMainWindow):
         print(f"Updating UI state, has_document: {has_document}")
 
         # Update file actions
-        drawing = self.ui.pdfView.drawing_mode
-        if hasattr(self.ui, 'actionOpen'):
-            self.ui.actionOpen.setEnabled(not drawing)
-        if hasattr(self.ui, 'menuOpenRecent'):
-            self.ui.menuOpenRecent.setEnabled(not drawing)
         if hasattr(self.ui, 'actionSave'):
             self.ui.actionSave.setEnabled(has_document and self.is_document_modified)
         if hasattr(self.ui, 'actionSaveAs'):
@@ -437,6 +440,8 @@ class MainWindow(QMainWindow):
             self.ui.actionAddFile.setEnabled(stat_ops)
         if hasattr(self.ui, 'actionExport_Pages'):
             self.ui.actionExport_Pages.setEnabled(stat_ops)
+        if hasattr(self.ui, 'actionRotateAllPagesClockwise'):
+            self.ui.actionRotateAllPagesClockwise.setEnabled(stat_ops)
 
         # Update navigation actions
         nav_actions = [
@@ -754,10 +759,7 @@ class MainWindow(QMainWindow):
 
     # Drag and drop support
     def dragEnterEvent(self, event: QDragEnterEvent):
-        """Handle drag enter events — ignored while drawing mode is active."""
-        if self.ui.pdfView.drawing_mode:
-            event.ignore()
-            return
+        """Handle drag enter events"""
         if event.mimeData().hasUrls():
             urls = event.mimeData().urls()
             if urls and urls[0].toLocalFile().lower().endswith('.pdf'):
@@ -768,10 +770,7 @@ class MainWindow(QMainWindow):
             event.ignore()
 
     def dropEvent(self, event: QDropEvent):
-        """Handle drop events — ignored while drawing mode is active."""
-        if self.ui.pdfView.drawing_mode:
-            event.ignore()
-            return
+        """Handle drop events"""
         urls = event.mimeData().urls()
         if urls:
             file_path = urls[0].toLocalFile()
@@ -874,6 +873,22 @@ class MainWindow(QMainWindow):
         # Refresh brush thickness-preview icon
         if hasattr(self.ui, '_update_brush_size_preview'):
             self.ui._update_brush_size_preview(size)
+
+    def _draw_set_brush_opacity(self, opacity_percent: int):
+        self.ui.pdfView.draw_state['brush_opacity'] = opacity_percent
+        for w in self.ui.pdfView.page_widget_controller.page_widgets:
+            try:
+                w.overlay.set_brush_opacity(opacity_percent)
+            except Exception:
+                pass
+
+    def _draw_set_rect_opacity(self, opacity_percent: int):
+        self.ui.pdfView.draw_state['rect_opacity'] = opacity_percent
+        for w in self.ui.pdfView.page_widget_controller.page_widgets:
+            try:
+                w.overlay.set_rect_opacity(opacity_percent)
+            except Exception:
+                pass
 
     def _draw_open_rect_fill_color_dialog(self):
         from PySide6.QtWidgets import QColorDialog
