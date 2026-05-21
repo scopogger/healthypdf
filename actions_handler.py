@@ -382,26 +382,24 @@ class ActionsHandler:
             self.update_recent_files_menu()
             return
 
-        # Check if a document is currently open
         pv = getattr(self.ui, 'pdfView', None)
+
+        # Drawing mode: always open in new instance, no dialogs
+        if pv and getattr(pv, 'drawing_mode', False):
+            self._launch_new_instance(file_path)
+            return
+
         has_open_doc = bool(pv and hasattr(pv, 'document') and pv.document is not None)
 
-        # If no doc is open -> just load (no prompt needed)
         if not has_open_doc:
             self.main_window.load_document(file_path)
             return
 
-        # Ask the user how to open the file
         choice = self._ask_open_window_choice()
         if choice == "same":
-            # Load in current window
             self.main_window.load_document(file_path)
         elif choice == "new":
-            # Launch new instance
             self._launch_new_instance(file_path)
-        else:
-            # User cancelled → do nothing (keep current doc)
-            pass
 
     def clear_recent_files(self):
         reply = QMessageBox.question(
@@ -420,6 +418,25 @@ class ActionsHandler:
     # -----------------------------
 
     def open_file(self):
+        pv = getattr(self.ui, 'pdfView', None)
+        # Drawing mode: skip all dialogs, open in new instance
+        if pv and getattr(pv, 'drawing_mode', False):
+            last_dir = settings_manager.get_last_directory()
+            file_path, _ = QFileDialog.getOpenFileName(
+                self.main_window,
+                "Open PDF",
+                last_dir,
+                "PDF Files (*.pdf)"
+            )
+            if not file_path:
+                return
+            settings_manager.save_last_directory(os.path.dirname(file_path))
+            settings_manager.add_recent_file(file_path)
+            self.update_recent_files_menu()
+            self._launch_new_instance(file_path)
+            return
+
+        # Normal flow (drawing mode off)
         if getattr(self.main_window, 'is_document_modified', False):
             reply = self.main_window.ask_save_changes()
             if reply == QMessageBox.Cancel:
@@ -457,8 +474,6 @@ class ActionsHandler:
             self.main_window.load_document(file_path)
         elif choice == "new":
             self._launch_new_instance(file_path)
-        else:
-            pass
 
     def _ask_open_window_choice(self) -> str:
         dialog = QDialog(self.main_window)

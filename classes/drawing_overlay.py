@@ -185,19 +185,28 @@ class DrawingOverlay(QWidget):
                 pts = prim.get("points", [])
                 if len(pts) < 2:
                     continue
+                # Render onto offscreen pixmap to avoid per-segment opacity accumulation
+                tmp = QPixmap(w, h)
+                tmp.fill(Qt.transparent)
+                tmp_p = QPainter(tmp)
+                tmp_p.setRenderHint(QPainter.Antialiasing)
                 pen = QPen(QColor(*prim.get("color", (0, 0, 0))),
                            prim.get("width", 1),
                            Qt.SolidLine, Qt.RoundCap, Qt.RoundJoin)
-                painter.setPen(pen)
-                painter.setBrush(Qt.NoBrush)
+                tmp_p.setPen(pen)
+                tmp_p.setBrush(Qt.NoBrush)
                 prev = None
                 for nx, ny in pts:
                     x, y = nx * w, ny * h
                     if prev is None:
                         prev = (x, y)
                     else:
-                        painter.drawLine(prev[0], prev[1], x, y)
+                        tmp_p.drawLine(prev[0], prev[1], x, y)
                         prev = (x, y)
+                tmp_p.end()
+                painter.setOpacity(opacity / 255.0)
+                painter.drawPixmap(0, 0, tmp)
+                painter.setOpacity(1.0)
             elif kind == "rect":
                 x0, y0, x1, y1 = prim.get("rect", (0, 0, 0, 0))
                 rx, ry = x0 * w, y0 * h
@@ -212,15 +221,23 @@ class DrawingOverlay(QWidget):
 
         # ── In-progress preview ──────────────────────────────────────────
         if extra_stroke and len(extra_stroke) >= 2:
-            painter.setOpacity(self.brush_opacity / 255.0)
+            # Render stroke onto offscreen pixmap first, then composite with opacity.
+            # This prevents segment-by-segment opacity accumulation.
+            tmp = QPixmap(w, h)
+            tmp.fill(Qt.transparent)
+            tmp_painter = QPainter(tmp)
+            tmp_painter.setRenderHint(QPainter.Antialiasing)
             pen = QPen(self.color, self.brush_size,
                        Qt.SolidLine, Qt.RoundCap, Qt.RoundJoin)
-            painter.setPen(pen)
-            painter.setBrush(Qt.NoBrush)
+            tmp_painter.setPen(pen)
+            tmp_painter.setBrush(Qt.NoBrush)
             prev = extra_stroke[0]
             for pt in extra_stroke[1:]:
-                painter.drawLine(prev, pt)
+                tmp_painter.drawLine(prev, pt)
                 prev = pt
+            tmp_painter.end()
+            painter.setOpacity(self.brush_opacity / 255.0)
+            painter.drawPixmap(0, 0, tmp)
             painter.setOpacity(1.0)
 
         if extra_rect and not extra_rect.isNull():

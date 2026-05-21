@@ -279,7 +279,12 @@ class MainWindow(QMainWindow):
         return super().eventFilter(obj, event)
 
     def load_document(self, file_path: str):
-        """Load a PDF document with password handling"""
+        # In drawing mode this should never be called directly (callers use _launch_new_instance),
+        # but guard just in case
+        if self.ui.pdfView.drawing_mode:
+            self.actions_handler._launch_new_instance(file_path)
+            return
+
         if self.is_document_modified:
             reply = self.ask_save_changes()
             if reply == QMessageBox.Cancel:
@@ -764,8 +769,13 @@ class MainWindow(QMainWindow):
 
     # Drag and drop support
     def dragEnterEvent(self, event: QDragEnterEvent):
-        """Handle drag enter events — ignored while drawing mode is active."""
+        # Drawing mode: accept drop (will open in new instance)
         if self.ui.pdfView.drawing_mode:
+            if event.mimeData().hasUrls():
+                urls = event.mimeData().urls()
+                if urls and urls[0].toLocalFile().lower().endswith('.pdf'):
+                    event.accept()
+                    return
             event.ignore()
             return
         if event.mimeData().hasUrls():
@@ -778,15 +788,17 @@ class MainWindow(QMainWindow):
             event.ignore()
 
     def dropEvent(self, event: QDropEvent):
-        """Handle drop events — ignored while drawing mode is active."""
-        if self.ui.pdfView.drawing_mode:
-            event.ignore()
-            return
         urls = event.mimeData().urls()
-        if urls:
-            file_path = urls[0].toLocalFile()
-            if file_path.lower().endswith('.pdf'):
-                self.load_document(file_path)
+        if not urls:
+            return
+        file_path = urls[0].toLocalFile()
+        if not file_path.lower().endswith('.pdf'):
+            return
+        # Drawing mode: open in new instance
+        if self.ui.pdfView.drawing_mode:
+            self.actions_handler._launch_new_instance(file_path)
+            return
+        self.load_document(file_path)
 
     def cleanup_before_close(self):
         """Aggressive cleanup before application closes"""

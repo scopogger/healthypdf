@@ -1465,9 +1465,15 @@ class PDFViewer(QScrollArea):
                         shape.draw_line(last_point, Point(x, y) * new_page.derotation_matrix)
                         last_point = Point(x, y) * new_page.derotation_matrix
 
+                opacity_val = prim.get("opacity", 255) / 255.0
                 r, g, b = stroke_color
-                shape.finish(color=(r / 255.0, g / 255.0, b / 255.0), fill=None,
-                             width=stroke_width, closePath=False)
+                shape.finish(
+                    color=(r / 255.0, g / 255.0, b / 255.0),
+                    fill=None,
+                    width=stroke_width,
+                    closePath=False,
+                    stroke_opacity=opacity_val,
+                )
                 shape.commit()
 
             elif kind == "rect":
@@ -1483,11 +1489,14 @@ class PDFViewer(QScrollArea):
                 fill_f   = tuple(c / 255.0 for c in fill_raw)   if fill_raw   else None
                 border_f = tuple(c / 255.0 for c in border_raw) if border_raw else (0, 0, 0)
 
+                opacity_val = prim.get("opacity", 255) / 255.0
                 shape.draw_rect(fitz.Rect(x_a, y_a, x_b, y_b) * new_page.derotation_matrix)
                 shape.finish(
                     color=border_f if border_w_pdf > 0 else None,
                     fill=fill_f,
                     width=border_w_pdf,
+                    stroke_opacity=opacity_val,
+                    fill_opacity=opacity_val,
                 )
                 shape.commit()
 
