@@ -64,7 +64,7 @@ def translate_ui(self, main_window, language):
         self.actionRotateSpecificPages.setText(
             QCoreApplication.translate("MainWindow", "Rotate Specific Pages...", None))
         self.actionAddFile.setText(QCoreApplication.translate("MainWindow", "Add File...", None))
-        self.actionDraw.setText(QCoreApplication.translate("MainWindow", "Draw/Annotate", None))
+        self.actionDraw.setText(QCoreApplication.translate("MainWindow", "Draw on document", None))
 
         # Help menu and actions
         self.menuHelp.setTitle(QCoreApplication.translate("MainWindow", "Help", None))
@@ -188,7 +188,7 @@ def add_tooltips(self, language):
         self.actionRotateCurrentPageCounterclockwise.setToolTip("Rotate current page counterclockwise (permanent)")
 
         self.actionToggle_Panel.setToolTip("Show/hide side panel")
-        self.actionDraw.setToolTip("Draw annotations on document")
+        self.actionDraw.setToolTip("Draw/Annotate")
 
     elif language == 'ru' or language == 'ru-RU':
         self.actionOpen.setToolTip("Открыть PDF файл")
@@ -219,7 +219,7 @@ def add_tooltips(self, language):
             "Повернуть текущую страницу против часовой стрелки (постоянно)")
 
         self.actionToggle_Panel.setToolTip("Показать/скрыть боковую панель")
-        self.actionDraw.setToolTip("Рисовать аннотации на документе")
+        self.actionDraw.setToolTip("Нарисовать пометки")
 
 
 def shortcuts_ui(self):

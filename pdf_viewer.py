@@ -901,7 +901,7 @@ class PDFViewer(QScrollArea):
             try:
                 widget.setZoom(self.zoom_level)
                 # 24.12.2025 - убрал для бесшовного зуммирования
-                widget.clear_base(emit=False)
+                widget.clear_base(emit=False, keep_annotations=self._drawing_mode)
             except Exception as e:
                 print(f"Error set zoom, widget cleaning. {e}")
                 try:
@@ -1060,7 +1060,19 @@ class PDFViewer(QScrollArea):
         self.CtrlPressed = False
 
     def ctrlDrawing(self, event: QWheelEvent):
-        pass
+        self.CtrlPressed = True
+        self.zoom_type = 0
+        angle = event.angleDelta().y()
+        factor = 1.25 if angle > 0 else 0.8
+        old_zoom = self.zoom_level
+        new_zoom = max(0.25, min(5.0, old_zoom * factor))
+        if abs(new_zoom - old_zoom) < 0.001:
+            event.accept()
+            self.CtrlPressed = False
+            return
+        self.set_zoom(new_zoom)
+        event.accept()
+        self.CtrlPressed = False
 
     def previous_page(self):
         cur_page = self.get_current_pageInfo_index()
@@ -1384,7 +1396,7 @@ class PDFViewer(QScrollArea):
             # Resize and clear
             try:
                 # widget.setZoom(self.zoom_level)
-                widget.clear_base(emit=False)
+                widget.clear_base(emit=False, keep_annotations=self._drawing_mode)
             except Exception as e:
                 print(f"Error set zoom, widget cleaning. {e}")
                 try:
@@ -1452,8 +1464,8 @@ class PDFViewer(QScrollArea):
                 if not pts or len(pts) < 2:
                     continue
                 stroke_color = prim.get("color", (0, 0, 0))
-                stroke_width_px = float(prim.get("width", 1))
-                stroke_width = (stroke_width_px / max(1.0, widget_w)) * pdf_w
+                # stroke_width_px = float(prim.get("width", 1))
+                stroke_width = float(prim.get("width", 0.005)) * pdf_w
 
                 last_point = None
                 for nx, ny in pts:

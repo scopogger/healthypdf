@@ -147,8 +147,7 @@ class InsertPageDialogue(QDialog):
     def __init__(self, parent=None, max_pages=1, current_page=1):
         super().__init__(parent)
         self.setWindowTitle("Выберите позицию вставки")
-        self.setMinimumWidth(320)
-        self.setMinimumHeight(200)
+        self.setFixedSize(250, 170)
 
         layout = QVBoxLayout()
 

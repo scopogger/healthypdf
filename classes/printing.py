@@ -16,8 +16,7 @@ class PrintSetupDialog(QDialog):
         self.total_pages = total_pages
         self.setWindowTitle("Печать")
         self.setModal(True)
-        self.setMinimumWidth(380)
-        self.setMinimumHeight(180)
+        self.setFixedSize(280, 130)
 
         layout = QVBoxLayout(self)
         layout.setSpacing(8)
@@ -159,6 +158,8 @@ class PDFPrinter:
 
             preview = QPrintPreviewDialog(printer, main_window)
             preview.setWindowTitle("Предпросмотр и печать")
+            preview.setMinimumSize(520, 420)
+            preview.resize(720, 720)
             preview.paintRequested.connect(_on_paint_preview)
             preview.exec()
         else:

@@ -1,0 +1,27 @@
+[build-system]
+requires = ["setuptools>=61"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "AltPDF"
+version = "0.8.42"
+description = "A cross-platform app for viewing and editing PDF-files"
+requires-python = ">3.9"
+dependencies = [
+    "Pyside6",
+    "PyMuPDF",
+]
+
+[project.optional-dependencies]
+build = [
+    "pyinstaller",
+]
+
+# Fix for flat-layout discovery error
+[tool.setuptools.packages.find]
+exclude = [
+    "build_wheels_win*","build_wheels_linux*",
+    ".venv-build*", ".venv-dev*",
+    "icons*"
+]
+#exclude = []

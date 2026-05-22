@@ -479,6 +479,7 @@ class ActionsHandler:
         dialog = QDialog(self.main_window)
         dialog.setWindowTitle("Открыть документ")
         dialog.setModal(True)
+        dialog.setFixedSize(320, 130)
 
         layout = QVBoxLayout()
 
@@ -1270,7 +1271,7 @@ class ActionsHandler:
 
     def show_about(self):
         """Показать информацию о приложении"""
-        APP_VERSION = "0.831"
+        APP_VERSION = "0.842"
         APP_DESCRIPTION = "Приложение для просмотра и редактирования PDF-файлов для операционной системы Альт Рабочая станция."
 
         about_text = f"""
@@ -1296,8 +1297,7 @@ class ActionsHandler:
         msg_box = QDialog(self.main_window)
         msg_box.setWindowTitle(f"О программе")
         msg_box.setModal(True)
-        msg_box.setMinimumSize(570, 360)
-        msg_box.resize(570, 360)
+        msg_box.setFixedSize(570, 360)
         layout = QVBoxLayout()
 
         label = QLabel(about_text)
@@ -1512,24 +1512,39 @@ class ActionsHandler:
 
         quality_options = {
             "Максимальное сжатие": "/screen",
-            "Среднее": "/ebook",
             "Высокое": "/printer",
+            "Среднее": "/ebook",
             "Слабое сжатие": "/prepress",
         }
 
-        quality, ok = QInputDialog.getItem(
-            self.main_window,
-            "Качество сжатия:",
-            "Выберите уровень сжатия:",
-            list(quality_options.keys()),
-            1,  # По-умолчанию /ebook - "Среднее"
-            False
-        )
+        dialog = QInputDialog(self.main_window)
+        dialog.setWindowTitle("Качество сжатия:")
+        dialog.setLabelText("Выберите уровень сжатия:")
+        dialog.setComboBoxItems(list(quality_options.keys()))
+        dialog.setComboBoxEditable(False)
+        dialog.setTextValue(list(quality_options)[2])
+        dialog.setModal(True)
+        dialog.setFixedSize(280, 130)
 
-        if not ok:
+        if dialog.exec() == QInputDialog.DialogCode.Accepted:
+            quality = dialog.textValue()
+            quality_value = quality_options[quality]
+        else:
             return
 
-        quality_value = quality_options[quality]
+        # quality, ok = QInputDialog.getItem(
+        #     self.main_window,
+        #     "Качество сжатия:",
+        #     "Выберите уровень сжатия:",
+        #     list(quality_options.keys()),
+        #     1,  # По-умолчанию /ebook - "Среднее"
+        #     False
+        # )
+        #
+        # if not ok:
+        #     return
+        #
+        # quality_value = quality_options[quality]
 
         # Подбираем параметры и сжимаем
         input_path = current_path

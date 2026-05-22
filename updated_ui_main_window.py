@@ -953,8 +953,6 @@ class UiMainWindow(object):
         self.menuView.addAction(self.actionFitToWidth)
         self.menuView.addAction(self.actionFitToHeight)
         self.menuView.addSeparator()
-        self.menuView.addAction(self.actionRotateAllPagesClockwise)
-        self.menuView.addSeparator()
         self.menuView.addAction(self.actionToggleFullscreen)
 
         # Edit menu
@@ -963,13 +961,14 @@ class UiMainWindow(object):
         self.menuEdit.addSeparator()
         self.menuEdit.addAction(self.actionDeletePage)
         self.menuEdit.addAction(self.actionDeleteSpecificPages)
-
         self.menuEdit.addSeparator()
         self.menuEdit.addAction(self.actionMovePageUp)
         self.menuEdit.addAction(self.actionMovePageDown)
         self.menuEdit.addSeparator()
         self.menuEdit.addAction(self.actionRotateCurrentPageClockwise)
         self.menuEdit.addAction(self.actionRotateCurrentPageCounterclockwise)
+        self.menuEdit.addSeparator()
+        self.menuEdit.addAction(self.actionRotateAllPagesClockwise)
         # self.menuEdit.addAction(self.actionRotateSpecificPages)
         self.menuEdit.addSeparator()
         self.menuEdit.addAction(self.actionDraw)

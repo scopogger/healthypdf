@@ -191,7 +191,7 @@ class DrawingOverlay(QWidget):
                 tmp_p = QPainter(tmp)
                 tmp_p.setRenderHint(QPainter.Antialiasing)
                 pen = QPen(QColor(*prim.get("color", (0, 0, 0))),
-                           prim.get("width", 1),
+                           prim.get("width", 0.005) * w,
                            Qt.SolidLine, Qt.RoundCap, Qt.RoundJoin)
                 tmp_p.setPen(pen)
                 tmp_p.setBrush(Qt.NoBrush)
@@ -330,7 +330,7 @@ class DrawingOverlay(QWidget):
                 self.primitives.append({
                     "kind":    "stroke",
                     "points":  normalized,
-                    "width":   int(self.brush_size),
+                    "width":   self.brush_size / max(1, self.width()),
                     "color":   self._color_to_tuple(self.color),
                     "opacity": self.brush_opacity,
                 })

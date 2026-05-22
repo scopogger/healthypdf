@@ -212,8 +212,6 @@ class MainWindow(QMainWindow):
             self.ui.drawRectBtn.clicked.connect(lambda: self._draw_set_tool("rect"))
         if hasattr(self.ui, 'drawColorBtn'):
             self.ui.drawColorBtn.clicked.connect(self._draw_open_color_dialog)
-        if hasattr(self.ui, 'drawColorBtn'):
-            self.ui.drawColorBtn.clicked.connect(self._draw_open_color_dialog)
         if hasattr(self.ui, 'drawClearPageBtn'):
             self.ui.drawClearPageBtn.clicked.connect(self._draw_clear_current_page)
         if hasattr(self.ui, 'drawClearAllBtn'):
@@ -417,19 +415,20 @@ class MainWindow(QMainWindow):
 
     def update_ui_state(self):
         """Update UI state based on document availability"""
+
         has_document = self.ui.pdfView.document is not None
         # hasattr(self.ui.pdfView, 'document') and self.ui.pdfView.document is not None
-
         stat_ops = has_document and not self.ui.pdfView.drawing_mode
+        # drawing = self.ui.pdfView.drawing_mode
 
         print(f"Updating UI state, has_document: {has_document}")
 
         # Update file actions
-        drawing = self.ui.pdfView.drawing_mode
-        if hasattr(self.ui, 'actionOpen'):
-            self.ui.actionOpen.setEnabled(not drawing)
-        if hasattr(self.ui, 'menuOpenRecent'):
-            self.ui.menuOpenRecent.setEnabled(not drawing)
+        # if hasattr(self.ui, 'actionOpen'):
+        #     self.ui.actionOpen.setEnabled(not drawing)
+        # if hasattr(self.ui, 'menuOpenRecent'):
+        #     self.ui.menuOpenRecent.setEnabled(not drawing)
+
         if hasattr(self.ui, 'actionSave'):
             self.ui.actionSave.setEnabled(has_document and self.is_document_modified)
         if hasattr(self.ui, 'actionSaveAs'):
@@ -450,36 +449,32 @@ class MainWindow(QMainWindow):
             self.ui.actionAddFile.setEnabled(stat_ops)
         if hasattr(self.ui, 'actionExport_Pages'):
             self.ui.actionExport_Pages.setEnabled(stat_ops)
-        if hasattr(self.ui, 'actionRotateAllPagesClockwise'):
-            self.ui.actionRotateAllPagesClockwise.setEnabled(stat_ops)
 
-        # Update navigation actions
-        nav_actions = [
+        # Navigation
+        for action_name in [
             'actionPrevious_Page', 'actionNext_Page',
             'actionJumpToFirstPage', 'actionJumpToLastPage'
-        ]
-        for action_name in nav_actions:
+        ]:
             if hasattr(self.ui, action_name):
                 getattr(self.ui, action_name).setEnabled(stat_ops)
 
-        # Update page manipulation actions
-        page_actions = [
+        # Page manipulation
+        for action_name in [
             'actionDeletePage', 'actionDeleteSpecificPages',
             'actionMovePageUp', 'actionMovePageDown',
-            'actionRotateCurrentPageClockwise', 'actionRotateCurrentPageCounterclockwise'
-        ]
-        for action_name in page_actions:
+            'actionRotateCurrentPageClockwise', 'actionRotateCurrentPageCounterclockwise',
+            'actionRotateAllPagesClockwise',
+        ]:
             if hasattr(self.ui, action_name):
                 getattr(self.ui, action_name).setEnabled(stat_ops)
 
-        # Update view actions
-        view_actions = [
+        # Zoom
+        for action_name in [
             'actionZoom_In', 'actionZoom_Out',
             'actionFitToWidth', 'actionFitToHeight'
-        ]
-        for action_name in view_actions:
+        ]:
             if hasattr(self.ui, action_name):
-                getattr(self.ui, action_name).setEnabled(stat_ops)
+                getattr(self.ui, action_name).setEnabled(has_document)
 
     def get_current_display_page_number(self) -> int:
         """Get the current page's display number (1-based) using pdfView.pages_info and deleted_pages"""
