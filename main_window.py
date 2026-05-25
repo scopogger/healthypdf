@@ -893,18 +893,21 @@ class MainWindow(QMainWindow):
             self.ui._update_brush_size_preview(size)
 
     def _draw_set_brush_opacity(self, opacity_percent: int):
-        self.ui.pdfView.draw_state['brush_opacity'] = opacity_percent
+        # opacity_percent here is transparency: 0=fully visible, 90=nearly invisible
+        visibility = 100 - opacity_percent
+        self.ui.pdfView.draw_state['brush_opacity'] = visibility
         for w in self.ui.pdfView.page_widget_controller.page_widgets:
             try:
-                w.overlay.set_brush_opacity(opacity_percent)
+                w.overlay.set_brush_opacity(visibility)
             except Exception:
                 pass
 
     def _draw_set_rect_opacity(self, opacity_percent: int):
-        self.ui.pdfView.draw_state['rect_opacity'] = opacity_percent
+        visibility = 100 - opacity_percent
+        self.ui.pdfView.draw_state['rect_opacity'] = visibility
         for w in self.ui.pdfView.page_widget_controller.page_widgets:
             try:
-                w.overlay.set_rect_opacity(opacity_percent)
+                w.overlay.set_rect_opacity(visibility)
             except Exception:
                 pass
 

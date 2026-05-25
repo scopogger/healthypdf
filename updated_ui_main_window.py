@@ -438,13 +438,14 @@ class UiMainWindow(object):
         brush_opacity_row.setSpacing(6)
 
         self.drawBrushOpacitySlider = QSlider(Qt.Horizontal, self.drawingPanel)
-        self.drawBrushOpacitySlider.setMinimum(10)
-        self.drawBrushOpacitySlider.setMaximum(100)
-        self.drawBrushOpacitySlider.setValue(100)
-        self.drawBrushOpacitySlider.setToolTip("Прозрачность кисти (100 = непрозрачно)")
+        self.drawBrushOpacitySlider.setMinimum(0)
+        self.drawBrushOpacitySlider.setMaximum(90)
+        # Brush opacity slider — default 0% transparency = fully opaque
+        self.drawBrushOpacitySlider.setValue(0)
+        self.drawBrushOpacitySlider.setToolTip("Прозрачность кисти (0 = непрозрачно)")
         brush_opacity_row.addWidget(self.drawBrushOpacitySlider)
 
-        self.drawBrushOpacityValueLabel = QLabel("100%", self.drawingPanel)
+        self.drawBrushOpacityValueLabel = QLabel("0%", self.drawingPanel)
         self.drawBrushOpacityValueLabel.setFixedWidth(34)
         self.drawBrushOpacityValueLabel.setStyleSheet("font-size: 10px;")
         brush_opacity_row.addWidget(self.drawBrushOpacityValueLabel)
@@ -531,13 +532,13 @@ class UiMainWindow(object):
         rect_opacity_row.setSpacing(6)
 
         self.drawRectOpacitySlider = QSlider(Qt.Horizontal, self.drawingPanel)
-        self.drawRectOpacitySlider.setMinimum(10)
-        self.drawRectOpacitySlider.setMaximum(100)
-        self.drawRectOpacitySlider.setValue(100)
-        self.drawRectOpacitySlider.setToolTip("Прозрачность фигуры (100 = непрозрачно)")
+        self.drawRectOpacitySlider.setMinimum(0)
+        self.drawRectOpacitySlider.setMaximum(90)
+        self.drawRectOpacitySlider.setValue(0)
+        self.drawRectOpacitySlider.setToolTip("Прозрачность фигуры (0 = непрозрачно)")
         rect_opacity_row.addWidget(self.drawRectOpacitySlider)
 
-        self.drawRectOpacityValueLabel = QLabel("100%", self.drawingPanel)
+        self.drawRectOpacityValueLabel = QLabel("0%", self.drawingPanel)
         self.drawRectOpacityValueLabel.setFixedWidth(34)
         self.drawRectOpacityValueLabel.setStyleSheet("font-size: 10px;")
         rect_opacity_row.addWidget(self.drawRectOpacityValueLabel)
