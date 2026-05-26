@@ -20,6 +20,7 @@ PAGE_SIZES_PT = {
     "A4": (595.28, 841.89),
 }
 
+
 class ImagePlacementDialog(QDialog):
     """
     Shown after the user picks an image file.
@@ -415,7 +416,6 @@ class ImagePlacementDialog(QDialog):
         return self.customW.value(), self.customH.value()
 
 
-
 class InsertFile:
 
     def __init__(self, main_window, ui, pv):
@@ -619,7 +619,7 @@ class InsertFile:
             if insert_at_page < self.cur_doc.page_count:
                 self.merged_doc.insert_pdf(self.cur_doc, to_page=insert_at_page)
             self.merged_doc.insert_file(self.new_doc)
-=
+            if insert_at_page + 1 < self.cur_doc.page_count:
                 self.merged_doc.insert_pdf(self.cur_doc, from_page=insert_at_page + 1)
 
 
