@@ -1271,7 +1271,7 @@ class ActionsHandler:
 
     def show_about(self):
         """Показать информацию о приложении"""
-        APP_VERSION = "0.842"
+        APP_VERSION = "0.845"
         APP_DESCRIPTION = "Приложение для просмотра и редактирования PDF-файлов для операционной системы Альт Рабочая станция."
 
         about_text = f"""
