@@ -1,8 +1,7 @@
 import os
 import sys
-from argparse import ArgumentParser, RawTextHelpFormatter
 
-from PySide6.QtCore import QLocale, Qt, QTranslator, QLibraryInfo
+from PySide6.QtCore import QLocale, Qt, QTranslator, QLibraryInfo, QTimer, QUrl
 from PySide6.QtGui import QIcon, QPalette, QGuiApplication, QColor
 from PySide6.QtWidgets import QApplication
 
@@ -10,6 +9,24 @@ from PySide6.QtWidgets import QApplication
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 from main_window import MainWindow
+
+
+def _resolve_file_arg(raw: str) -> str:
+    """Convert whatever the desktop environment passed us into a plain
+    filesystem path.  File managers on Linux can hand us any of:
+
+      /home/user/file.pdf           – plain path  (most common with %F)
+      file:///home/user/file.pdf    – RFC-8089 URI (common with %U or Caja/Nautilus)
+      file://localhost/home/user/…  – URI with explicit localhost authority
+
+    QUrl handles all variants correctly.
+    """
+    raw = raw.strip()
+    if raw.startswith(('file://', 'file:')):
+        url = QUrl(raw)
+        if url.isLocalFile():
+            return url.toLocalFile()
+    return raw
 
 
 def install_russian_qt_translations(app: QApplication) -> None:
@@ -32,11 +49,6 @@ def install_russian_qt_translations(app: QApplication) -> None:
 
 def setup_application():
     """Setup application properties and style"""
-    argument_parser = ArgumentParser(description="AltPDF",
-                                     formatter_class=RawTextHelpFormatter)
-    argument_parser.add_argument("file", help="The file to open",
-                                 nargs='?', type=str)
-
     if sys.platform.startswith("win32"):
         sys.argv += ['-platform', 'windows:darkmode=1']
 
@@ -118,6 +130,10 @@ def get_system_language():
 def main():
     """Main application entry point"""
     try:
+        # ── Capture argv NOW, before QApplication(sys.argv) potentially
+        # modifies the list in-place (PySide6 strips Qt-recognised flags).
+        launch_args = sys.argv[:]
+
         # Create application
         app = setup_application()
 
@@ -137,11 +153,16 @@ def main():
 
         window.show()
 
-        # Handle command line arguments
-        if len(sys.argv) > 1:
-            file_path = sys.argv[1]
+        # ── Open file passed by the desktop environment / CLI ──────────────
+        # We defer with singleShot(0) so the window is fully laid out (all
+        # resize/show events processed) before page rendering starts.
+        if len(launch_args) > 1:
+            file_path = _resolve_file_arg(launch_args[1])
+            print(f"[main] File argument: {launch_args[1]!r}  →  resolved: {file_path!r}")
             if os.path.exists(file_path) and file_path.lower().endswith('.pdf'):
-                window.load_document(file_path)
+                QTimer.singleShot(0, lambda: window.load_document(file_path))
+            else:
+                print(f"[main] Skipping: path does not exist or is not a PDF: {file_path!r}")
 
         # Run application
         return app.exec()

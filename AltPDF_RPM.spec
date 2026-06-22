@@ -57,7 +57,7 @@ Name=Редактор PDF Альт
 Name[ru]=Редактор PDF Альт
 Comment=Просмотр и редактирование PDF-документов
 Comment[ru]=Просмотр и редактирование PDF-документов
-Exec=altpdf-wrapper %F
+Exec=altpdf-wrapper %U
 Icon=altpdf
 MimeType=application/pdf;
 Categories=Office;Viewer;
@@ -78,10 +78,12 @@ fi
 %post
 /usr/bin/gtk-update-icon-cache -f -t %{_datadir}/icons/hicolor 2>/dev/null || true
 /usr/bin/update-desktop-database %{_datadir}/applications 2>/dev/null || true
+/usr/bin/update-mime-database %{_datadir}/mime 2>/dev/null || true
 
 %postun
 /usr/bin/gtk-update-icon-cache -f -t %{_datadir}/icons/hicolor 2>/dev/null || true
 /usr/bin/update-desktop-database %{_datadir}/applications 2>/dev/null || true
+/usr/bin/update-mime-database %{_datadir}/mime 2>/dev/null || true
 
 %files
 %{_bindir}/altpdf
