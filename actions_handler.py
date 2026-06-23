@@ -27,6 +27,28 @@ except Exception:  # pragma: no cover
 from settings_manager import settings_manager
 
 
+def _clean_subprocess_env() -> dict:
+    """Return os.environ with LD_LIBRARY_PATH restored to its pre-PyInstaller
+    value.
+
+    PyInstaller injects its _MEIPASS temp dir into LD_LIBRARY_PATH so the
+    bundled Qt loads.  Any child process that inherits that env will also pick
+    up the *bundled* Qt instead of the system one.  On Alt Linux 11 / KDE the
+    system tools (xdg-open, kde-open, gs, xdg-email, …) were compiled against
+    a newer Qt and crash when they find the older bundled version.
+
+    PyInstaller saves the original value as LD_LIBRARY_PATH_ORIG before it
+    overwrites the variable, so we just restore from there.
+    """
+    env = os.environ.copy()
+    if sys.platform.startswith("linux"):
+        if 'LD_LIBRARY_PATH_ORIG' in env:
+            env['LD_LIBRARY_PATH'] = env['LD_LIBRARY_PATH_ORIG']
+        else:
+            env.pop('LD_LIBRARY_PATH', None)
+    return env
+
+
 def messagebox_info(parent, title, message):
     QMessageBox.information(parent, title, message)
 
@@ -516,8 +538,12 @@ class ActionsHandler:
                 # Running as script
                 app_path = os.path.abspath(sys.argv[0])
 
-            # Re-run with the new file
-            subprocess.Popen([app_path, file_path], start_new_session=True)
+            # Strip the PyInstaller LD_LIBRARY_PATH leak.  The child is a
+            # PyInstaller binary and will set up its own _MEIPASS path on
+            # startup, so it does not need to inherit ours.
+            subprocess.Popen([app_path, file_path],
+                             start_new_session=True,
+                             env=_clean_subprocess_env())
         except Exception as e:
             QMessageBox.critical(
                 self.main_window,
@@ -1255,14 +1281,21 @@ class ActionsHandler:
             )
             return
 
-        # Open with the system default PDF viewer
+        # Open with the system default PDF viewer.
+        # Pass a clean env so PyInstaller's LD_LIBRARY_PATH is not inherited
+        # by the system process (xdg-open / kde-open on Alt Linux 11 crash
+        # when they load the bundled Qt instead of the system one).
         try:
             if sys.platform.startswith('win'):
                 os.startfile(help_path)
             elif sys.platform == 'darwin':
-                subprocess.Popen(['open', help_path])
+                subprocess.Popen(['open', help_path],
+                                 start_new_session=True,
+                                 env=_clean_subprocess_env())
             else:
-                subprocess.Popen(['xdg-open', help_path])
+                subprocess.Popen(['xdg-open', help_path],
+                                 start_new_session=True,
+                                 env=_clean_subprocess_env())
         except Exception as e:
             QMessageBox.critical(
                 self.main_window, 'Ошибка',
@@ -1549,12 +1582,7 @@ class ActionsHandler:
         # Подбираем параметры и сжимаем
         input_path = current_path
 
-        env = os.environ.copy()
-        if sys.platform.startswith("linux"):
-            if 'LD_LIBRARY_PATH_ORIG' in env:
-                env['LD_LIBRARY_PATH'] = env['LD_LIBRARY_PATH_ORIG']
-            else:
-                env.pop('LD_LIBRARY_PATH', None)
+        env = _clean_subprocess_env()
 
         if not os.path.isfile(input_path):
             raise FileNotFoundError(f"Файл {input_path} не найден")

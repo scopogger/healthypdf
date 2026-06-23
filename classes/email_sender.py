@@ -6,6 +6,20 @@ from urllib.parse import quote
 from PySide6.QtWidgets import QMessageBox
 
 
+def _clean_subprocess_env() -> dict:
+    """Return os.environ with LD_LIBRARY_PATH restored to its pre-PyInstaller
+    value so that system processes (xdg-email, evolution, kde-open, …) do not
+    accidentally load our bundled Qt libraries instead of the system ones.
+    PyInstaller saves the original value as LD_LIBRARY_PATH_ORIG."""
+    env = os.environ.copy()
+    if sys.platform.startswith("linux"):
+        if 'LD_LIBRARY_PATH_ORIG' in env:
+            env['LD_LIBRARY_PATH'] = env['LD_LIBRARY_PATH_ORIG']
+        else:
+            env.pop('LD_LIBRARY_PATH', None)
+    return env
+
+
 class EmailSender:
     """
     Opens the platform's default mail client with *file_path* pre-attached.
@@ -71,7 +85,12 @@ class EmailSender:
                                 Thunderbird, R7 Organiser when registered)
         3. R7 Organiser direct call (same mailto URI style)
         4. mailto: fallback via xdg-open / webbrowser (no attachment)
+
+        All subprocess calls receive a cleaned environment so that
+        PyInstaller's LD_LIBRARY_PATH (pointing at the bundled Qt) is not
+        inherited by system processes.
         """
+        env = _clean_subprocess_env()
 
         # 1 -- Evolution directly
         evolution = EmailSender._find_binary(
@@ -88,6 +107,7 @@ class EmailSender:
                 subprocess.Popen(
                     [evolution, "--component=mail", uri],
                     start_new_session=True,
+                    env=env,
                 )
                 return True
             except Exception as e:
@@ -106,6 +126,7 @@ class EmailSender:
                     cmd,
                     timeout=10,
                     start_new_session=True,
+                    env=env,
                 )
                 if result.returncode == 0:
                     return True
@@ -125,7 +146,7 @@ class EmailSender:
                     f"&body={quote(body)}"
                     f"&attach={quote('file://' + file_path)}"
                 )
-                subprocess.Popen([r7, uri], start_new_session=True)
+                subprocess.Popen([r7, uri], start_new_session=True, env=env)
                 return True
             except Exception as e:
                 print(f"[EmailSender] R7 Organiser failed: {e}")
@@ -145,7 +166,24 @@ class EmailSender:
         import webbrowser
         mailto = f"mailto:?subject={quote(subject)}&body={quote(body)}"
         try:
-            webbrowser.open(mailto)
+            # webbrowser.open() spawns a child process and doesn't accept an
+            # env argument.  Temporarily restore LD_LIBRARY_PATH in the
+            # *current* process environment so the spawned browser inherits
+            # the correct value, then put it back afterwards.
+            _old = os.environ.get('LD_LIBRARY_PATH')
+            _orig = os.environ.get('LD_LIBRARY_PATH_ORIG')
+            try:
+                if sys.platform.startswith('linux'):
+                    if _orig is not None:
+                        os.environ['LD_LIBRARY_PATH'] = _orig
+                    else:
+                        os.environ.pop('LD_LIBRARY_PATH', None)
+                webbrowser.open(mailto)
+            finally:
+                if _old is not None:
+                    os.environ['LD_LIBRARY_PATH'] = _old
+                else:
+                    os.environ.pop('LD_LIBRARY_PATH', None)
         except Exception as e:
             print(f"[EmailSender] webbrowser.open failed: {e}")
             QMessageBox.critical(
