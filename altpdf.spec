@@ -4,10 +4,10 @@ block_cipher = None
 
 added_files = [
     ('icons/*.ico', 'icons'),           # application icons
-    ('help.pdf', '.'),                  # help document — sits next to the exe
+    ('help.pdf', '.'),                  # help document — lands next to the exe
     (r'.\ghostscript\gswin64c.exe', 'ghostscript'),  # windows gs
-    (r'.\ghostscript\gsdll64.lib', 'ghostscript'),  # windows gs
-    (r'.\ghostscript\gsdll64.dll', 'ghostscript'),  # windows gs
+    (r'.\ghostscript\gsdll64.lib',  'ghostscript'),
+    (r'.\ghostscript\gsdll64.dll',  'ghostscript'),
 
     # ('./gs_folder/gs', 'ghostscript')  # linux gs
 ]
